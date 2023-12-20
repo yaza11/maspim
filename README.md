@@ -3,7 +3,7 @@ parse peaks from sqlite database
 ```python
 from exporting.parse import parse_sqlite
 
-xy, mzs, intensities,snrs = parse_sqlite(r'/Users/weimin/Downloads/igor_alkenone')
+xy, mzs, intensities,snrs = parse_sqlite(r'path/to/sqlite')
 ```
 get the calibration constants
 ```python
