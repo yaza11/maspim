@@ -1,3 +1,4 @@
+import os
 import re
 import sqlite3
 import struct
@@ -5,41 +6,53 @@ import struct
 import numpy as np
 import pandas as pd
 
+from src.func import _find_closest_peak
 
-def parse_sqlite(peaks_sqlite_path):
+
+def parse_sqlite(peaks_sqlite_path, save=True):
     """
     parse the peaks.sqlite file to get the m/z values and intensities for all spectra
-    :param peaks_sqlite_path:
+    :param peaks_sqlite_path:the folder containing the peaks.sqlite file
     :return:
     """
-    conn = sqlite3.connect(peaks_sqlite_path)
+    # i
+    if peaks_sqlite_path.endswith('peaks.sqlite'):
+        peaks_sqlite_path = os.path.dirname(peaks_sqlite_path)
+
+    conn = sqlite3.connect(os.path.join(peaks_sqlite_path, 'peaks.sqlite'))
     c = conn.cursor()
     df = pd.read_sql_query(
-        "SELECT XIndexPos,YIndexPos,PeakMzValues,PeakIntensityValues,NumPeaks from Spectra", conn)
-    XX = np.empty(df.shape[0], dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O')])
+        "SELECT XIndexPos,YIndexPos,PeakMzValues,PeakIntensityValues,NumPeaks,PeakSnrValues from Spectra", conn)
+    XX = np.empty(df.shape[0], dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O'),
+                                      ('peak_snr', 'O')])
     for num in range(df.shape[0]):
         if np.floor(num / 1000) == num / 1000:
             print(num, ',', end="\r", flush=True)
         mzs = list(struct.unpack('d' * df['NumPeaks'][num], df['PeakMzValues'][num]))
         intensities = list(struct.unpack('f' * df['NumPeaks'][num], df['PeakIntensityValues'][num]))
+        snr = list(struct.unpack('f' * df['NumPeaks'][num], df['PeakSnrValues'][num]))
         XX[num] = np.array(
             [(num + 1,
               df['XIndexPos'][num],
               df['YIndexPos'][num],
               np.array(mzs, dtype='d'),
-              np.array(intensities, dtype='f'))],
-            dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O')])
+              np.array(intensities, dtype='f'),
+              np.array(snr, dtype='f'))],
+            dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O'), ('peak_snr', 'O')])
     # get the m/z values and intensities for all spectra
     mzs = np.vstack(XX['peak_mz'])
     intensities = np.vstack(XX['peak_int'])
     xy = np.vstack((XX['x'], XX['y'])).T
+    snr = np.vstack(XX['peak_snr'])
 
-    # save the m/z values and intensities for all spectra
-    np.save('../test/xy.npy', xy)
-    np.save('../test/mzs.npy', mzs)
-    np.save('../test/intensities.npy', intensities)
+    if save:
+        # save the m/z values and intensities for all spectra in the same folder
+        np.save(os.path.join(os.path.dirname(peaks_sqlite_path), 'xy.npy'), xy)
+        np.save(os.path.join(os.path.dirname(peaks_sqlite_path), 'mzs.npy'), mzs)
+        np.save(os.path.join(os.path.dirname(peaks_sqlite_path), 'intensities.npy'), intensities)
+        np.save(os.path.join(os.path.dirname(peaks_sqlite_path), 'snr.npy'), snr)
 
-    return xy, mzs, intensities
+    return xy, mzs, intensities, snr
 
 
 def parse_acqumethod(path):
@@ -77,12 +90,59 @@ def parse_acqumethod(path):
     return params
 
 
-if __name__ == '__main__':
-    # xy, mzs, intensities = parse_sqlite('/Users/weimin/Downloads/peaks.sqlite')
-    apex0 = parse_acqumethod('/Users/weimin/Downloads/25-30_apexAcquisition.method')
-    apex1 = parse_acqumethod('/Users/weimin/Downloads/20-25_apexAcquisition.method')
+def extract_mzs(target_mz, xy, mzs, intensities, snrs, tol=0.01, min_int=10000, min_snr=0):
+    """
+    extract the target m/z values and intensities for all spectra
+    :param target_mz:
+    :param xy:
+    :param mzs:
+    :param intensities:
+    :param snr:
+    :return:
+    """
+    if isinstance(target_mz, float):
+        mz = np.zeros(xy.shape[0])
+        intensity = np.zeros(xy.shape[0])
+        snr = np.zeros(xy.shape[0])
+        for i in range(xy.shape[0]):
+            mz[i], intensity[i], snr[i] = _find_closest_peak(target_mz, tol, mzs[i], intensities[i], snrs[i],
+                                                             min_int=min_int, min_snr=min_snr)
+    # TODO: a lazy solution, probably need to be improved for speed
+    elif isinstance(target_mz, list):
+        mz = np.zeros((xy.shape[0], len(target_mz)))
+        intensity = np.zeros((xy.shape[0], len(target_mz)))
+        snr = np.zeros((xy.shape[0], len(target_mz)))
+        for i in range(xy.shape[0]):
+            for j in range(len(target_mz)):
+                mz[i, j], intensity[i, j], snr[i, j] = _find_closest_peak(target_mz[j], tol, mzs[i], intensities[i],
+                                                                          snrs[i], min_int=min_int, min_snr=min_snr)
 
-    # compare the two acquisition methods and find the difference using pretty print
-    for key in apex1.keys():
-        if apex0[key] != apex1[key]:
-            print(key, apex0[key], apex1[key])
+    else:
+        raise NotImplementedError('target_mz must be either a float or a list of floats')
+    # compile everything into a dataframe
+    intensity_df = pd.DataFrame(intensity, columns=['intensity_'+str(mz) for mz in target_mz])
+    intensity_df['x'] = xy[:, 0]
+    intensity_df['y'] = xy[:, 1]
+
+    quality_df = pd.DataFrame(snr, columns=['snr_'+str(mz) for mz in target_mz])
+    quality_df['x'] = xy[:, 0]
+    quality_df['y'] = xy[:, 1]
+    # attach the quality df
+    for i in range(len(target_mz)):
+        quality_df['ppm_'+str(target_mz[i])] = (mz[:, i] - target_mz[i]) / target_mz[i] * 1e6
+
+    df = pd.merge(intensity_df, quality_df, on=['x', 'y'])
+    # move the x and y columns to the front
+    cols = df.columns.tolist()
+    col = cols.pop(cols.index('x'))
+    cols.insert(0, col)
+    col = cols.pop(cols.index('y'))
+    cols.insert(1, col)
+    df = df[cols]
+    return df
+
+
+if __name__ == '__main__':
+    raise NotImplementedError('This is not a script')
+
+

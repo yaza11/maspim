@@ -5,34 +5,12 @@ a fit transformer function for mass calibration
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
-
-def _find_closest_peak(mz, tol, mzs, intensities, min_int=10000):
-    mzs = np.array(mzs)
-    intensities = np.array(intensities)
-    intensities = intensities[np.where(np.abs(mzs - mz) < tol)]
-    mzs = mzs[np.where(np.abs(mzs - mz) < tol)]
-    if len(mzs) > 0 and max(intensities) > min_int:
-        mz = mzs[np.argmax(intensities)]
-        intensity = intensities[np.argmax(intensities)]
-    else:
-        mz = np.nan
-        intensity = np.nan
-    return mz, intensity
-
-
-def _mz_to_f(mz, A, B):
-    """
-    convert m/z to frequency
-    :param mz: m/z
-    :param A: calibration constant 1
-    :param B: calibration constant 2
-    :return: frequency
-    """
-    return (A + np.sqrt(A ** 2 + 4 * B * mz)) / (2 * mz)
+from src.func import _find_closest_peak, _mz_to_f
+from src.parser import parse_sqlite
 
 
 class Calibration(BaseEstimator, TransformerMixin):
-    def __init__(self, target_mz: list or float, A: float, B: float, tol=0.01, min_int=10000):
+    def __init__(self, target_mz: list or float, A: float, B: float, tol=0.01, min_int=10000, min_snr=0):
         """
         m/z = A/f + B/f^2
         :param target_mz: the m/z value to be calibrated against
@@ -47,6 +25,7 @@ class Calibration(BaseEstimator, TransformerMixin):
         self.target_mz = target_mz
         self.tol = tol
         self.min_int = min_int
+        self.min_snr = min_snr
 
     def _reset(self):
         """
@@ -56,7 +35,7 @@ class Calibration(BaseEstimator, TransformerMixin):
         self.cal_dist_f = None
         self.cal_dist_mz = None
 
-    def fit(self, X, y=None, weights=None):
+    def fit(self, X, y=None, weights=None, snrs=None):
         """
         compute the calibration distance for each spectrum for later use
         :param X:
@@ -65,9 +44,9 @@ class Calibration(BaseEstimator, TransformerMixin):
         :return:
         """
         self._reset()
-        return self.partial_fit(X, y, weights)
+        return self.partial_fit(X, y, weights, snrs)
 
-    def partial_fit(self, X, y=None, weights=None):
+    def partial_fit(self, X, y=None, weights=None, snrs_weight=None):
         """
         compute the calibration distance for each spectrum for later use
         :param X:
@@ -87,17 +66,20 @@ class Calibration(BaseEstimator, TransformerMixin):
                 print(num, ',', end="\r", flush=True)
             mzs = X[num]
             intensities = weights[num]
+            snrs = snrs_weight[num]
             # if target_mz is a list, find the average calibration distance
             if isinstance(self.target_mz, list):
                 cal_dist_f = []
                 for _target_mz in self.target_mz:
-                    mz, _ = _find_closest_peak(_target_mz, self.tol, mzs, intensities, min_int=self.min_int)
+                    mz, _, _ = _find_closest_peak(_target_mz, self.tol, mzs, intensities, snrs, min_int=self.min_int,
+                                                  min_snr=self.min_snr)
                     if not np.isnan(mz):
                         cal_dist_f.append(_mz_to_f(_target_mz, self.A, self.B) - _mz_to_f(mz, self.A, self.B))
                 self.cal_dist_f[num] = np.mean(cal_dist_f)
             elif isinstance(self.target_mz, float):
                 # find the highest peak within the tolerance
-                mz, _ = _find_closest_peak(self.target_mz, self.tol, mzs, intensities, min_int=self.min_int)
+                mz, _, _ = _find_closest_peak(self.target_mz, self.tol, mzs, intensities, snrs, min_int=self.min_int,
+                                              min_snr=self.min_snr)
                 self.cal_dist_mz[num] = self.target_mz - mz
                 self.cal_dist_f[num] = _mz_to_f(self.target_mz, self.A, self.B) - _mz_to_f(mz, self.A, self.B)
 
@@ -107,3 +89,7 @@ class Calibration(BaseEstimator, TransformerMixin):
 
     def transform(self, X, y=None):
         return self._X
+
+
+if __name__ == "__main__":
+    raise NotImplementedError('this file is not meant to be executed')
