@@ -6,32 +6,36 @@ import struct
 import numpy as np
 import pandas as pd
 
-from src.func import _find_closest_peak
+from exporting.func import _find_closest_peak
 
 
-def parse_sqlite(peaks_sqlite_path, save=True):
+def parse_sqlite(peaks_sqlite_path, save=True, save_path=None):
     """
     parse the peaks.sqlite file to get the m/z values and intensities for all spectra
+    :param save_path: the folder to save the m/z values and intensities for all spectra, if None, save in the same folder as the peaks.sqlite file
+    :param save: if True, save the m/z values and intensities for all spectra
     :param peaks_sqlite_path:the folder containing the peaks.sqlite file
-    :return:
+    :return: xy, mzs, intensities, snr
+
+    code example:
+    .. code-block:: python
+        xy, mzs, intensities, snr = parse_sqlite('path/to/peaks.sqlite', save=True, save_path='path/to/save')
     """
-    # i
+
+    # if the path is a peaks.sqlite file, get the folder
     if peaks_sqlite_path.endswith('peaks.sqlite'):
         peaks_sqlite_path = os.path.dirname(peaks_sqlite_path)
 
     conn = sqlite3.connect(os.path.join(peaks_sqlite_path, 'peaks.sqlite'))
-    c = conn.cursor()
     df = pd.read_sql_query(
         "SELECT XIndexPos,YIndexPos,PeakMzValues,PeakIntensityValues,NumPeaks,PeakSnrValues from Spectra", conn)
-    XX = np.empty(df.shape[0], dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O'),
+    raw_sql = np.empty(df.shape[0], dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O'),
                                       ('peak_snr', 'O')])
     for num in range(df.shape[0]):
-        if np.floor(num / 1000) == num / 1000:
-            print(num, ',', end="\r", flush=True)
         mzs = list(struct.unpack('d' * df['NumPeaks'][num], df['PeakMzValues'][num]))
         intensities = list(struct.unpack('f' * df['NumPeaks'][num], df['PeakIntensityValues'][num]))
         snr = list(struct.unpack('f' * df['NumPeaks'][num], df['PeakSnrValues'][num]))
-        XX[num] = np.array(
+        raw_sql[num] = np.array(
             [(num + 1,
               df['XIndexPos'][num],
               df['YIndexPos'][num],
@@ -40,17 +44,19 @@ def parse_sqlite(peaks_sqlite_path, save=True):
               np.array(snr, dtype='f'))],
             dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O'), ('peak_snr', 'O')])
     # get the m/z values and intensities for all spectra
-    mzs = np.vstack(XX['peak_mz'])
-    intensities = np.vstack(XX['peak_int'])
-    xy = np.vstack((XX['x'], XX['y'])).T
-    snr = np.vstack(XX['peak_snr'])
+    mzs = np.vstack(raw_sql['peak_mz'])
+    intensities = np.vstack(raw_sql['peak_int'])
+    xy = np.vstack((raw_sql['x'], raw_sql['y'])).T
+    snr = np.vstack(raw_sql['peak_snr'])
 
     if save:
-        # save the m/z values and intensities for all spectra in the same folder
-        np.save(os.path.join(os.path.dirname(peaks_sqlite_path), 'xy.npy'), xy)
-        np.save(os.path.join(os.path.dirname(peaks_sqlite_path), 'mzs.npy'), mzs)
-        np.save(os.path.join(os.path.dirname(peaks_sqlite_path), 'intensities.npy'), intensities)
-        np.save(os.path.join(os.path.dirname(peaks_sqlite_path), 'snr.npy'), snr)
+        if save_path is None:
+            save_path = peaks_sqlite_path
+        # save the m/z values and intensities for all spectra in the specified folder
+        np.save(os.path.join(save_path, 'xy.npy'), xy)
+        np.save(os.path.join(save_path, 'mzs.npy'), mzs)
+        np.save(os.path.join(save_path, 'intensities.npy'), intensities)
+        np.save(os.path.join(save_path, 'snr.npy'), snr)
 
     return xy, mzs, intensities, snr
 
@@ -58,8 +64,12 @@ def parse_sqlite(peaks_sqlite_path, save=True):
 def parse_acqumethod(path):
     """
     parse the acquisition method file to get the measurement parameters
-    :param path:
-    :return:
+    :param path: the path to the acquisition method file
+    :return: a dictionary containing the measurement parameters
+
+    code example:
+    .. code-block:: python
+        params = parse_acqumethod('path/to/acqumethod')
     """
     # get all the lines between <param name = *> and </param>
     with open(path, 'r') as f:
@@ -93,12 +103,17 @@ def parse_acqumethod(path):
 def extract_mzs(target_mz, xy, mzs, intensities, snrs, tol=0.01, min_int=10000, min_snr=0):
     """
     extract the target m/z values and intensities for all spectra
-    :param target_mz:
+    :param target_mz: the m/z values to be extracted, either a list of m/z values or a single m/z value
     :param xy:
     :param mzs:
     :param intensities:
     :param snr:
-    :return:
+    :return: a dataframe containing the target m/z values and intensities for all spectra, and the ppm error for each
+    target m/z value, as well as the x and y coordinates
+
+    code example:
+    .. code-block:: python
+        df = extract_mzs(target_mz, xy, mzs, intensities, snrs, tol=0.01, min_int=10000, min_snr=0)
     """
     if isinstance(target_mz, float):
         mz = np.zeros(xy.shape[0])

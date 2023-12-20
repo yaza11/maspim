@@ -2,6 +2,18 @@ import numpy as np
 
 
 def _find_closest_peak(mz, tol, mzs, intensities, snrs, min_int=10000, min_snr=0):
+    """
+    find the closest peak to the target m/z value
+    :param mz:
+    :param tol:
+    :param mzs:
+    :param intensities:
+    :param snrs:
+    :param min_int:
+    :param min_snr:
+    :return:
+    """
+
     mzs = np.array(mzs)
     intensities = np.array(intensities)
     snrs = np.array(snrs)
