@@ -1,13 +1,13 @@
 ## Usage example
 parse peaks from sqlite database
 ```python
-from exporting.parse import parse_sqlite
+from exporting.parser import parse_sqlite
 
 xy, mzs, intensities,snrs = parse_sqlite(r'path/to/sqlite')
 ```
 get the calibration constants
 ```python
-from exporting.parse import parse_acqumethod
+from exporting.parser import parse_acqumethod
 
 acqumethod = parse_acqumethod(r'path/to/acqumethod')
 A = acqumethod['ML1']
@@ -25,7 +25,7 @@ mzs = cal.transform(mzs)
 
 export target peaks (e.g, alkenones)
 ```python
-from exporting.parse import export_mzs
+from exporting.parser import extract_mzs
 
-df = extract_mzs(target_mzs, xy, mzs, intensities, snrs, tol=0.01, min_int=10000, min_snr=0)
+df = extract_mzs(biomarker_mzs, xy, mzs, intensities, snrs, tol=0.01, min_int=10000, min_snr=0)
 ```
