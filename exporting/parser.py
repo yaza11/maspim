@@ -6,10 +6,10 @@ import struct
 import numpy as np
 import pandas as pd
 
-from exporting.func import _find_closest_peak
+from exporting.func import _find_closest_peak, estimateThreshold
 
 
-def parse_sqlite(peaks_sqlite_path, save=True, save_path=None):
+def parse_sqlite(peaks_sqlite_path, save=True, save_path=None, keep_all=False):
     """
     parse the peaks.sqlite file to get the m/z values and intensities for all spectra
     :param save_path: the folder to save the m/z values and intensities for all spectra, if None, save in the same folder as the peaks.sqlite file
@@ -28,26 +28,39 @@ def parse_sqlite(peaks_sqlite_path, save=True, save_path=None):
 
     conn = sqlite3.connect(os.path.join(peaks_sqlite_path, 'peaks.sqlite'))
     df = pd.read_sql_query(
-        "SELECT XIndexPos,YIndexPos,PeakMzValues,PeakIntensityValues,NumPeaks,PeakSnrValues from Spectra", conn)
+        "SELECT XIndexPos,YIndexPos,PeakMzValues,PeakIntensityValues,NumPeaks,PeakSnrValues, PeakFwhmValues from Spectra", conn)
     raw_sql = np.empty(df.shape[0], dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O'),
-                                      ('peak_snr', 'O')])
+                                      ('peak_snr', 'O'), ('peak_fwhm', 'O')])
     for num in range(df.shape[0]):
-        mzs = list(struct.unpack('d' * df['NumPeaks'][num], df['PeakMzValues'][num]))
-        intensities = list(struct.unpack('f' * df['NumPeaks'][num], df['PeakIntensityValues'][num]))
-        snr = list(struct.unpack('f' * df['NumPeaks'][num], df['PeakSnrValues'][num]))
+        mzs = np.array(list(struct.unpack('d' * df['NumPeaks'][num], df['PeakMzValues'][num])))
+        intensities = np.array(list(struct.unpack('f' * df['NumPeaks'][num], df['PeakIntensityValues'][num])))
+        snr = np.array(list(struct.unpack('f' * df['NumPeaks'][num], df['PeakSnrValues'][num])))
+        fwhm = np.array(list(struct.unpack('f' * df['NumPeaks'][num], df['PeakFwhmValues'][num])))
+
+        if not keep_all:
+            threshold = estimateThreshold(fwhm, mzs)
+            real_peaks = fwhm / mzs ** 2 > threshold
+            # make the intensities of the peaks that are not real to be 0
+            intensities = intensities * real_peaks
+            snr = snr * real_peaks
         raw_sql[num] = np.array(
             [(num + 1,
               df['XIndexPos'][num],
               df['YIndexPos'][num],
               np.array(mzs, dtype='d'),
               np.array(intensities, dtype='f'),
-              np.array(snr, dtype='f'))],
-            dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O'), ('peak_snr', 'O')])
+              np.array(snr, dtype='f'),
+              np.array(fwhm, dtype='f'))],
+            dtype=[('id', 'O'), ('x', 'O'), ('y', 'O'), ('peak_mz', 'O'), ('peak_int', 'O'), ('peak_snr', 'O'),
+                   ('peak_fwhm', 'O')])
+
+
     # get the m/z values and intensities for all spectra
     mzs = np.vstack(raw_sql['peak_mz'])
     intensities = np.vstack(raw_sql['peak_int'])
     xy = np.vstack((raw_sql['x'], raw_sql['y'])).T
     snr = np.vstack(raw_sql['peak_snr'])
+    fwhm = np.vstack(raw_sql['peak_fwhm'])
 
     if save:
         if save_path is None:
@@ -57,8 +70,9 @@ def parse_sqlite(peaks_sqlite_path, save=True, save_path=None):
         np.save(os.path.join(save_path, 'mzs.npy'), mzs)
         np.save(os.path.join(save_path, 'intensities.npy'), intensities)
         np.save(os.path.join(save_path, 'snr.npy'), snr)
+        np.save(os.path.join(save_path, 'fwhm.npy'), fwhm)
 
-    return xy, mzs, intensities, snr
+    return xy, mzs, intensities, snr, fwhm
 
 
 def parse_acqumethod(path):
