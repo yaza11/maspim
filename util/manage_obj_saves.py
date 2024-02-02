@@ -1,43 +1,40 @@
 
 Image_disc_attributes = {
-    '_is_parent',
-    '_data_type',
-    '_section',
-    '_window',
-    'current_image_type'}
+    'path_folder',
+    'age_span'
+    }
 
-ImageProbe_disc_attributes = Image_disc_attributes | {
+ImageSample_disc_attributes = Image_disc_attributes | {
     'obj_color', 'xywh_ROI'}
 
-ImageROI_disc_attributes = ImageProbe_disc_attributes | {
+ImageROI_disc_attributes = ImageSample_disc_attributes | {
     'image_classification', 'params_classification'
 }
 
-ImageClassified_disc_attributes = ImageProbe_disc_attributes | {
+ImageClassified_disc_attributes = ImageSample_disc_attributes | {
     'params_laminae_simplified',
     'image_seeds'}
 
 ImageTransformation_disc_attributes = {'_section, _window_from', '_window_to'}
 
 Data_disc_attributes = {
-    '_section',
-    '_section_str',
-    '_window',
-    '_data_type',
-    '_mass_window',
-    'peak_th_ref_peak',
-    'max_deviation_mz',
+    'path_d_folder',
     'distance_pixels',
-    'current_feature_table'
+    'feature_table',
+    'depth_section',
+    'age_span'
 }
 
 Data_nondata_columns = {
     'L',
     'x_ROI',
     'y_ROI',
+    'valid',
     'classification',
     'classification_s',
-    'seed'
+    'seed',
+    'depth',
+    'age'
 }
 
 MSI_disc_attributes = Data_disc_attributes
@@ -62,16 +59,33 @@ MetaFeatures_disc_attributes = {
     'features_clustering'
 }
 
+SampleImageHandler_attributes = {'extent_spots', 'path_folder'}
+
+Spectra_attributes = {
+    'path_d_folder', 
+    'delta_mz', 'mzs', 
+    'intensities', 
+    'indices', 
+    'limits', 
+    'peaks',
+    'peak_properties',
+    'peak_setting_parameters',
+    'kernel_params',
+    'line_spectra'
+}
+
 name_to_attrs = {
     'Image': Image_disc_attributes,
-    'ImageProbe': ImageProbe_disc_attributes,
+    'ImageSample': ImageSample_disc_attributes,
     'ImageROI': ImageROI_disc_attributes,
     'ImageClassified': ImageClassified_disc_attributes,
     'Data': Data_disc_attributes,
     'MSI': MSI_disc_attributes,
     'XRF': XRF_disc_attributes,
     'TimeSeries': TimeSeries_disc_attributes,
-    'MetaFeatures': MetaFeatures_disc_attributes
+    'MetaFeatures': MetaFeatures_disc_attributes,
+    'SampleImageHandler': SampleImageHandler_attributes,
+    'Spectra': Spectra_attributes
 }
 
 

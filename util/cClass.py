@@ -156,7 +156,7 @@ did not match input attributes. Got {len(attributes)} attribute but \
             within the data is not known
         cols: Iterable | None, optional
             The columns in which to search the closest value. If cols is None,
-            tries to get cols of current_feature_table or feature_table_zone_averages.
+            tries to get cols of feature_table or feature_table_zone_averages.
             If both fail, raises an attribute error.
         max_deviation : float, optional
             the maximum of allowed deviation of the mz value from that given
@@ -173,8 +173,8 @@ did not match input attributes. Got {len(attributes)} attribute but \
             deviation is small enough, otherwise returns None.
         """
         if cols is None:
-            if self.check_attribute_exists('current_feature_table'):
-                cols = np.array(self.current_feature_table.columns).astype(str)
+            if self.check_attribute_exists('feature_table'):
+                cols = np.array(self.feature_table.columns).astype(str)
             elif self.check_attribute_exists('feature_table_zone_averages'):
                 cols = np.array(self.feature_table_zone_averages.columns).astype(str)
             else:

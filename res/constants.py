@@ -36,12 +36,15 @@ transformation_target = 'Alkenones'
 
 
 def window_to_type(window: str) -> str:
-    if window.lower() in ('fa', 'gdgt', 'alkenones', 'msi'):
+    window_l = window.lower()
+    if window_l in ('fa', 'gdgt', 'alkenones', 'msi'):
         return 'msi'
-    elif window.lower() in ('xrf'):
+    elif window_l in ('xrf'):
         return 'xrf'
-    elif window.lower() == 'combined':
+    elif window_l == 'combined':
         return 'combined'
+    elif window_l == 'none':
+        return 'none'
     else:
         raise KeyError(f'{window=} is not a valid window')
 

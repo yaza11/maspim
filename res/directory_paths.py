@@ -2,7 +2,7 @@ import os
 import socket
 from textdistance import hamming as textdist
 
-use_disc = 1
+use_disc = 0
 is_NB = socket.gethostname() == 'DESKTOP-51884LJ'
 
 if use_disc and is_NB:
@@ -23,7 +23,7 @@ if use_disc:
     relative_path_to_saves = 'Master_Thesis'
     relative_path_to_msi_data = 'Cariaco Data for Weimin'
     relative_path_to_xrf_data = r'Cariaco line scan Xray\uXRF slices'
-    relative_path_to_age_model = r'AgeModel'
+    relative_path_to_age_model = r'Promotion\msi_workflow\exampleData'
 
     absolute_path_to_saves = os.path.join(disc, relative_path_to_saves)
 

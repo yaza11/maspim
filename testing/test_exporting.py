@@ -19,12 +19,13 @@ from exporting_mcf.rtms_communicator import ReadBrukerMCF, Spectra
 # d_folder = '//10.111.38.201/scratch/Jannis/FTdata/oldlaser/13012023_SBB_TG3A_05-10_Test2_1/13012023_SBB_TG3A_05-10_Test2.d'  # geht
 # d_folder = "//10.111.38.201/scratch/Jannis/FTdata/oldlaser/13012023_SBB_TG3A_05-10_Test2/13012023_SBB_TG3A_05-10_Test2.d"  # geht
 # d_folder = "D:/Promotion/Test data/13012023_SBB_TG3A_05-10_Test2.d"
-d_folder = 'D:/Cariaco Data for Weimin/490-495cm/2018_08_27 Cariaco 490-495 alkenones.i/2018_08_27 Cariaco 490-495 alkenones.d'
-con = ReadBrukerMCF(d_folder)
-con.create_reader()
+# d_folder = 'D:/Cariaco Data for Weimin/490-495cm/2018_08_27 Cariaco 490-495 alkenones.i/2018_08_27 Cariaco 490-495 alkenones.d'
+# con = ReadBrukerMCF(d_folder)
+# con.create_reader()
 # con.create_indices()
 
-spectra = Spectra(reader=con, load=True)
+# spectra = Spectra(reader=con)
+spectra = Spectra(load=True, path_d_folder=d_folder)
 # spectra.add_all_spectra(con)
 
 # spectra.set_peaks()
@@ -33,18 +34,18 @@ spectra = Spectra(reader=con, load=True)
 
 # spectra.plt_kernels()
 
-spectra.bin_spectra(con)
+# spectra.bin_spectra(con)
 
-spectra.binned_spectra_to_df(con)
+# spectra.binned_spectra_to_df(con)
 
-# img = spectra.feature_table.pivot(
-#     index='x', 
-#     columns='y', 
-#     values = spectra.feature_table.columns[0]
-# )
-# plt.imshow(img)
+img = spectra.feature_table.pivot(
+    index='x', 
+    columns='y', 
+    values = spectra.feature_table.columns[0]
+)
+plt.imshow(img)
 
-spectra.save()
+# spectra.save()
 
 # %% sqlite parser
 # from exporting.parser import parse_sqlite
@@ -94,6 +95,27 @@ def plt_C37s(spectra, is2=True):
     mask = (x >= xlim[0]) & (x <= xlim[1])
     plt.xlim(xlim)
     plt.ylim((0, y[mask].max()))
+    
+def ion_imgs_UK(spectra):
+    mz_C37_2 = 553.53188756536
+    mz_C37_3 = 551.51623750122
+    
+    # find closest masses
+    mzs = spectra.feature_table.drop(columns=['R', 'x', 'y']).columns.astype(float)
+    mz2_idx = np.argmin(np.abs(mzs - mz_C37_2))
+    
+    plt.imshow(spectra.feature_table.pivot(
+        index='x', columns='y', values=spectra.feature_table.columns[mz2_idx])
+    )
+    plt.show()
+    
+    mz3_idx = np.argmin(np.abs(mzs - mz_C37_3))
+    
+    plt.imshow(spectra.feature_table.pivot(
+        index='x', columns='y', values=spectra.feature_table.columns[mz3_idx])
+    )
+    plt.show()
+    
 
 # center bigaussian around peaks
 # mz_C37_2 = 553.53188756536
