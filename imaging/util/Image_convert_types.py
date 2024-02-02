@@ -82,13 +82,24 @@ def cv_to_PIL(image):
 
 
 def convert(type_in: str, type_out: str,
-            obj: object) -> object:
+            image: object) -> object:
+    type_in = type_in.lower()
+    if type_in == 'cv2':
+        type_in = 'cv'
+    elif type_in == 'pil':
+        type_in = type_in.upper()
+    type_out = type_out.lower()
+    if type_out == 'cv2':
+        type_out = 'cv'
+    elif type_out == 'pil':
+        type_out = type_out.upper()
+    
     types = ('np', 'cv', 'PIL')
     if (type_in not in types) or (type_out not in types):
         raise ValueError(f'types must be in {types}.')
     elif type_in == type_out:
-        return obj
-    return eval(f'{type_in}_to_{type_out}(obj)')
+        return image
+    return eval(f'{type_in}_to_{type_out}(image)')
 
 
 def ensure_image_is_gray(image):

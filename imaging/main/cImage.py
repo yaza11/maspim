@@ -1,7 +1,6 @@
 from res.constants import window_to_type, key_light_pixels, key_dark_pixels, key_hole_pixels, windows_all
 from util.manage_obj_saves import class_to_attributes
-from misc.cAgeModel import depth_to_age
-from util.cClass import Convinience, verbose_function
+from util.cClass import Convinience, verbose_function, return_existing
 from imaging.misc.fit_distorted_rectangle import find_layers, distorted_rect
 from imaging.util.coordinate_transformations import rescale_values
 
@@ -32,6 +31,10 @@ from imaging.util.Image_helpers import (ensure_odd,
 
 from imaging.util.Image_boxes import get_mean_intensity_box, region_in_box, get_ROI_in_image
 
+from data.cProject import get_image_file
+from data.file_helpers import get_d_folder
+
+import pickle
 import pandas as pd
 import PIL
 import os
@@ -42,132 +45,53 @@ import functools
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 from scipy.optimize import minimize
 from typing import Iterable
 
 
 class Image(Convinience):
-    """Base function to get probe images and analyze them."""
-
-    def __init__(self, image=None, image_type_input=None, image_path=None,
-                 image_type_default='cv', obj_color=None,
-                 section=None, window=None):
+    """Base function to get sample images and analyze them."""
+    image_type_default = 'cv'
+    def __init__(
+        self, path_folder, image, image_type='cv', obj_color=None,
+    ):
         """Initiator."""
         # options mutable by user
         self.plts = False
         self.verbose = False
-        # defined if used by cDataClass, has to be initalised before
-        # get_image_from_inputs
-        self._data_type = None
-        self._section = None
-        self._window = None
+        
+        self.path_folder = path_folder
+        
         # get the image from the inputs
-        self.set_image_from_inputs(
-            [image, image_type_input, image_path, image_type_default,
-             section, window])
-        self.current_image_type = image_type_default
-        self._is_parent = True
-
+        self.image_type = image_type
+        self._image_original = self.ensure_image_is_cv(image)
         # make sure image is oriented horizontally
-        if np.argmax(self._hw) != 1:
-            self.current_image = self.current_image.swapaxes(0, 1)
+        h, w, *_ = self._image_original.shape 
+        if h > w:
+            print('swapped axes of input image to ensure horizontal orientation')
+            self._image_original = self._image_original.swapaxes(0, 1)
+        self._hw = h, w
+        
+        if obj_color is None:
+            self.sget_obj_color()
+        else:
+            self.obj_color=obj_color
+            
+        self.set_current_image()
 
     @verbose_function
     def load(self):
-        from util.manage_class_imports import load_obj
-        """Actions to performe when object was loaded from disc."""
-        if __name__ == '__main__':
-            raise RuntimeError('Cannot load obj from file where it is defined.')
-        self.__dict__ = load_obj(
-            self._section, self._window, self.__class__.__name__
-        ).__dict__
-        self.plts = False
-        self.verbose = False
+        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
+        path_d_folder = os.path.join(
+            self.path_folder, 
+            get_d_folder(self.path_folder)
+        )
+        with open(os.path.join(path_d_folder, name), 'rb') as f:
+            obj = pickle.load(f)
+        self.__dict__ |= obj.__dict__
 
-    @verbose_function
-    def set_image_from_inputs(self, inputs: list):
-        image, image_type_input, image_path, image_type_default, section, window = inputs
-
-        if image_type_input.lower() in ('xrf', 'msi'):
-            return self.get_image_from_DataClass(
-                image_type_input, section, window, image_type_default)
-
-        inputs.pop()
-        provided_inputs = np.array([input_ is None for input_ in inputs])
-        # conflicting inputs
-        if (sum(~provided_inputs) > 1) and (image_type_input is None):
-            raise Warning('More inputs than necessary provided. This may \
-result in unwanted behavior.')
-        # no input provided
-        if all(provided_inputs):
-            raise ValueError(
-                'Provide valid input, either as path or image with type.')
-        # image without type
-        elif (image is not None) and (image_type_input is None):
-            raise ValueError('If image is provided directly, image_type_input \
-has to be specified as one of np, cv or PIL.')
-        # image and type provided
-        elif (image is not None) and (image_type_input):
-            img = Image_convert_types.convert(
-                image_type_input, image_type_default, image)
-        # image path provided
-        elif image_path is not None:
-            img = Image_convert_types.convert(
-                'cv', image_type_default, cv2.imread(image_path))
-
-        self._image_original = img
-
-    @verbose_function
-    def get_image_from_DataClass(
-            self,
-            data_type: str,
-            section: tuple[int],
-            window: str,
-            image_type_default: str = 'cv'
-    ) -> np.ndarray:
-        """
-        Use function in cDataClass to find image of probe.
-
-        This function sets the attributes characterisitic for the measurement
-        as well as the original image (from disc).
-
-        Parameters
-        ----------
-        data_type : str
-            msi or xrf.
-        section : tuple[int]
-            e.g. (490, 495).
-        window : str
-            e.g. 'Alkenones'.
-        image_type_default : str
-            e.g. 'cv' or 'np'.
-
-        Raises
-        ------
-        NotImplementedError
-            for data types other than msi, xrf.
-
-        Returns
-        -------
-        None
-
-        """
-        print('It is recommended to use ImageProbe"s set_image_from_DataClass')
-        if data_type.lower() == 'msi':
-            from cMSI import MSI
-            img_PIL = MSI(section, window).sget_photo()
-        elif data_type.lower() == 'xrf':
-            from cXRF import XRF
-            img_PIL = XRF(section).sget_photo_ROI()
-        else:
-            raise NotImplementedError(
-                f'create_image_obj not implemented for {data_type=}')
-        self._data_type = data_type.lower()
-        self._section = section
-        self._window = window.lower()
-        return Image_convert_types.convert(
-            'PIL', image_type_default, img_PIL)
+    def sget_image_original(self):
+        return self._image_original
 
     @verbose_function
     def sget_image_grayscale(self) -> np.ndarray:
@@ -204,8 +128,8 @@ has to be specified as one of np, cv or PIL.')
 
         """
         image = Image_convert_types.convert(
-            self.current_image_type, 'cv', image)
-        self.current_image_type = 'cv'
+            self.image_type, 'cv', image)
+        self.image_type = 'cv'
         return image
 
     @verbose_function
@@ -225,9 +149,9 @@ has to be specified as one of np, cv or PIL.')
 
         if isinstance(key, int):
             idx = key
-        elif self.current_image_type == 'cv':
+        elif self.image_type == 'cv':
             cv_channel_to_idx[key]
-        elif self.current_image_type == 'PIL':
+        elif self.image_type == 'PIL':
             PIL_channel_to_idx[key]
         image = image[:, :, idx]
         return image
@@ -444,10 +368,8 @@ has to be specified as one of np, cv or PIL.')
 
     @verbose_function
     def save(self):
-        from manage_class_imports import save_obj
-        if __name__ == '__main__':
-            raise RuntimeError('Cannot save object from the file in which it is defined.')
         # delete all attributes that are not flagged as relevant
+        dict_backup = self.__dict__.copy()
         keep_attributes = set(self.__dict__.keys()) & class_to_attributes(self)
         existent_attributes = list(self.__dict__.keys())
         verbose = self.verbose
@@ -456,80 +378,47 @@ has to be specified as one of np, cv or PIL.')
                 self.__delattr__(attribute)
         if verbose:
             print(f'saving image object with {self.__dict__.keys()}')
-        save_obj(obj=self)
+        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
+        path_d_folder = os.path.join(
+            self.path_folder, get_d_folder(self.path_folder)
+        )
+        with open(os.path.join(path_d_folder, name), 'wb') as f:
+            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
+        self.__dict__ = dict_backup
 
 
-class ImageProbe(Image):
+class ImageSample(Image):
     """Find image on disc, find ROI."""
-
     def __init__(
-            self,
-            section: tuple[int],
-            window: str,
-            data_type: str | None = None,
-            image_type_default: str = 'cv'):
-        self.verbose = False
+        self, path_folder, image = None, image_type='cv', obj_color=None
+    ):
+        """Initiator."""
+        # options mutable by user
         self.plts = False
-
-        self._is_parent = True
-
-        if data_type is None:
-            data_type = window_to_type(window)
-        self._data_type = data_type.lower()
-        self._section = section
-        self._window = window.lower()
-
-        self.current_image_type = image_type_default
-
-    @verbose_function
-    def set_image_from_DataClass(self, **kwargs):
-        if self._data_type == 'msi':
-            from cMSI import MSI
-            img_PIL = MSI(self._section, self._window).sget_photo()
-        elif self._data_type.lower() == 'xrf':
-            from cXRF import XRF
-            img_PIL = XRF(self._section, self._window).sget_photo_ROI()
+        self.verbose = False
+        
+        self.path_folder = path_folder
+        
+        # get the image from the inputs
+        self.image_type = image_type
+        if image is None:
+            image_file = get_image_file(self.path_folder)
+            image = cv2.imread(os.path.join(self.path_folder, image_file))
+        
+        self._image_original = self.ensure_image_is_cv(image)
+        # make sure image is oriented horizontally
+        h, w, *_ = self._image_original.shape 
+        if h > w:
+            print('swapped axes of input image to ensure horizontal orientation')
+            self._image_original = self._image_original.swapaxes(0, 1)
+        self._hw = h, w
+        
+        if obj_color is None:
+            self.sget_obj_color()
         else:
-            raise NotImplementedError(
-                f'create_image_obj not implemented for {self._data_type=}')
-
-        self._image_original = Image_convert_types.convert(
-            'PIL', self.current_image_type, img_PIL)
-
-    def set_cv_image(self, **kwargs):
-        if self.current_image_type != 'cv':
-            raise KeyError('Current object image type is not cv, cannot set image from this function.')
-        if self._data_type == 'msi':
-            from cMSI import MSI
-            m = MSI(self._section, self._window)
-            mis_dict = m.search_keys_in_xml(['ImageFile'])
-            path = os.path.join(
-                m.sget_directory_paths()['dir_raw_data'], mis_dict['ImageFile']
-            )
-            self._image_original = cv2.imread(path)
-        elif self._data_type.lower() == 'xrf':
-            from cXRF import XRF
-            img_PIL = XRF(self._section, self._window).sget_photo_ROI()
-            self._image_original = Image_convert_types.convert(
-                'PIL', self.current_image_type, img_PIL)
-        else:
-            raise NotImplementedError(
-                f'create_image_obj not implemented for {self._data_type=}')
-
-    @verbose_function
-    def sget_image_original(self, drop_hw=True) -> tuple[np.ndarray, tuple[int]]:
-        attrs = ['_image_original', '_hw']
-        if self.current_image_type == 'cv':
-            rets = self.sget(
-                attrs, self.set_cv_image, is_get_function=False
-            )
-        else:
-            rets = self.sget(
-                attrs, self.set_image_from_DataClass, is_get_function=False
-            )
-        if drop_hw:
-            return rets[0]
-        return rets
+            self.obj_color=obj_color
+            
+        self.set_current_image()
 
     @verbose_function
     def set_obj_color(self, region_middleground=.8, **kwargs):
@@ -579,11 +468,11 @@ class ImageProbe(Image):
         return self.sget('obj_color', self.set_obj_color, is_get_function=False)
 
     @verbose_function
-    def get_probe_area_box(
+    def get_sample_area_box(
         self, image: np.ndarray, dilate_factor: float = 1, **kwargs
     ) -> tuple[np.ndarray, tuple[int]]:
         """
-        Use optimizer to find probe area of box.
+        Use optimizer to find samplearea of box.
 
         Parameters
         ----------
@@ -661,9 +550,9 @@ class ImageProbe(Image):
             image=image_downscaled, box_ratio_x=box_ratio_x,
             box_ratio_y=box_ratio_y, center_box=center_box)
         if self.plts:
-            plt_rect_on_image(image_downscaled, box_params, title='Detected ROI of probe', **kwargs)
+            plt_rect_on_image(image_downscaled, box_params, title='Detected ROI of sample', **kwargs)
 
-        # dilate the box slightly for finer probe definition
+        # dilate the box slightly for finer sampledefinition
         if dilate_factor > 1:
             box_ratio_x *= dilate_factor
             box_ratio_y *= dilate_factor
@@ -697,7 +586,7 @@ class ImageProbe(Image):
         return image_ROI, (x, y, w, h)
 
     @verbose_function
-    def get_probe_area_contours(
+    def get_sample_area_contours(
             self, image, image_thresh=None, filter_by_size=.1,
             filter_by_ratio=.5, method='hierarchy-tree',
             automatic_downscale=1000, scale_factor=None, **kwargs):
@@ -710,7 +599,7 @@ class ImageProbe(Image):
             image in which to find contours.
         method : str
             One of ('hierarhy-tree', 'double-otsu'). hierarchy-tree is suitable
-            for probes that show clear lamination and should be faster whereas
+            for samples that show clear lamination and should be faster whereas
             the double-otsu method applies otsu to the region spanned by each
             contour to the grayscale image.
 
@@ -833,7 +722,7 @@ Choose one of ('hierarhy-tree', 'double-otsu').")
         return image_ROI, (x, y, w, h)
 
     @verbose_function
-    def get_probe_area_main_contour(
+    def get_sample_area_main_contour(
             self, image, method='take_largest'):
         contour = self.get_main_contour(image, method=method)
 
@@ -849,22 +738,16 @@ Choose one of ('hierarhy-tree', 'double-otsu').")
         return image_ROI, (x, y, w, h)
 
     @verbose_function
-    def get_probe_area(self, image, **kwargs):
-        if self._data_type == 'xrf':
-            if self.verbose:
-                print('get_probe_area called for xrf data_type, assuming ROI = Image')
-            image_ROI = self._image_original.copy()
-            ROI_xywh = (0, 0, image_ROI.shape[1], image_ROI.shape[0])
-            return image_ROI, ROI_xywh
+    def get_sample_area(self, image, **kwargs):
         # find the rough region of interest with box
-        image_ROI_box, (xb, yb, wb, hb) = self.get_probe_area_box(
+        image_ROI_box, (xb, yb, wb, hb) = self.get_sample_area_box(
             image, dilate_factor=0.1)
         # get the foreground pixels in the ROI
         _, ROI_binary = self.get_foreground_thr_and_pixels(image_ROI_box, **kwargs)
         # simplify the binary image
         ROI_simplified = self.get_simplified_image(ROI_binary)
         # find the refined area as the extent of the simplified binary image
-        _, (xc, yc, wc, hc) = self.get_probe_area_main_contour(
+        _, (xc, yc, wc, hc) = self.get_sample_area_main_contour(
             ROI_simplified, method='filter_by_size')
 
         # stack the offsets of the two defined ROI's since the second ROI is
@@ -878,69 +761,81 @@ Choose one of ('hierarhy-tree', 'double-otsu').")
 
         if self.plts:
             plt_cv2_image(image_ROI, 'final ROI as defined by \
-get_probe_area')
+get_sample_area')
 
         return image_ROI, (x, y, w, h)
 
-    def sget_probe_area(
+    def sget_sample_area(
             self, **kwargs
     ) -> tuple[np.ndarray[np.uint8], tuple[int]]:
-        """Set and return area of the probe in the image."""
+        """Set and return area of the sample in the image."""
         return self.manage_sget(
             ['image_ROI', 'xywh_ROI'],
-            self.get_probe_area,
+            self.get_sample_area,
             image=self.sget_current_image(),
             **kwargs
         )
+    
+    def get_sample_area_from_xywh(self):
+        assert hasattr(self, 'xywh_ROI'), 'call sget_sample_area first'
+        image = self._image_original
+        x, y, w, h = self.xywh_ROI
+        return image[y:y + h, x:x + w].copy()
 
 
 class ImageROI(Image):
     """Create obj from xywh, classify laminae."""
-
     def __init__(
-        self,
-        section: tuple[int],
-        window: str,
-        data_type: str | None = None,
-        image_type_default: str = 'cv'
-    ) -> None:
-        """Set object attributes."""
-        self.verbose = False
+        self, path_folder, image = None, image_type='cv', obj_color=None
+    ):
+        """Initiator."""
+        # options mutable by user
         self.plts = False
-
-        self._is_parent = False
-
-        if data_type is None:
-            data_type = window_to_type(window)
-        self._data_type = data_type.lower()
-        self._section = section
-        self._window = window.lower()
-
-        self.current_image_type = image_type_default
-
+        self.verbose = False
+        
+        self.path_folder = path_folder
+        
+        # get the image from the inputs
+        self.image_type = image_type
+        if image is None:
+            IS = self.get_image_sample()
+            assert hasattr(IS, 'xywh_ROI'), \
+                'save an ImageSample object with detected sample area first'
+            image = IS.get_sample_area_from_xywh()
+        
+        self._image_original = self.ensure_image_is_cv(image)
+            
+        self.set_current_image()
+    
+    
+    def get_image_sample(self):
+        IS = ImageSample(self.path_folder, image=None)
+        IS.load()
+        return IS
+    
     def get_parent_color_and_extent(
             self, overwrite: bool = False
     ) -> tuple[str, tuple[int]]:
         """Return obj color and ROI extent in original image."""
-        from manage_class_imports import check_file_exists
+        IS = self.get_image_sample()
         # check if the saved obj has neccessary attributes (if it exists)
-        o = ImageProbe(self._section, self._window)
-        compute_area = True
-        if not overwrite:
-            if check_file_exists(section=self._section,
-                                 window=self._window,
-                                 obj_type='ImageProbe'
-                                 ):
-                o.load()
-                if o.check_attribute_exists('xywh_ROI'):
-                    assert o.check_attribute_exists('obj_color')
-                    compute_area = False
+        if overwrite:
+            compute_area = True
+        elif os.path.exists(os.path.join(self.path_folder, 'ImageSample.pickle')):
+            IS.load()
+            if hasattr(IS, 'xywh_ROI'):
+                compute_area = False
+            else:
+                compute_area = True
+        else:
+            compute_area = True
+        
         if compute_area:
-            o.sget_probe_area()
-        return o.obj_color, o.xywh_ROI
+            IS.sget_sample_area()
+        return IS.obj_color, IS.xywh_ROI
 
     def sget_parent_color_and_extent(self) -> tuple[str, tuple[int]]:
-        """Set abd return obj color and ROI extent."""
+        """Set and return obj color and ROI extent."""
         return self.manage_sget(
             ['obj_color', 'xywh_ROI'],
             self.get_parent_color_and_extent
@@ -950,27 +845,26 @@ class ImageROI(Image):
         """Set and return object color."""
         return self.sget_parent_color_and_extent()[0]
 
+    @return_existing('_image_original')
     def sget_image_original(self) -> np.ndarray:
         """Set and return original image."""
-        return self.manage_sget(
-            '_image_original',
-            get_ROI_in_image,
-            image=ImageProbe(self._section, self._window).sget_image_original(),
-            xywh_ROI=self.sget_parent_color_and_extent()[1]
+        parent = ImageSample(self._section, self._window)
+        image = parent.sget_image_original()
+        
+        return get_ROI_in_image(
+            image=image, xywh_ROI=self.sget_parent_color_and_extent()[1]
         )
+
+    def set_age_span(self, age_span: tuple):
+        self.age_span = age_span
 
     def get_average_width_yearly_cycle(self) -> float:
         """Calculate how many cycles are in the interval and their av width."""
+        assert hasattr(self, 'age_span'), 'call set_age_span'
         pixels_x = self.sget_image_original().shape[1]
         # calculate the number of expected cycles from the age difference for
         # the depth interval of the slice
-        age_lower = depth_to_age(self._section[1] / 100)
-        age_upper = depth_to_age(self._section[0] / 100)
-        num_expected_cycles = age_lower - age_upper
-        average_thickness_pixels = pixels_x / num_expected_cycles
-        if self.verbose:
-            print(f'expecting {num_expected_cycles:.1f} cycles with a \
-thickness of {average_thickness_pixels:.1f} pixels.')
+        average_thickness_pixels = pixels_x / (self.age_span[1] - self.age_span[0])
         return average_thickness_pixels
 
     @verbose_function
@@ -1209,6 +1103,7 @@ thickness of {average_thickness_pixels:.1f} pixels.')
             )
         return image_classification, params
 
+    # TODO: option for ignoring age model 
     def sget_classification_adaptive_mean(self):
         """Create and return the image classification with parameters."""
         return self.manage_sget(
@@ -1220,54 +1115,61 @@ thickness of {average_thickness_pixels:.1f} pixels.')
 
 class ImageClassified(Image):
     """Characterise and modify the classified layers."""
-
     def __init__(
-        self,
-        section: tuple[int],
-        window: str,
-        data_type: str | None = None,
-        image_type_default: str = 'cv',
-        image: np.ndarray | None = None
-    ) -> None:
-        """Set object attributes."""
-        self.verbose = False
+        self, path_folder, image = None, image_type='cv', obj_color=None
+    ):
+        """Initiator."""
+        # options mutable by user
         self.plts = False
-
-        self._is_parent = False
-
-        if data_type is None:
-            data_type = window_to_type(window)
-        self._data_type = data_type.lower()
-        self._section = section
-        self._window = window.lower()
-
-        self.current_image_type = image_type_default
-        if image is not None:
-            self._image_original = image
-
+        self.verbose = False
+        if obj_color:
+            self.obj_color = obj_color
+        
+        self.path_folder = path_folder
+        
+        # get the image from the inputs
+        self.image_type = image_type
+        if image is None:
+            IR = self.get_image_roi()
+            assert hasattr(IR, 'xywh_ROI'), \
+                'save an ImageROI object with detected sample area first'
+            image = IR.sget_image_original()
+        
+        self._image_original = self.ensure_image_is_cv(image)
+            
+        self.set_current_image()
+    
+    def get_image_roi(self):
+        IR = ImageROI(self.path_folder, image=None)
+        IR.load()
+        return IR
+    
     @verbose_function
     def get_parent_classification_and_color(self, overwrite: bool = False) -> np.ndarray:
         """Get classified image."""
-        from manage_class_imports import check_file_exists
+        IR = self.get_image_roi()
         # check if the saved obj has neccessary attributes (if it exists)
-        o = ImageROI(self._section, self._window)
-        compute_classification = True
-        if not overwrite:
-            if check_file_exists(section=self._section,
-                                 window=self._window,
-                                 obj_type='ImageROI'
-                                 ):
-                o.load()
-                if o.check_attribute_exists('image_classification'):
-                    assert o.check_attribute_exists('params_classification')
-                    compute_classification = False
+        if overwrite:
+            compute_classification = True
+        elif os.path.exists(os.path.join(self.path_folder, 'ImageROI.pickle')):
+            IR.load()
+            if hasattr(IR, 'image_classification'):
+                compute_classification = False
+            else:
+                compute_classification = True
+        else:
+            compute_classification = True
+        
         if compute_classification:
-            o.sget_classification_adaptive_mean()
-        return o.image_classification, o.sget_obj_color()
+            IR.sget_classification_adaptive_mean()
+        return IR.image_classification, IR.sget_obj_color()
 
     @verbose_function
     def sget_image_classification_and_color(self) -> np.ndarray:
         """Set and get classification as original image."""
+        if hasattr(self, 'obj_color'):
+            self._image_classification = self.get_parent_classification_and_color()[0]
+            return self._image_classification, self.obj_color
         return self.manage_sget(
             ['_image_classification', 'obj_color'], self.get_parent_classification_and_color
         )
@@ -1287,12 +1189,17 @@ class ImageClassified(Image):
         """Return obj color from parent."""
         return self.sget_image_classification_and_color()[1]
 
-    @verbose_function
+    def set_age_span(self, age_span: tuple):
+        self.age_span = age_span
+
     def get_average_width_yearly_cycle(self) -> float:
-        """Call parent object to get average width."""
-        o = ImageROI(self._section, self._window)
-        o._image_original = self.sget_image_original()
-        return o.get_average_width_yearly_cycle()
+        """Calculate how many cycles are in the interval and their av width."""
+        assert hasattr(self, 'age_span'), 'call set_age_span'
+        pixels_x = self.sget_image_original().shape[1]
+        # calculate the number of expected cycles from the age difference for
+        # the depth interval of the slice
+        average_thickness_pixels = pixels_x / (self.age_span[1] - self.age_span[0])
+        return average_thickness_pixels
 
     @verbose_function
     def sget_average_width_yearly_cycle(self):
@@ -1343,7 +1250,7 @@ class ImageClassified(Image):
 
             sum_lights = image_light.sum(axis=0)
         sum_foreground = mask_foreground.sum(axis=0)
-        # exclude columns with no probe material
+        # exclude columns with no sample material
         mask_nonempty_col = sum_foreground > 0
         # divide colwise sum of c by number of foreground pixels
         # empty cols will have a value of 0
@@ -1766,6 +1673,38 @@ simplify_laminae before calling create_simplified_laminae_classification.'
         plt.show()
 
 
+# TODO: overwrite or delete
+def ImageSample_from_Image(Img: Image) -> ImageSample:
+    # initialize
+    ImgP = ImageSample(section=(0, 1), window='none', data_type='none')
+    # copy data over
+    ImgP._image_original = Img._image_original
+    ImgP.image_type = Img.image_type
+    return ImgP
+
+
+def ImageROI_from_ImageSample(ImgP: ImageSample) -> ImageROI:
+    ImgROI = ImageROI(
+        ImgP._section, ImgP._window, ImgP._data_type, 
+        image_type_default=ImgP.current_image
+    )
+    ImgROI.obj_color = ImgP.sget_obj_color()
+    ImgROI._image_original = ImgP.sget_sample_area()[0]
+    ImgROI.xywh_ROI = ImgP.sget_sample_area()[1]
+    return ImgROI
+
+def ImageClassified_from_ImageROI(ImgROI: ImageROI) -> ImageClassified:
+    ImgC = ImageClassified(
+        section=ImgROI._section, 
+        window=ImgROI._window, 
+        image=ImgROI.sget_image_original()
+    )
+    ImgC._image_classification = ImgROI.sget_classification_adaptive_mean()[0]
+    ImgC.obj_color = ImgROI.sget_obj_color()
+    return ImgC
+    
+
+
 def full_initialization_standard_params(
         section, window, plts=False, verbose=False, only_steps={1, 2, 3}
 ):
@@ -1773,13 +1712,13 @@ def full_initialization_standard_params(
     if 1 not in only_steps:
         pass
     else:
-        IProbe = ImageProbe(section, window)
-        IProbe.obj_color = 'light'
-        IProbe.plts = plts
-        IProbe.verbose = verbose
-        IProbe.sget_probe_area()
-        IProbe.save()
-        del IProbe
+        ISample = ImageSample(section, window)
+        ISample.obj_color = 'light'
+        ISample.plts = plts
+        ISample.verbose = verbose
+        ISample.sget_sample_area()
+        ISample.save()
+        del ISample
 
     if 2 not in only_steps:
         pass
@@ -1820,7 +1759,7 @@ def full_initalization_section(section, **kwargs):
 
 
 def test_img_from_MSI(section=(490, 495), window='Alkenones'):
-    I_obj = ImageProbe(image_type_input='msi', section=section, window=window)
+    I_obj = ImageSample(image_type_input='msi', section=section, window=window)
     # I_obj.classify_laminae_in_ROI()
     return I_obj
 
