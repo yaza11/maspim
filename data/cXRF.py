@@ -1,6 +1,7 @@
 from data.cDataClass import Data
 import imaging.util.Image_convert_types
 import res.directory_paths as directory_paths
+from res.constants import elements
 from util.cClass import return_existing
 
 import os
@@ -147,13 +148,26 @@ class XRF(Data):
             feature_tables[file_type] = FT
 
         return feature_tables
+    
+    def get_data_columns(self):
+        if ('feature_table' not in self.__dict__) or (self.feature_table is None):
+            return None
+        columns = self.feature_table.columns
+        
+        
+        # data columns are elements
+        columns_valid = [col for col in columns if
+                         col in list(elements.Abbreviation)]
+    
+        data_columns = np.array(columns_valid)
+        return data_columns
 
     def plt_img_from_feature_table(self):
         plt.figure()
-        if 'graylevel' not in self.current_feature_table.columns:
+        if 'graylevel' not in self.feature_table.columns:
             self.combine_photo_feature_table()
         img_FT = np.array(
-            [np.array(self.current_feature_table.pivot(
+            [np.array(self.feature_table.pivot(
                 columns='y', index='x', values=c))
              for c in ('R', 'G', 'B')],
             dtype=np.uint8).T

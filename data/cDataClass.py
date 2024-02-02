@@ -1,6 +1,5 @@
 """Superclass for cMSI, cXRF, cXRay."""
-from res.constants import (distance_pixels, dict_labels, window_to_type, 
-                           elements, key_hole_pixels, sections_all)
+from res.constants import dict_labels, elements, key_hole_pixels
 
 from util.cClass import Convinience, verbose_function, return_existing
 from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
@@ -8,8 +7,11 @@ from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
 import imaging.util.Image_convert_types as Image_convert_types
 from imaging.util.Image_plotting import plt_cv2_image
 from imaging.util.Image_helpers import exclude_missing_pixels_in_feature_table
-from imaging.util.coordinate_transformations import rescale_values
 
+from data.file_helpers import get_d_folder
+from exporting_mcf.rtms_communicator import Spectra
+
+import pickle
 import glob
 import os
 from collections.abc import Iterable
@@ -117,97 +119,55 @@ def PCA_biplot(score, coeffs, labels=None, var=None, title='', hold=False, add_a
 
 class Data(Convinience):
     """Class to manipulate and analyze MSI or XRF data."""
-
-    def __init__(
-            self,
-            section: tuple[int],
-            window: str,
-            data_type: str | None = None
-    ) -> None:
-        """Initialize."""
-        self.plts = False
-        self.verbose = False
-        self._window = window
-        if data_type is None:
-            # one of xrf, msi, xray
-            data_type = window_to_type(window)
-        self._data_type = data_type
-
-        # tpl(int, int) in cm and 'xxx-yyy'
-        self._section, self._section_str = self.get_section_formatted(section)
-        self.distance_pixels = distance_pixels[self._data_type]
-
-        self.plts = False
-        self.verbose = False
-
-    @verbose_function
-    def replace_attr_names(self):
-        d = {'section': '_section',
-             'window': '_window',
-             'mass_window': '_mass_window',
-             'data_type': '_data_type',
-             'section_str': '_section_str'
-             }
-
-        for old, new in d.items():
-            if hasattr(self, old):
-                self.__setattr__(new, self.__getattribute__(old))
-                self.__delattr__(old)
-
     def load(self, **kwargs) -> None:
         """Actions to performe when object was loaded from disc."""
-        from util.manage_class_imports import load_obj
-
         if __name__ == '__main__':
             raise RuntimeError('Cannot load obj from file where it is defined.')
-
-        self.__dict__ = load_obj(
-            self._section, self._window, self.__class__.__name__
-        ).__dict__
+        
+        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
+        with open(os.path.join(self.path_d_folder, name), 'rb') as f:
+            obj = pickle.load(f)
+        
+        self.__dict__ = obj.__dict__
+        
         self.plts = False
         self.verbose = False
-        self.replace_attr_names()
-        ft_nondata = self.current_feature_table.copy()
-        self.__delattr__('current_feature_table')
+        ft_nondata = self.feature_table.copy()
+        self.__delattr__('feature_table')
         ft_data = self.sget_feature_table(**kwargs)
-        self.current_feature_table = ft_data.join(ft_nondata)
+        self.feature_table = ft_data.join(ft_nondata)
 
     @verbose_function
     def save(self) -> None:
         """Actions to performe before saving to disc."""
-        from util.manage_class_imports import save_obj
         if __name__ == '__main__':
             raise RuntimeError('Cannot save object from the file in which it is defined.')
+        dict_backup = self.__dict__.copy()
         # delete all attributes that are not flagged as relevant
         existent_attributes = list(self.__dict__.keys())
         keep_attributes = set(existent_attributes) & class_to_attributes(self)
-        nondata_columns_to_keep = list(Data_nondata_columns & set(self.current_feature_table.columns))
-        # create temporary storage in case user wants to continue after save
-        verbose = self.verbose
-        plts = self.plts
+        nondata_columns_to_keep = list(Data_nondata_columns & set(self.feature_table.columns))
         for attribute in existent_attributes:
             if attribute not in keep_attributes:
                 self.__delattr__(attribute)
         # drop data columns from current feature table
-        if hasattr(self, 'current_feature_table'):
+        if hasattr(self, 'feature_table'):
             # make sure feature table is sorted
-            self.current_feature_table = self.current_feature_table\
+            self.feature_table = self.feature_table\
                 .sort_values(by=['y', 'x']).reset_index(drop=True)
-            self.current_feature_table = self.current_feature_table.loc[:, nondata_columns_to_keep].copy()
-
-        if verbose:
-            print(f'saving image object with {self.__dict__.keys()}')
-            print('and columns ', self.current_feature_table.columns, ' in feature table')
-        save_obj(obj=self)
-        self.verbose = verbose
-        self.plts = plts
+            self.feature_table = self.feature_table.loc[:, nondata_columns_to_keep].copy()
+        
+        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
+        with open(os.path.join(self.path_d_folder, name), 'wb') as f:
+            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
+        self.__dict__ = dict_backup
 
     def add_graylevel_from_data_frame(self, overwrite=False) -> None:
         """Apply grayscale conversion in feature table."""
         # https://docs.opencv.org/3.4/de/d25/imgproc_color_conversions.html
         if ('L' in self.sget_feature_table().columns) and (not overwrite):
             return
-        self.current_feature_table['L'] = self.sget_feature_table().apply(
+        self.feature_table['L'] = self.sget_feature_table().apply(
             lambda row:
             round(0.299 * row.R + 0.587 * row.G + 0.114 * row.B),
             axis=1
@@ -293,8 +253,17 @@ class Data(Convinience):
         ft = ft.sort_values(by=['y', 'x']).reset_index(drop=True)
         return ft
 
-    @return_existing('current_feature_table')
-    def sget_feature_table(
+    @return_existing('feature_table')
+    def sget_feature_table(self):
+        # enter d-folder, locate spectra file
+        spectra = Spectra(path_d_folder=self.path_d_folder, load=True)
+        assert hasattr(spectra, 'feature_table'), 'properly save spectra object'
+        self.feature_table = spectra.feature_table
+        return self.feature_table
+
+
+    @return_existing('feature_table')
+    def sget_feature_table_old(
             self,
             key: float | str | None = None,
             use_common_mzs: bool = False,
@@ -317,6 +286,7 @@ class Data(Convinience):
             The loaded/created feature table.
 
         """
+        raise NotImplementedError('Depricated, use sget_feature_table')
         if key is None:
             key = self.get_key_for_feature_table()
 
@@ -333,8 +303,8 @@ class Data(Convinience):
             ft = self.get_data_frames_from_txt([key])[key]\
                 .sort_values(by=['y', 'x']).reset_index(drop=True)
 
-        self.current_feature_table = ft
-        return self.current_feature_table
+        self.feature_table = ft
+        return self.feature_table
 
     def combine_photo_feature_table(self):
         '''
@@ -364,16 +334,16 @@ class Data(Convinience):
         pixels_valid = np.array(img_resized)[mask_valid]
 
         if img_resized.mode == 'RGB':
-            self.current_feature_table['R'] = pixels_valid[:, 0]
-            self.current_feature_table['G'] = pixels_valid[:, 1]
-            self.current_feature_table['B'] = pixels_valid[:, 2]
-            self.current_feature_table['RGB'] = list(zip(
-                self.current_feature_table.R,
-                self.current_feature_table.G,
-                self.current_feature_table.B
+            self.feature_table['R'] = pixels_valid[:, 0]
+            self.feature_table['G'] = pixels_valid[:, 1]
+            self.feature_table['B'] = pixels_valid[:, 2]
+            self.feature_table['RGB'] = list(zip(
+                self.feature_table.R,
+                self.feature_table.G,
+                self.feature_table.B
             ))
         elif img_resized.mode == 'L':
-            self.current_feature_table['L'] = pixels_valid[:]
+            self.feature_table['L'] = pixels_valid[:]
         else:
             raise ValueError('image with mode {img_resized.mode} is of \
 invalid format. Image should have 1 or 3 channels.')
@@ -381,82 +351,72 @@ invalid format. Image should have 1 or 3 channels.')
         if self.plts:
             self.plt_photo()
 
-        return self.current_feature_table
+        return self.feature_table
 
-    def pixels_get_photo_ROI_to_ROI(self):
+    def pixels_get_photo_ROI_to_ROI(
+            self, data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh: tuple[int]
+        ):
         """
-        Convert data pixel coordinates to image pixel coordinates.
+        Add x_ROI, y_ROI columns.        
+        """
+        # pixel coords of data, set by get_photo_ROI
+        (xd, yd, wd, hd) = data_ROI_xywh  # data units
+        # corner and dimensions of data ROI in original image
+        (xp, yp, wp, hp) = photo_ROI_xywh  # photo units
+        # region of ROI defined by find_sample_region in pixel coords of
+        # original image
+        (xr, yr, wr, hr) = image_ROI_xywh
+        # transform the pixel coords in the feature table to ROI pixel
+        # coordinates by
+        #   1. get values
+        x_ft = self.get_xy()['x'].to_numpy()
+        y_ft = self.get_xy()['y'].to_numpy()
+        #   2. shift to 0
+        x_ft = x_ft - xd
+        y_ft = y_ft - yd
+        #   3. scale so that coordinates are in terms of photo
+        x_ft = x_ft / wd * wp
+        y_ft = y_ft / hd * hp
+        # --> coordinates in terms of photo_ROI
+        #   4. shift accordingly in detected ROI
+        # first add the corners defined in photo_ROI, then subtract the
+        # offset of the detected ROI
+        # --> pixel coordinetes in photo-units
+        x_ft += xp
+        y_ft += yp
+        # shift relativ to origin of image ROI
+        x_ft -= xr
+        y_ft -= yr
+        # append to feature_table, so now each (x, y) has an according
+        # (x_ROI, y_ROI) corresponding to pixels in the ROI
+        self.feature_table['x_ROI'] = (x_ft + .5).astype(int)
+        self.feature_table['y_ROI'] = (y_ft + .5).astype(int)
 
-        This function is an adaptation of the equivalent CombineData function
+    def add_attribute_from_image(self, image, column_name, median=False):
+        """
+        Add a column to the feature table from an image (ROI of sample)
 
         Parameters
         ----------
-        D_obj : object
-            A data object.
-        I_obj : object
-            The corresponding image object.
-
-        Raises
-        ------
-        ValueError
-            If this function is called on objetcs of different types.
+        image : np.ndarray
+            The image to add to the feature table, must be grayscale and in the 
+            region of interest.
+        column_name : str
+            Name of the new column in the dataframe.
+        median : bool, optional
+            Whether to average out values around measurement points.
+            The default is False.
 
         Returns
         -------
         None.
 
         """
-        from imaging.main.cImage import ImageProbe
-        I_obj = ImageProbe(self._section, self._window)
-        I_obj.load()
-
-        # for xrf ROI is the entire image
-        if self._data_type == 'xrf':
-            x_ft = self.get_xy()['x'].to_numpy()
-            y_ft = self.get_xy()['y'].to_numpy()
-            self.current_feature_table['x_ROI'] = x_ft
-            self.current_feature_table['y_ROI'] = y_ft
-        # for msi ROI is the detected rotated rectangle
-        elif self._data_type == 'msi':
-            self.sget_photo_ROI()
-            # pixel coords of data, set by get_photo_ROI
-            (xd, yd, wd, hd) = self.data_ROI_xywh  # data units
-            # corner and dimensions of data ROI in original image
-            (xp, yp, wp, hp) = self.photo_ROI_xywh  # photo units
-            # region of ROI defined by find_probe region in pixel coords of
-            # original image
-            (xr, yr, wr, hr) = I_obj.sget_probe_area()[1]
-            # transform the pixel coords in the feature table to ROI pixel
-            # coordinates by
-            #   1. get values
-            x_ft = self.get_xy()['x'].to_numpy()
-            y_ft = self.get_xy()['y'].to_numpy()
-            #   2. shift to 0
-            x_ft = x_ft - xd
-            y_ft = y_ft - yd
-            #   3. scale so that coordinates are in terms of photo
-            x_ft = x_ft / wd * wp
-            y_ft = y_ft / hd * hp
-            # --> coordinates in terms of photo_ROI
-            #   4. shift accordingly in detected ROI
-            # first add the corners defined in photo_ROI, then subtract the
-            # offset of the detected ROI
-            # --> pixel coordinetes in photo-units
-            x_ft += xp
-            y_ft += yp
-            # shift relativ to origin of image ROI
-            x_ft -= xr
-            y_ft -= yr
-            # append to feature_table, so now each (x, y) has an according
-            # (x_ROI, y_ROI) corresponding to pixels in the ROI
-            self.current_feature_table['x_ROI'] = (x_ft + .5).astype(int)
-            self.current_feature_table['y_ROI'] = (y_ft + .5).astype(int)
-
-    def add_attribute_from_image(self, image, column_name, median=False):
+        assert len(image.shape) == 2, 'image must be single channel'
         if median:
             # footprint of area to average out for classification
             length_median = int(
-                np.median(np.diff(self.current_feature_table.x_ROI)) / 2)
+                np.median(np.diff(self.feature_table.x_ROI)) / 2)
             if not length_median % 2:
                 length_median += 1
             # for each point in feature table, take the median of an
@@ -465,8 +425,8 @@ invalid format. Image should have 1 or 3 channels.')
 
         # zero pad for pixels outside of image extent
         # number of pixels in the data ROI (in image coordinates)
-        y_ROI_max = self.current_feature_table.y_ROI.max()
-        x_ROI_max = self.current_feature_table.x_ROI.max()
+        y_ROI_max = self.feature_table.y_ROI.max()
+        x_ROI_max = self.feature_table.x_ROI.max()
         image_zeropad = np.zeros(
             (np.max([y_ROI_max, image.shape[0]]) + 1,
              np.max([x_ROI_max, image.shape[1]]) + 1),
@@ -476,12 +436,23 @@ invalid format. Image should have 1 or 3 channels.')
         image_zeropad[:image.shape[0],
                       :image.shape[1]] = image
         # add values for each row according to pixels in image
-        self.current_feature_table[column_name] = \
-            self.current_feature_table.apply(
-                lambda row: image_zeropad[row.y_ROI, row.x_ROI],
+        # 0 + to avoid bug???
+        self.feature_table[column_name] = self.feature_table.apply(
+                lambda row: 0 + image_zeropad[int(row.y_ROI), int(row.x_ROI)],
                 axis='columns'
         )
+            
         if self.plts:
+            idxs = np.c_[self.feature_table.y_ROI, self.feature_table.x_ROI]
+            plt.figure()
+            plt.imshow(image)
+            plt.plot(idxs[:, 1], idxs[:, 0], '-')
+            plt.show()
+            
+            plt_cv2_image(
+                image_zeropad,
+                'zeropaded')
+            
             if median:
                 plt_cv2_image(
                     image,
@@ -491,7 +462,7 @@ invalid format. Image should have 1 or 3 channels.')
 
             plt.figure()
             plt.imshow(
-                self.current_feature_table.pivot(
+                self.feature_table.pivot(
                     index='y_ROI', columns='x_ROI', values=column_name),
                 cmap='rainbow')
             plt.title('classification in feature table')
@@ -500,7 +471,7 @@ invalid format. Image should have 1 or 3 channels.')
     def add_laminae_classification(
             self, image_classification=None, overwrite=False):
         """Add classification column to feature table."""
-        if 'x_ROI' not in self.current_feature_table.columns:
+        if 'x_ROI' not in self.feature_table.columns:
             raise LookupError('ROI coordinates not in feature table. Call pixel_get_photo_ROI_to_ROI.')
 
         # get the classification from the image object
@@ -526,8 +497,8 @@ invalid format. Image should have 1 or 3 channels.')
 
         self.add_attribute_from_image(
             image_simplified_classification, 'classification_s', median=False)
-        mask = self.current_feature_table.classification_s == 0
-        self.current_feature_table.loc[mask, 'classification_s'] = np.nan
+        mask = self.feature_table.classification_s == 0
+        self.feature_table.loc[mask, 'classification_s'] = np.nan
 
     def add_seed_classification(self):
         from cImage import ImageClassified
@@ -539,26 +510,19 @@ invalid format. Image should have 1 or 3 channels.')
         image_seeds = image_obj.image_seeds
 
         self.add_attribute_from_image(image_seeds, 'seed', median=False)
-        mask = self.current_feature_table.seed == 0
-        self.current_feature_table.loc[mask, 'seed'] = np.nan
-
-    def add_depth_column(self):
-        """Map xs to depths."""
-        min_depth = self._section[0]  # --> m
-        max_depth = self._section[1]  # --> m
-        # convert seed pixel coordinate to depth and depth to age
-        x = self.current_feature_table.x_ROI.abs()
-        # seed = 0 corresponds to min_depth
-        # seed.max corresponds to max_depth (roughly)
-        depths = rescale_values(x, new_min=min_depth, new_max=max_depth, old_min=x.min(), old_max=x.max())
-        self.current_feature_table['depth'] = depths
+        mask = self.feature_table.seed == 0
+        self.feature_table.loc[mask, 'seed'] = np.nan
+        
+    def correct_depths_by_angle(self):
+        # TODO: this
+        pass
 
     def split_at_depth(self, depth: float):
         """Split feature table at depth [cm] and return upper and lowersection."""
         self.add_depth_column()
 
-        idxs_u = np.argwhere(self.current_feature_table.depth < depth)[:, 0]
-        idxs_l = np.argwhere(self.current_feature_table.depth >= depth)[:, 0]
+        idxs_u = np.argwhere(self.feature_table.depth < depth)[:, 0]
+        idxs_l = np.argwhere(self.feature_table.depth >= depth)[:, 0]
 
         if self._window == 'xrf':
             from cXRF import XRF
@@ -569,57 +533,38 @@ invalid format. Image should have 1 or 3 channels.')
             Du = MSI((self._section[0], depth), self._window)
             Dl = MSI((depth, self._section[1]), self._window)
 
-        Du.current_feature_table = self.current_feature_table.iloc[idxs_u, :]
-        Dl.current_feature_table = self.current_feature_table.loc[idxs_l, :]
+        Du.feature_table = self.feature_table.iloc[idxs_u, :]
+        Dl.feature_table = self.feature_table.loc[idxs_l, :]
         return Du, Dl
 
-    def get_data_columns(self):
-        if ('current_feature_table' not in self.__dict__) or (self.current_feature_table is None):
-            return None
-        columns = self.current_feature_table.columns
-        columns_valid = []
-        if self._data_type == 'xrf':
-            # data columns are elements
-            columns_valid = [col for col in columns if
-                             col in list(elements.Abbreviation)]
-        elif self._data_type == 'msi':
-            # only return cols with masses
-            columns_valid = [col for col in columns if str(
-                col).replace('.', '', 1).isdigit()]
-        else:
-            raise NotImplementedError(f'get_data_columns not implemented for\
- data of type {self.dat_type}')
-        data_columns = np.array(columns_valid)
-        return data_columns
-
     def get_data(self):
-        return self.current_feature_table.loc[:, self.get_data_columns()]
+        return self.feature_table.loc[:, self.get_data_columns()]
 
     def get_xy(self):
-        return self.current_feature_table.loc[:, ['x', 'y']]
+        return self.feature_table.loc[:, ['x', 'y']]
 
     def get_x(self):
-        return self.current_feature_table.loc[:, ['x']]
+        return self.feature_table.loc[:, ['x']]
 
     def get_y(self):
-        return self.current_feature_table.loc[:, ['y']]
+        return self.feature_table.loc[:, ['y']]
 
     def get_nondata_columns(self):
         # cols to check against
         dcols = set(self.get_data_columns())
         nondata_columns = [
-            col for col in self.current_feature_table.columns
+            col for col in self.feature_table.columns
             if col not in dcols]
         return nondata_columns
 
     def get_nondata(self):
-        nondata = self.current_feature_table.loc[
+        nondata = self.feature_table.loc[
             :, self.get_nondata_columns()]
         return nondata
 
     def get_data_for_columns(self, columns):
         """Return part of the feature table specified by columns."""
-        return self.current_feature_table.loc[:, columns]
+        return self.feature_table.loc[:, columns]
 
     def get_data_mean(self):
         return self.get_data().mean(axis=0)
@@ -641,9 +586,9 @@ invalid format. Image should have 1 or 3 channels.')
         # data columns
         cols = self.get_data_columns()
         # nonzero mask
-        nonzero = self.current_feature_table.loc[:, cols] > 0
+        nonzero = self.feature_table.loc[:, cols] > 0
         # the lowest nonzero value for each pixel
-        mins = (self.current_feature_table[nonzero].loc[:, cols].min(axis=1)).to_numpy()
+        mins = (self.feature_table[nonzero].loc[:, cols].min(axis=1)).to_numpy()
         # add 1/2 of min to each nonzero
 
         def replace_zeros(col):
@@ -651,7 +596,7 @@ invalid format. Image should have 1 or 3 channels.')
             col[col == 0] = mins[col == 0] / 2
             return col
 
-        ft = self.current_feature_table.copy()
+        ft = self.feature_table.copy()
         ft.loc[:, cols] = ft.loc[:, cols].apply(lambda col: replace_zeros(col), axis=0)
         return ft
 
@@ -659,10 +604,10 @@ invalid format. Image should have 1 or 3 channels.')
         # unlink current FT
         self.flow_feature_tables.pop()
         # add unlinked copy
-        self.flow_feature_tables.append(self.current_feature_table.copy())
+        self.flow_feature_tables.append(self.feature_table.copy())
         # add linked copy
-        self.current_feature_table = new_feature_table
-        self.flow_feature_tables.append(self.current_feature_table)
+        self.feature_table = new_feature_table
+        self.flow_feature_tables.append(self.feature_table)
         # reset results of PCA, NMF, kmeans
         self.results_NMF = {}
         self.results_kmeans = {}
@@ -676,7 +621,7 @@ invalid format. Image should have 1 or 3 channels.')
         mask_nonnans = ~np.isnan(data).all(axis=1)
         # exclude holes, mask is True for valid rows
         if exclude_holes:
-            mask_nonholes = (self.current_feature_table.classification != 0)
+            mask_nonholes = (self.feature_table.classification != 0)
         else:
             mask_nonholes = np.ones_like(mask_nonnans, dtype=bool)
         mask_valid_rows = mask_nonnans & mask_nonholes
@@ -699,7 +644,7 @@ invalid format. Image should have 1 or 3 channels.')
         mask_nonnans = ~np.isnan(data).all(axis=1)
         # exclude holes, mask is True for valid rows
         if exclude_holes:
-            mask_nonholes = (self.current_feature_table.classification != 0)
+            mask_nonholes = (self.feature_table.classification != 0)
         else:
             mask_nonholes = np.ones_like(mask_nonnans, dtype=bool)
         mask_valid_rows = mask_nonnans & mask_nonholes
@@ -763,7 +708,7 @@ invalid format. Image should have 1 or 3 channels.')
             columns = self.get_data_columns()
         kmeans = KMeans(n_clusters=n_clusters, **kwargs)\
             .fit(self.get_data_for_columns(columns))
-        self.current_feature_table[f'kmeans{n_clusters}'] = kmeans.labels_
+        self.feature_table[f'kmeans{n_clusters}'] = kmeans.labels_
         self.results_kmeans[n_clusters] = kmeans
         return kmeans
 
@@ -805,8 +750,8 @@ invalid format. Image should have 1 or 3 channels.')
         data['p'] = self.get_xy().apply(lambda row: (row.x, row.y), axis=1)
 
         # convert the data in ft to stacked image
-        x_unique = self.current_feature_table.x.unique()
-        y_unique = self.current_feature_table.y.unique()
+        x_unique = self.feature_table.x.unique()
+        y_unique = self.feature_table.y.unique()
         Nx = len(x_unique)
         Ny = len(y_unique)
         Ndims = len(columns)
@@ -850,8 +795,8 @@ rectangular grid. You may have to use processing_fill_missing')
         columns = list(data.columns)
 
         # convert the data in ft to stacked image
-        x_unique = self.current_feature_table.x.unique()
-        y_unique = self.current_feature_table.y.unique()
+        x_unique = self.feature_table.x.unique()
+        y_unique = self.feature_table.y.unique()
         Nx = len(x_unique)
         Ny = len(y_unique)
         # exclude x and y column
@@ -1035,11 +980,11 @@ rectangular grid. You may have to use processing_fill_missing')
         if zones_key is None:
             zones_key = 'zones_row_wise'
             # set zones as x-val starting with 0
-            self.current_feature_table[zones_key] = \
+            self.feature_table[zones_key] = \
                 self.get_x() - self.get_x().min()
 
         # get zones
-        zones, idx_zones = np.unique(self.current_feature_table[zones_key],
+        zones, idx_zones = np.unique(self.feature_table[zones_key],
                                      return_index=True)
         # remove nan key
         mask_keys = ~np.isnan(zones)
@@ -1053,9 +998,9 @@ rectangular grid. You may have to use processing_fill_missing')
             Ns = np.zeros_like(zones, dtype=object)
         average_x_idx = np.zeros_like(zones, dtype=int)
 
-        data_table = self.current_feature_table.loc[:, columns].copy().astype(astype)
-        zones_column = self.current_feature_table.loc[:, zones_key].copy()
-        x_column = self.current_feature_table.loc[:, 'x'].copy()
+        data_table = self.feature_table.loc[:, columns].copy().astype(astype)
+        zones_column = self.feature_table.loc[:, zones_key].copy()
+        x_column = self.feature_table.loc[:, 'x'].copy()
         if exclude_zeros and correct_zeros:
             raise KeyError('exclude zeros and correct zeros are mutually exclusive.')
         elif exclude_zeros:
@@ -1123,11 +1068,11 @@ rectangular grid. You may have to use processing_fill_missing')
             KL of light pixels, KL of dark pixels.
 
         """
-        I = self.current_feature_table[col].loc[
-            (self.current_feature_table.classification != 0) &
-            (self.current_feature_table[col] >= 0)]
-        I_light = I.loc[self.current_feature_table.classification == 255]
-        I_dark = I.loc[self.current_feature_table.classification == 127]
+        I = self.feature_table[col].loc[
+            (self.feature_table.classification != 0) &
+            (self.feature_table[col] >= 0)]
+        I_light = I.loc[self.feature_table.classification == 255]
+        I_dark = I.loc[self.feature_table.classification == 127]
         # estimate the probability distribution in the entire image
         prob, bin_edges, bin_centers = estimate_probability_distribution(I)
         # estimate the probability distribution in the light/dark pixels of the image
@@ -1253,12 +1198,12 @@ rectangular grid. You may have to use processing_fill_missing')
         self.rankings['score'] = rankings
 
         if calc_corrs:
-            mask_nonholes = self.current_feature_table[classification_column] != 0
+            mask_nonholes = self.feature_table[classification_column] != 0
             self.rankings['corr_L'] = self.get_data().loc[mask_nonholes, :]\
-                .corrwith(self.current_feature_table.L[mask_nonholes])
+                .corrwith(self.feature_table.L[mask_nonholes])
             self.rankings[f'corr_{classification_column}'] = \
                 self.get_data().loc[mask_nonholes, :].corrwith(
-                    self.current_feature_table[classification_column][mask_nonholes]
+                    self.feature_table[classification_column][mask_nonholes]
             )
 
         return self.rankings
@@ -1318,29 +1263,37 @@ rectangular grid. You may have to use processing_fill_missing')
         p = Image_convert_types.convert('PIL', 'cv', p)
         plt_cv2_image(p, 'Original photo of probe')
 
-    def get_comp_as_img(self, comp, exclude_holes=True, classification_column='classification'):
+    def get_comp_as_img(
+            self, comp, exclude_holes=True, 
+            classification_column='classification', flip=False):
         """Return a componenent from the feature table as an image."""
+        if flip:
+            idx_x, idx_y = 'y', 'x'
+        else:
+            idx_x, idx_y = 'x', 'y'
         data_frame = self.sget_feature_table()
         img_mz = data_frame.pivot(
-            index='x', columns='y', values=comp).to_numpy().astype(float)
+            index=idx_x, columns=idx_y, values=comp).to_numpy().astype(float)
         if exclude_holes:
             mask_holes = data_frame.pivot(
-                index='x', columns='y', values=classification_column
+                index=idx_x, columns=idx_y, values=classification_column
             ).to_numpy() == key_hole_pixels
             img_mz[mask_holes] = np.nan
         return img_mz
 
     def plt_comp(
-        self, comp, data_frame=None, title=None, save_png=None,
-        SNR_scale=True, N_labels=5, y_tick_precision=0, exclude_holes=True, hold=False,
-        classification_column='classification', key=key_hole_pixels
+        self, comp, data_frame=None, title=None, save_png=None, flip=False,
+        SNR_scale=True, N_labels=5, y_tick_precision=0, exclude_holes=True, 
+        hold=False, classification_column='valid', key=0
     ):
         if data_frame is None:
-            data_frame = self.current_feature_table
+            data_frame = self.feature_table
 
         comp = self.get_closest_mz(comp, max_deviation=None)
 
-        img_mz = self.get_comp_as_img(comp, exclude_holes=exclude_holes)
+        img_mz = self.get_comp_as_img(
+            comp, exclude_holes, classification_column, flip
+        )
 
         # clip values above vmax
         vmax = data_frame[comp].quantile(.95)
@@ -1351,18 +1304,29 @@ rectangular grid. You may have to use processing_fill_missing')
                         interpolation='none',
                         vmax=vmax)
 
-        title = f'{comp}'
+        if title is None:
+            title = f'{comp}'
 
-        if self.distance_pixels is None:
-            plt.ylabel(r'pixel index y')
-        else:
+        y_tick_positions = np.linspace(
+            start=0, 
+            stop=img_mz.shape[0],
+            num=N_labels,
+            endpoint=True
+        )
+        if 'depth' in self.feature_table.columns:
+            y_tick_labels = np.round(np.linspace(
+                start=self.feature_table.depth.min(), 
+                stop=self.feature_table.depth.max(),
+                num=N_labels, 
+                endpoint=True
+            ), y_tick_precision) 
+        elif hasattr(self, 'distance_pixels') and self.distance_pixels is not None:
+            pixel_to_depth = self.distance_pixels * 1e-4   # cm
             plt.ylabel(r'depth (cm)')
-            pixel_to_depth = self.distance_pixels * 1e2   # cm
-            y_tick_positions = np.arange(
-                0, img_mz.shape[0] * (N_labels + 1) / N_labels,
-                img_mz.shape[0] / N_labels)
             y_tick_labels = np.round(
-                y_tick_positions * pixel_to_depth, y_tick_precision) + self._section[0]
+                y_tick_positions * pixel_to_depth, 
+                y_tick_precision
+            )
             if y_tick_precision <= 0:
                 y_tick_labels = y_tick_labels.astype(int)
             ax.set_yticks(y_tick_positions)
@@ -1374,6 +1338,8 @@ rectangular grid. You may have to use processing_fill_missing')
                 top=False,         # ticks along the top edge are off
                 labelbottom=False
             )
+        else:
+            plt.ylabel(r'pixel index y')
         plt.title(title)
 
         from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -1404,6 +1370,7 @@ rectangular grid. You may have to use processing_fill_missing')
         df = self.processing_zone_wise_average(
             zones_key='seed', columns=[comp], exclude_zeros=True
         ).sort_values(by='x')
+        # TODO: this
         raise NotImplementedError()
 
     def plt_intensity_distributions(
@@ -1414,8 +1381,8 @@ rectangular grid. You may have to use processing_fill_missing')
         plt.figure()
         for col in cols:
             # exclude nans
-            intensities = self.current_feature_table[col].loc[
-                self.current_feature_table[col] >= 0]
+            intensities = self.feature_table[col].loc[
+                self.feature_table[col] >= 0]
             prob, bin_edges = estimate_probability_distribution(
                 intensities, log=bin_log)
             bin_centers = bin_edges[:-1] + np.diff(bin_edges) / 2
@@ -1541,11 +1508,11 @@ rectangular grid. You may have to use processing_fill_missing')
             return fig, axs
 
     def plt_kmeans(self, n_clusters, **kwargs):
-        if f'kmeans{n_clusters}' not in self.current_feature_table.columns:
+        if f'kmeans{n_clusters}' not in self.feature_table.columns:
             self.analyzing_kmeans(n_clusters, **kwargs)
         fig, axs = plt.subplots(nrows=2)
         axs[0].imshow(
-            self.current_feature_table.pivot(
+            self.feature_table.pivot(
                 index='y', columns='x', values=f'kmeans{n_clusters}'),
             interpolation='none',
             cmap='Set1')
@@ -1637,7 +1604,7 @@ rectangular grid. You may have to use processing_fill_missing')
             raise KeyError('light_or_dark must be one of "light", "dark".')
         print(cols_top)
         print(rankings_top)
-        o = plt_comps(self.current_feature_table, cols_top,
+        o = plt_comps(self.feature_table, cols_top,
                       suptitle=f'top {N_top} in {light_or_dark} layers',
                       titles=[f's.: {ranking:.3f}' for ranking in rankings_top],
                       hold=hold,
@@ -1649,7 +1616,7 @@ rectangular grid. You may have to use processing_fill_missing')
 
     def plt_rankingC37_2(self):
         plt_comps(
-            self.current_feature_table,
+            self.feature_table,
             ['553.5328', 'L_Alkenones'],
             titles=[f's.: {self.rankings.loc["553.5328"].score:.3f}',
                     'grayscale'])
@@ -1691,7 +1658,7 @@ rectangular grid. You may have to use processing_fill_missing')
         o = np.argsort(y.to_numpy())[::-1]
         cols = cols[o]
         plt_comps(
-            self.current_feature_table, cols=cols[:10], remove_holes=True,
+            self.feature_table, cols=cols[:10], remove_holes=True,
             suptitle=f'comps with highest {round(q*100)}th quantile seasonality in \
 {self._window} window'
         )
@@ -1710,12 +1677,12 @@ def combine_sections(sections: list, window: str):
         MSI_combined = XRF(combined_section, window)
 
     def shift_depths():
-        M.current_feature_table['x_ROI'] += x_ROI_offset
-        M.current_feature_table['x'] += x_offset
-        M.current_feature_table['y'] -= M.current_feature_table.y.min()
-        M.current_feature_table['seed'] = \
-            (M.current_feature_table.seed.abs() + x_ROI_offset) * \
-            np.sign(M.current_feature_table.seed)
+        M.feature_table['x_ROI'] += x_ROI_offset
+        M.feature_table['x'] += x_offset
+        M.feature_table['y'] -= M.feature_table.y.min()
+        M.feature_table['seed'] = \
+            (M.feature_table.seed.abs() + x_ROI_offset) * \
+            np.sign(M.feature_table.seed)
 
     fts = []
     x_ROI_offset = 0
@@ -1731,8 +1698,8 @@ def combine_sections(sections: list, window: str):
         else:
             M.load(use_common_mzs=True)
         shift_depths()
-        fts.append(M.current_feature_table.copy())
-        x_offset = M.current_feature_table.x.max() + 1
+        fts.append(M.feature_table.copy())
+        x_offset = M.feature_table.x.max() + 1
         M = None
 
         I = ImageProbe(section, window)
@@ -1740,7 +1707,7 @@ def combine_sections(sections: list, window: str):
         x_ROI_offset += I.xywh_ROI[2]
         del I
 
-    MSI_combined.current_feature_table = pd.concat(
+    MSI_combined.feature_table = pd.concat(
         fts, axis=0
     ).reset_index(drop=True)
 
