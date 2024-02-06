@@ -329,6 +329,28 @@ class Spectra:
         self.peak_setting_parameters = kwargs
         self.peak_setting_parameters['prominence'] = prominence
         self.peak_setting_parameters['width'] = width
+        
+    def gaussian_from_peak(self, peak_idx):
+        """Find kernel parameters for a peak with the shape of a bigaussian."""
+        assert hasattr(self, 'peaks'), 'call set_peaks first' 
+        mz_idx = self.peaks[peak_idx]  # mz index of of center 
+        
+        # height at center of peak - prominence
+        I0 = self.intensities[mz_idx] - self.peak_properties['prominences'][peak_idx]
+        H = self.intensities[mz_idx] - I0 # corresponding height
+        # width of peak at half maximum
+        FWHM_l = self.mzs[
+            (self.peak_properties["left_ips"][peak_idx] + .5).astype(int)
+        ]
+        FWHM_r = self.mzs[
+            (self.peak_properties["right_ips"][peak_idx] + .5).astype(int)
+        ]
+        mz_c = (FWHM_l + FWHM_r) / 2
+        # convert FWHM to standard deviation
+        sigma_l = -(FWHM_l - mz_c) / (2 * np.log(2))
+        sigma_r = (FWHM_r - mz_c) / (2 * np.log(2))        
+        sigma = (sigma_l + sigma_r) / 2
+        return mz_c, I0, H, sigma_l, sigma_r
     
     def bigaussian_from_peak(self, peak_idx: int):
         """Find kernel parameters for a peak with the shape of a bigaussian."""
@@ -349,6 +371,10 @@ class Spectra:
         sigma_l = -(FWHM_l - mz_c) / (2 * np.log(2))
         sigma_r = (FWHM_r - mz_c) / (2 * np.log(2))        
         return mz_c, I0, H, sigma_l, sigma_r
+    
+    @staticmethod
+    def gaussian(x: np.ndarray, x_c, y0, H, sigma):
+        return y0 + H * np.exp(-1/2 * ((x - x_c) / sigma) ** 2)
     
     @staticmethod
     def bigaussian(x: np.ndarray, x_c, y0, H, sigma_l, sigma_r):
@@ -382,7 +408,21 @@ class Spectra:
         y_r =  y0 + H * np.exp(-1/2 * ((x_r - x_c) / sigma_r) ** 2)
         return np.hstack([y_l, y_r])
     
-    def set_kernels(self):
+    @property
+    def kernel_func(self):
+        if self.kernel_shape == 'bigaussian':
+            return self.bigaussian
+        elif self.kernel_shape == 'gaussian':
+            return self.gaussian
+        
+    @property
+    def kernel_func_from_peak(self):
+        if self.kernel_shape == 'bigaussian_from_peak':
+            return self.bigaussian
+        elif self.kernel_shape == 'gaussian_from_peak':
+            return self.gaussian
+    
+    def set_kernels(self, use_bigaussian=False):
         """
         Based on the peak properties, find bigaussian parameters to 
         approximate spectrum. Creates kernel_params where cols correspond to 
@@ -390,9 +430,16 @@ class Spectra:
         shift, intensity at max, sigma left, sigma right
         """
         assert hasattr(self, 'peaks'), 'call set peaks first'
-        self.kernel_params = np.zeros((len(self.peaks), 5))
+        if use_bigaussian: 
+            self.kernel_shape = 'bigaussian'
+            self.kernel_params = np.zeros((len(self.peaks), 5))
+        else:
+            self.kernel_shape = 'gaussian'
+            self.kernel_params = np.zeros((len(self.peaks), 4))
+        kernel_func_from_peak = self.kernel_func_from_peak
+        
         for idx in range(len(self.peaks)):
-            self.kernel_params[idx, :] = self.bigaussian_from_peak(idx)
+            self.kernel_params[idx, :] = kernel_func_from_peak(idx)
         # vertical shifts get taken care of by taking sum
         self.kernel_params[:, 1] = 0
         
@@ -401,6 +448,7 @@ class Spectra:
         # calculate approximated signal by summing up kernels
         intensities_approx = np.zeros_like(self.intensities)
         plt.figure()
+        
         for i in range(len(self.peaks)):
             y = self.bigaussian(self.mzs, *self.kernel_params[i, :])
             intensities_approx += y
@@ -433,7 +481,7 @@ class Spectra:
             # for idx_peak in range(N_peaks):
             #     weighted_signal = spectrum.intensities * bigaussians[idx_peak, :]
             #     line_spectrum[idx_peak] = np.sum(weighted_signal) * dmz
-            line_spectrum = (spectrum.intensities @ bigaussians) * dmz
+            line_spectrum = (spectrum.intensities @ kernels) * dmz
             self.line_spectra[idx, :] = line_spectrum
         
         assert hasattr(self, 'kernel_params'), 'calculate kernels with set_kernels'
@@ -447,21 +495,35 @@ class Spectra:
         
         # precompute bigaussians
         dmz = self.mzs[1] - self.mzs[0]
-        bigaussians = np.zeros((N_peaks, len(self.mzs)))
-        for idx_peak in range(N_peaks):
-            # x_c, y0, H, sigma_l, sigma_r
-            sigma_l = self.kernel_params[idx_peak, 3]
-            sigma_r = self.kernel_params[idx_peak, 4]
-            H = np.sqrt(2 / np.pi) / (sigma_l + sigma_r)  # normalization constant
-            bigaussians[idx_peak] = self.bigaussian(
-                self.mzs, 
-                x_c=self.kernel_params[idx_peak, 0], 
-                y0=0,  # assert spectra have baseline subtracted
-                H=H,  # normalized kernels
-                sigma_l=sigma_l, 
-                sigma_r=sigma_r
-            )
-        bigaussians = bigaussians.T
+        kernels = np.zeros((N_peaks, len(self.mzs)))
+        if self.kernel_shape == 'bigaussian':
+            for idx_peak in range(N_peaks):
+                # x_c, y0, H, sigma_l, sigma_r
+                sigma_l = self.kernel_params[idx_peak, 3]
+                sigma_r = self.kernel_params[idx_peak, 4]
+                H = np.sqrt(2 / np.pi) / (sigma_l + sigma_r)  # normalization constant
+                kernels[idx_peak] = self.bigaussian(
+                    self.mzs, 
+                    x_c=self.kernel_params[idx_peak, 0], 
+                    y0=0,  # assert spectra have baseline subtracted
+                    H=H,  # normalized kernels
+                    sigma_l=sigma_l, 
+                    sigma_r=sigma_r
+                )
+            kernels = kernels.T
+        elif self.kernel_shape == 'gaussian':
+            for idx_peak in range(N_peaks):
+                # x_c, y0, H, sigma_l, sigma_r
+                sigma = self.kernel_params[idx_peak, 3]
+                H = 1 / (np.sqrt(2 * np.pi) * sigma)  # normalization constant
+                kernels[idx_peak] = self.gaussian(
+                    self.mzs, 
+                    x_c=self.kernel_params[idx_peak, 0], 
+                    y0=0,  # assert spectra have baseline subtracted
+                    H=H,  # normalized kernels
+                    sigma=sigma
+                )
+            kernels = kernels.T
         
         # iterate over spectra and bin according to kernels
         print(f'binning {N_spectra} spectra into {N_peaks} bins ...')
@@ -505,6 +567,15 @@ class Spectra:
         df['y'] = RXYs[:, 2]
         self.feature_table = df
         return self.feature_table
+    
+    def get_kernel_params_df(self):
+        assert hasattr(self, 'kernel_params'), 'call set_kernels'
+        if self.kernel_shape == 'bigaussian':
+            columns = ['mz', 'I0', 'H', 'sigma_l', 'sigma_r']
+        elif self.kernel_shape == 'gaussian':
+            columns = ['mz', 'I0', 'H', 'sigma']
+        df = pd.DataFrame(data=self.kernel_params, columns=columns)
+        return df
         
     def save(self):
         """Save object to d-folder."""
@@ -526,8 +597,7 @@ class Spectra:
         with open(file, 'rb') as inp:
             self.__dict__ = pickle.load(inp).__dict__
         
-            
-    
+
 if __name__ == '__main__':
     pass
     
