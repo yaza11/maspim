@@ -31,8 +31,7 @@ from imaging.util.Image_helpers import (ensure_odd,
 
 from imaging.util.Image_boxes import get_mean_intensity_box, region_in_box, get_ROI_in_image
 
-from data.cProject import get_image_file
-from data.file_helpers import get_d_folder
+from data.file_helpers import get_d_folder, get_image_file
 
 import pickle
 import pandas as pd
@@ -44,6 +43,7 @@ import skimage
 import functools
 import numpy as np
 import matplotlib.pyplot as plt
+from skimage.segmentation import expand_labels
 
 from scipy.optimize import minimize
 from typing import Iterable
@@ -1584,6 +1584,13 @@ simplify_laminae before calling create_simplified_laminae_classification.'
             plt.imshow(conflicts, interpolation='none')
             plt.title('conflicts')
             plt.show()
+            
+    def get_image_expanded_laminae(self):
+        assert hasattr(self ,'image_seeds'), 'call set_laminae_images_from_params'
+        img = self.image_seeds
+        img_e = expand_labels(img, distance=np.min(img.shape))
+        img_e *= self.sget_mask_foreground()
+        return img_e
 
     def get_image_simplified_classification(self):
         assert self.check_attribute_exists('image_seeds')
