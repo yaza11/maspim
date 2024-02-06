@@ -1,5 +1,5 @@
 """Superclass for cMSI, cXRF, cXRay."""
-from res.constants import dict_labels, elements, key_hole_pixels
+from res.constants import dict_labels, key_hole_pixels
 
 from util.cClass import Convinience, verbose_function, return_existing
 from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
@@ -8,8 +8,7 @@ import imaging.util.Image_convert_types as Image_convert_types
 from imaging.util.Image_plotting import plt_cv2_image
 from imaging.util.Image_helpers import exclude_missing_pixels_in_feature_table
 
-from data.file_helpers import get_d_folder
-from exporting_mcf.rtms_communicator import Spectra
+from exporting.from_mcf.rtms_communicator import Spectra
 
 import pickle
 import glob
@@ -21,8 +20,6 @@ import scipy
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
-from PIL import Image, ImageDraw
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA, NMF

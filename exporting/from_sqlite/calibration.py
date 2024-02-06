@@ -5,7 +5,7 @@ a fit transformer function for mass calibration
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
-from exporting.func import _find_closest_peak, _mz_to_f
+from exporting.from_sqlite.func import _find_closest_peak, _mz_to_f
 
 
 class Calibration(BaseEstimator, TransformerMixin):

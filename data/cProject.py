@@ -1,13 +1,13 @@
 from util.manage_obj_saves import class_to_attributes
 from imaging.util.coordinate_transformations import rescale_values
 
-from exporting_mcf.rtms_communicator import ReadBrukerMCF, Spectra
+from exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectra
 from data.cMSI import MSI
 from data.file_helpers import (get_folder_structure, find_files, get_mis_file, 
                                get_d_folder, search_keys_in_xml, get_image_file)
 from data.cAgeModel import AgeModel
 from imaging.main.cImage import ImageSample, ImageROI, ImageClassified
-from imaging.util.Image_convert_types import convert, ensure_image_is_gray
+from imaging.util.Image_convert_types import ensure_image_is_gray
 
 from timeSeries.cTimeSeries import TimeSeries
 from timeSeries.cProxy import RatioProxy, UK37

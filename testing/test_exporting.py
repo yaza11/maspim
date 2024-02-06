@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 
-from exporting_mcf.rtms_communicator import ReadBrukerMCF, Spectra
+from exporting.from_mcf.rtms_communicator import Spectra
 
 time0 = time.time()
 

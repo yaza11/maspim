@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import numpy as np
 import matplotlib.pyplot as plt
 
-from exporting_mcf.rtms_communicator import ReadBrukerMCF
+from exporting.from_mcf.rtms_communicator import ReadBrukerMCF
 
 # d_folder = "D:/Cariaco Data for Weimin/490-495cm/2018_08_27 Cariaco 490-495 FA.i/2018_08_27 Cariaco 490-495 FA.d"
 # d_folder = "D:/Cariaco Data for Weimin/490-495cm/2018_08_27 Cariaco 490-495 GDGT.i/2018_08_27 Cariaco 490-495 GDGT.d"
