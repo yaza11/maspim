@@ -32,6 +32,7 @@ Data_nondata_columns = {
     'valid',
     'classification',
     'classification_s',
+    'classification_se',
     'seed',
     'depth',
     'age'
@@ -41,13 +42,11 @@ MSI_disc_attributes = Data_disc_attributes
 XRF_disc_attributes = Data_disc_attributes | {'default_file_type'}
 
 TimeSeries_disc_attributes = {
-    '_section',
-    '_window',
-    '_data_type',
-    'distance_pixels',
-    'feature_table_zone_averages',
-    'feature_table_zone_standard_deviations',
-    'feature_table_zone_successes'}
+    'path_folder',
+    'feature_table',
+    'feature_table_standard_deviations',
+    'feature_table_successes'
+}
 
 MetaFeatures_disc_attributes = {
     '_section',
@@ -70,6 +69,7 @@ Spectra_attributes = {
     'peaks',
     'peak_properties',
     'peak_setting_parameters',
+    'kernel_shape',
     'kernel_params',
     'line_spectra'
 }
