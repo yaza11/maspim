@@ -1,9 +1,10 @@
+
 ## Usage example
 parse peaks from sqlite database
 ```python
 from exporting.parser import parse_sqlite
 
-xy, mzs, intensities,snrs = parse_sqlite(r'path/to/sqlite')
+xy, mzs, intensities,snrs, fwhms = parse_sqlite(r'path/to/sqlite')
 ```
 get the calibration constants
 ```python
@@ -50,3 +51,7 @@ spectra.bin_spectra(con)
 spectra.binned_spectra_to_df(con)
 spectra.save()  # save can be used at any step, to load call "spectra = Spectra(reader=con, load=True)" instead
 ```
+=======
+## Notes
+
+- Somehow SNR values in peaks.sqlite is much lower than those exported from DataAnalysis, not sure why, but not using it for now.
