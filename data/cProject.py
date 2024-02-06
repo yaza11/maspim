@@ -9,6 +9,9 @@ from data.cAgeModel import AgeModel
 from imaging.main.cImage import ImageSample, ImageROI, ImageClassified
 from imaging.util.Image_convert_types import convert, ensure_image_is_gray
 
+from timeSeries.cTimeSeries import TimeSeries
+from timeSeries.cProxy import RatioProxy, UK37
+
 import os
 import re
 import numpy as np
@@ -173,7 +176,7 @@ class SampleImageHandler:
 
 
 class Project:
-    def __init__(self, path_folder, depth_section: tuple[int] = None):
+    def __init__(self, path_folder, depth_span: tuple[int] = None):
         """
         Initialization with folder.
 
@@ -181,7 +184,7 @@ class Project:
         ----------
         path_folder : str
             path to folder with d-folder, mis file etc.
-        depth_section : tuple[int], optional
+        depth_span : tuple[int], optional
             For core data, the depth section of the slice in cm. 
             The default is None. Certain features will not be available without 
             the depth section.
@@ -192,8 +195,8 @@ class Project:
 
         """
         self.path_folder = path_folder
-        if depth_section is not None:
-            self.depth_section = depth_section
+        if depth_span is not None:
+            self.depth_span = depth_span
         
         self._set_files()
 
@@ -202,6 +205,11 @@ class Project:
         dict_files = {}
         dict_files['d_folder'] = get_d_folder(self.path_folder)
         dict_files['mis_file'] = get_mis_file(self.path_folder)
+        
+        for name in dict_files:
+            self.__setattr__(
+                'path_' + name, os.path.join(self.path_folder, dict_files[name])
+            )
         
         # try finding savefiles inside d-folder
         targets_d_folder = [
@@ -230,10 +238,7 @@ class Project:
             dict_files[k_new] = v
         
         self.__dict__ |= dict_files
-        for name in dict_files:
-            self.__setattr__(
-                'path_' + name, os.path.join(self.path_folder, dict_files[name])
-            )
+        
             
     def set_image_handler(self):
         self.image_handler = SampleImageHandler(self.path_folder)
@@ -272,11 +277,14 @@ class Project:
             self.image_sample.sget_sample_area(**kwargs_area)
             self.image_sample.save()
             
-    def set_age_span(self, depth_section: tuple =  None):
-        assert hasattr(self, 'depth_section'), 'specify the depth in cm'
+    def set_depth_span(self, depth_span: tuple[float]):
+        self.depth_span = depth_span
+            
+    def set_age_span(self, depth_span: tuple =  None):
+        assert hasattr(self, 'depth_span'), 'specify the depth in cm'
         assert hasattr(self, 'age_model')
         
-        self.age_span = tuple(self.age_model.depth_to_age(self.depth_section))
+        self.age_span = tuple(self.age_model.depth_to_age(self.depth_span))
         
         
     def set_image_roi(self, obj_color=None):
@@ -310,18 +318,23 @@ class Project:
         self.image_classified = ImageClassified(
             self.path_folder, obj_color=obj_color
         )
-        self.image_classified.verbose=True
-        self.image_classified.plts=True
+        if hasattr(self, 'ImageClassified_file'):
+            self.image_classified.load()
         self.image_classified.age_span = self.age_span
-        self.image_classified.set_laminae_params_table(
-            peak_prominence=peak_prominence,
-            max_slope=max_slope,
-            downscale_factor=downscale_factor
-        )
-        # TODO: check image_classified behaves corretly with age_sapn etc
-        self.image_classified.save()
-        
-    
+        if not hasattr(self.image_classified, 'params_laminae_simplified'):
+            self.image_classified.set_laminae_params_table(
+                peak_prominence=peak_prominence,
+                max_slope=max_slope,
+                downscale_factor=downscale_factor
+            )
+            self.image_classified.save()
+            
+    def get_mcf_reader(self) -> ReadBrukerMCF:
+        reader = ReadBrukerMCF(self.path_d_folder)
+        reader.create_reader()
+        reader.create_indices()
+        return reader
+
     def set_spectra(self, reader: ReadBrukerMCF = None, plts=False):
         if hasattr(self, 'spectra_object_file'):
             self.spectra = Spectra(load=True, path_d_folder=self.path_d_folder)
@@ -330,7 +343,7 @@ class Project:
         
         # create reader object
         if reader is None:
-            reader = ReadBrukerMCF(self.path_d_folder)
+            reader = self.get_mcf_reader
         if not hasattr(reader, 'reader'):
             reader.create_reader()
         if not hasattr(reader, 'indices'):
@@ -365,12 +378,14 @@ class Project:
         self.spectra.save()
     
     def set_msi_object(self):
-        assert hasattr(self, 'image_sample'), 'call set_image_object first'
-        assert hasattr(self, 'image_handler'), 'call set_image_handler'
+        if hasattr(self, 'MSI_file'):
+            self.msi = MSI(self.path_d_folder)
+            self.msi.load()
+            return
+        
         assert hasattr(self, 'spectra') and hasattr(self.spectra, 'feature_table'), \
             'set spectra object first'
-        if not hasattr(self.image_handler, 'photo_ROI_sample'):
-            self.image_handler.get_photo_ROI()
+        
         # should be x,x (distance in x, y in um)
         distance_t: tuple[str] = search_keys_in_xml(
             self.path_mis_file, ['Raster']
@@ -380,27 +395,34 @@ class Project:
         distance_pixels = float(d)
         self.msi = MSI(self.path_d_folder, distance_pixels=distance_pixels)
         self.msi.feature_table = self.spectra.feature_table
+        
+    def add_msi_pixels_ROI(self):
+        assert hasattr(self, 'image_sample'), 'call set_image_sample first'
+        assert hasattr(self, 'image_handler'), 'call set_image_handler'
+        
+        if not hasattr(self.image_handler, 'photo_ROI_sample'):
+            self.image_handler.get_photo_ROI()
+            
         image_ROI_xywh = self.image_sample.sget_sample_area()[1]
         data_ROI_xywh = self.image_handler.data_ROI_xywh
         photo_ROI_xywh = self.image_handler.photo_ROI_xywh
         self.msi.pixels_get_photo_ROI_to_ROI(
             data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh
         )
-        self.msi.save()
         
     def add_photo_to_msi(self):
         assert hasattr(self, 'msi'), 'set msi object first'
-        
+        assert 'x_ROI' in self.msi.feature_table.columns, \
+            'add x_ROI, y_ROI coords with add_msi_pixels_ROI'
         image = ensure_image_is_gray(
             self.image_sample.sget_sample_area()[0]
         )
-        
         self.msi.add_attribute_from_image(image, 'L', median=False)
         
     def add_depth_column(self):
         """Map xs to depths."""
-        assert hasattr(self, 'depth_section'), 'set the depth_section first'
-        min_depth, max_depth = self.depth_section
+        assert hasattr(self, 'depth_span'), 'set the depth_span first'
+        min_depth, max_depth = self.depth_span
         # convert seed pixel coordinate to depth and depth to age
         x = self.msi.feature_table.x.abs()
         # seed = 0 corresponds to min_depth
@@ -422,8 +444,143 @@ class Project:
         image = self.image_roi.get_foreground_thr_and_pixels(self.image_roi.sget_image_grayscale())[1]
         self.msi.add_attribute_from_image(image, 'valid', median=False)
         
-    def add_classification_to_msi(self):
-        pass
+    def add_light_dark_classification_to_msi(self):
+        assert hasattr(self, 'image_roi'), 'call set_image_roi'
+        image = self.image_roi.image_classification
+        self.msi.add_attribute_from_image(image, 'classification')
+        
+    def add_laminae_classification_to_msi(self):
+        assert hasattr(self, 'image_classified'), 'call set_image_classified'
+        image = self.image_classified.image_seeds
+        image_e = self.image_classified.get_image_expanded_laminae()
+        self.msi.add_attribute_from_image(image, 'classification_s')
+        self.msi.add_attribute_from_image(image_e, 'classification_se')
+        
+        self.msi.save()
+        
+    def set_msi_time_series(
+            self, 
+            plts=False, 
+            average_by_col='classification_s', 
+            **kwargs
+    ) -> None:
+        # TODO: !!!
+        self.time_series = TimeSeries(self.path_folder)
+        if hasattr(self, 'TimeSeries_file'):
+            self.time_series.load()
+            if hasattr(self.TS, 'feature_table'):
+                return self.TS
+        
+        assert hasattr(self, 'msi'), 'call set_msi_object'
+        assert 'L' in self.msi.feature_table.columns, \
+            'call add_photo_to_msi'
+        assert 'x_ROI' in self.msi.feature_table.columns, \
+            'call add_msi_pixels_ROI'
+        assert 'classification_s' in self.msi.feature_table.columns, \
+            'call add_laminae_classification_to_msi'
+        assert 'depth' in self.msi.feature_table.columns, \
+            'add the depths to msi data with add_depth_column first'
+        assert 'age' in self.msi.feature_table.columns, \
+            'add the ages to msi data with add_age_column first'
+            
+        assert hasattr(self, 'image_classified'), 'call set_image_classified'
+        assert hasattr(self.image_classified, 'params_laminae_simplified'), \
+            'could not find params table in classified image object, call set_image_classified'
+        
+        columns_feature_table = np.append(
+            self.msi.get_data_columns(), 
+            ['x_ROI', 'y_ROI', 'L', 'depth', 'age']
+        )
+        ft_seeds_avg, ft_seeds_std, ft_seeds_success = self.msi.processing_zone_wise_average(
+            zones_key=average_by_col,
+            columns=columns_feature_table,
+            correct_zeros=False,
+            calc_std=True,
+            **kwargs
+        )
+        ft_seeds_avg = ft_seeds_avg.fillna(0)
+        
+        # add quality criteria
+        cols_quals = ['homogeneity', 'continuity', 'contrast', 'quality']
+        quals = self.image_classified.params_laminae_simplified.loc[
+            :, ['seed', 'color'] + cols_quals
+        ].copy()
+        
+        # sign the seeds in the quality dataframe
+        mask_c = quals['color'] == 'light'
+        quals.loc[mask_c, 'color'] = 1
+        quals.loc[~mask_c, 'color'] = -1
+        quals['seed'] *= quals['color']
+        quals = quals.drop(columns='color')
+        quals['seed'] = quals.seed.astype(int)
+        quals = quals.set_index('seed')
+        # join the qualities to the averages table
+        ft_seeds_avg = ft_seeds_avg.join(quals, how='left')
+        # insert infty for every column in success table that is not there yet
+        missing_cols = set(ft_seeds_avg.columns).difference(
+            set(ft_seeds_success.columns)
+        )
+        for col in missing_cols:
+            ft_seeds_success[col] = np.infty
+            
+        # plot the qualities
+        if plts:
+            plt.figure()
+            plt.plot(quals.index, quals.quality, '+', label='qual')
+            plt.plot(ft_seeds_avg.index, ft_seeds_avg.quality, 'x', label='ft')
+            plt.legend()
+            plt.xlabel('seed')
+            plt.ylabel('quality')
+            plt.title('every x should have a +')
+            plt.show()
+
+        # need to insert the x_ROI from avg
+        ft_seeds_std['spread_x_ROI'] = ft_seeds_std.x_ROI.copy()
+        ft_seeds_success['N_total'] = ft_seeds_success.x_ROI.copy()
+        ft_seeds_std['x_ROI'] = ft_seeds_avg.x_ROI.copy()
+        ft_seeds_success['x_ROI'] = ft_seeds_avg.x_ROI.copy()
+        # sort by depth
+        ft_seeds_avg = ft_seeds_avg.sort_values(by='x_ROI')
+        ft_seeds_std = ft_seeds_std.sort_values(by='x_ROI')
+        ft_seeds_success = ft_seeds_success.sort_values(by='x_ROI')
+        # drop index (=seed) into dataframe
+        ft_seeds_avg.index.names = ['seed']
+        ft_seeds_std.index.names = ['seed']
+        ft_seeds_success.index.names = ['seed']
+        # reset index
+        ft_seeds_avg.reset_index(inplace=True)
+        ft_seeds_avg['seed'] = ft_seeds_avg.seed.astype(int)
+        ft_seeds_std.reset_index(inplace=True)
+        ft_seeds_std['seed'] = ft_seeds_std.seed.astype(int)
+        ft_seeds_success.reset_index(inplace=True)
+        ft_seeds_success['seed'] = ft_seeds_success.seed.astype(int)
+
+        self.time_series.feature_table = ft_seeds_avg
+        self.time_series.feature_table_standard_deviations = ft_seeds_std
+        self.time_series.feature_table_successes = ft_seeds_success
+        
+        if hasattr(self, 'age_span'):
+            self.time_series.set_age_scale(self.time_series.feature_table.age.to_numpy())
+        
+        self.time_series.save()
+    
+    def get_proxy(self, mz_a: float | str, mz_b: float | str, **kwargs):
+        assert hasattr(self, 'time_series'), 'set the time series object first'
+        
+        proxy = RatioProxy(self.time_series, mz_a, mz_b, **kwargs)
+        
+        return proxy
+    
+    def set_UK37(
+            self, correct_UK_vals=False, 
+            method_SST='BAYSPLINE', prior_std_bayspline=10, **kwargs
+    ):
+        assert hasattr(self, 'time_series')
+        
+        self.UK37_proxy = UK37(self.time_series, **kwargs)
+        self.UK37_proxy.add_UK_proxy(corrected=correct_UK_vals)
+        self.UK37_proxy.add_SST(method=method_SST, prior_std=prior_std_bayspline)
+            
     
 
         

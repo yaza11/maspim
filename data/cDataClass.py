@@ -1313,33 +1313,42 @@ rectangular grid. You may have to use processing_fill_missing')
             num=N_labels,
             endpoint=True
         )
+        plt.ylabel(r'depth (cm)')
         if 'depth' in self.feature_table.columns:
-            y_tick_labels = np.round(np.linspace(
+            y_tick_labels = np.linspace(
                 start=self.feature_table.depth.min(), 
                 stop=self.feature_table.depth.max(),
                 num=N_labels, 
                 endpoint=True
-            ), y_tick_precision) 
+            )
         elif hasattr(self, 'distance_pixels') and self.distance_pixels is not None:
             pixel_to_depth = self.distance_pixels * 1e-4   # cm
-            plt.ylabel(r'depth (cm)')
-            y_tick_labels = np.round(
-                y_tick_positions * pixel_to_depth, 
-                y_tick_precision
-            )
-            if y_tick_precision <= 0:
-                y_tick_labels = y_tick_labels.astype(int)
-            ax.set_yticks(y_tick_positions)
-            ax.set_yticklabels(y_tick_labels)
-            ax.tick_params(
-                axis='x',          # changes apply to the x-axis
-                which='both',      # both major and minor ticks are affected
-                bottom=False,      # ticks along the bottom edge are off
-                top=False,         # ticks along the top edge are off
-                labelbottom=False
-            )
+            y_tick_labels = y_tick_positions * pixel_to_depth
         else:
+            if flip:
+                col_d = 'x'
+            else:
+                col_d = 'y'
+            y_tick_labels = np.linspace(
+                self.feature_table[col_d].min(), 
+                self.feature_table[col_d].max(), 
+                N_labels, 
+                endpoint=True
+            )
             plt.ylabel(r'pixel index y')
+        y_tick_labels = np.round(y_tick_labels, y_tick_precision)
+        if y_tick_precision <= 0:
+            y_tick_labels = y_tick_labels.astype(int)
+        ax.set_yticks(y_tick_positions)
+        ax.set_yticklabels(y_tick_labels)
+        ax.tick_params(
+            axis='x',          # changes apply to the x-axis
+            which='both',      # both major and minor ticks are affected
+            bottom=False,      # ticks along the bottom edge are off
+            top=False,         # ticks along the top edge are off
+            labelbottom=False
+        )
+        
         plt.title(title)
 
         from mpl_toolkits.axes_grid1 import make_axes_locatable
