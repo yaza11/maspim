@@ -4,12 +4,17 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from typing import Iterable
 
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 
 from exporting_mcf.rtms_communicator import ReadBrukerMCF, Spectra
 
+time0 = time.time()
+
+dtime = time.time() - time0
+print()
 # d_folder = "D:/Cariaco Data for Weimin/490-495cm/2018_08_27 Cariaco 490-495 FA.i/2018_08_27 Cariaco 490-495 FA.d"
 # d_folder = "D:/Cariaco Data for Weimin/490-495cm/2018_08_27 Cariaco 490-495 GDGT.i/2018_08_27 Cariaco 490-495 GDGT.d"
 # d_folder = "//10.111.38.201/scratch/Jannis/FTdata/oldlaser/13012023_SBB_TGA3_5-10_Test2_5/SBB_TGA3_5-10_Test2_5.d"  # geht nicht
@@ -18,34 +23,35 @@ from exporting_mcf.rtms_communicator import ReadBrukerMCF, Spectra
 # d_folder ="//10.111.38.201/scratch/Jannis/FTdata/oldlaser/13012023_SBB_TG3A_05-10_Test2_2/13012023_SBB_TG3A_05-10_Test2_2.d"  # geht
 # d_folder = '//10.111.38.201/scratch/Jannis/FTdata/oldlaser/13012023_SBB_TG3A_05-10_Test2_1/13012023_SBB_TG3A_05-10_Test2.d'  # geht
 # d_folder = "//10.111.38.201/scratch/Jannis/FTdata/oldlaser/13012023_SBB_TG3A_05-10_Test2/13012023_SBB_TG3A_05-10_Test2.d"  # geht
-# d_folder = "D:/Promotion/Test data/13012023_SBB_TG3A_05-10_Test2.d"
+d_folder = "D:/Promotion/Test data/13012023_SBB_TG3A_05-10_Test2.d"
 # d_folder = 'D:/Cariaco Data for Weimin/490-495cm/2018_08_27 Cariaco 490-495 alkenones.i/2018_08_27 Cariaco 490-495 alkenones.d'
-# con = ReadBrukerMCF(d_folder)
-# con.create_reader()
-# con.create_indices()
+con = ReadBrukerMCF(d_folder)
+con.create_reader()
+con.create_indices()
 
-# spectra = Spectra(reader=con)
-spectra = Spectra(load=True, path_d_folder=d_folder)
-# spectra.add_all_spectra(con)
-
-# spectra.set_peaks()
-
-# spectra.set_kernels()
+spectra = Spectra(reader=con)
+# spectra = Spectra(load=True, path_d_folder=d_folder)
+spectra.add_all_spectra(con)
+spectra.set_peaks()
+spectra.set_kernels(use_bigaussian=True)
 
 # spectra.plt_kernels()
 
-# spectra.bin_spectra(con)
+spectra.bin_spectra(con)
+spectra.binned_spectra_to_df(con)
 
-# spectra.binned_spectra_to_df(con)
+# img = spectra.feature_table.pivot(
+#     index='y', 
+#     columns='x', 
+#     values = spectra.feature_table.columns[0]
+# )
+# plt.imshow(img)
 
-img = spectra.feature_table.pivot(
-    index='x', 
-    columns='y', 
-    values = spectra.feature_table.columns[0]
-)
-plt.imshow(img)
+con.get_spectrum(1).plot()
 
 # spectra.save()
+
+
 
 # %% sqlite parser
 # from exporting.parser import parse_sqlite

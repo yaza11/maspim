@@ -6,13 +6,16 @@ import cv2
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from data.cProject import Project, SampleImageHandler
-from imaging.main.cImage import ImageSample, ImageROI
+from data.cProject import Project, SampleImageHandler, get_d_folder
+from imaging.main.cImage import ImageSample, ImageROI, ImageClassified
+from exporting_mcf.rtms_communicator import Spectra, ReadBrukerMCF
 
 path_folder = r'D:/Cariaco Data for Weimin/490-495cm/2018_08_27 Cariaco 490-495 alkenones.i'
 # path_folder = "D:/Promotion/Test data"
 
-P = Project(path_folder, depth_section=(490, 495))
+# con = ReadBrukerMCF(get_d_folder(path_folder))
+
+# s = Spectra()
 
 # P.set_age_model(
 #     path_file=r'G:/Meine Ablage/Master Thesis/AgeModel/480_510_MSI_age_model_mm_yr.txt',
@@ -21,48 +24,64 @@ P = Project(path_folder, depth_section=(490, 495))
 #     load=False
 # )
 
-P.set_age_model()
-P.set_age_span()
+def test_all(path_folder):
+    P = Project(path_folder)
+    
+    # age model (required for ImageROI (choice of filter size) and to add age to MSI)
+    P.set_age_model()
+    P.set_depth_span(depth_span=(490, 495))  # required for age_span and add_depth_to_msi
+    P.set_age_span()
+    
+    # spectra (required for set_msi)
+    P.set_spectra()  
+    
+    # images
+    P.set_image_handler()  # required for adding photos
+    P.set_image_sample(obj_color='light')  # required for adding photo to msi
+    P.set_image_roi()  # required for adding hole, light, dark information to msi
+    P.set_image_classified()  # for adding laminae information to msi
+    
+    # msi
+    P.set_msi_object()
+    P.add_msi_pixels_ROI()
+    P.add_photo_to_msi()
+    P.add_holes_to_msi()
+    P.add_depth_column()
+    P.add_age_column()
+    P.add_light_dark_classification_to_msi()
+    P.add_laminae_classification_to_msi()
+    
+    # time series
+    P.set_msi_time_series()
+    
+    # msi object is not saved by default
+    # P.msi.save()
+    # P.set_msi_object will try to load a saved msi object
+    return P
 
-P.set_spectra()  
-P.set_image_handler()
-P.set_image_sample(obj_color='light')
-P.set_image_roi()
-P.set_image_classified()
+def test_msi_minimal(path_folder):
+    P = Project(path_folder)
+    
+    P.set_spectra()
+    P.set_msi_object()
+    return P
+
+def test_proxy(path_folder):
+    P = test_all(path_folder)
+    P.set_UK37()
+    
+    P.UK37_proxy.plot()
+
+P = test_proxy(path_folder)
+
+# P = Project(path_folder)
 # P.set_msi_object()
-# P.add_photo_to_msi()
-# P.add_holes_to_msi()
-# P.add_depth_column()
-# P.add_age_column()
 
-# P.msi.save()
-
-
+# reader = P.get_mcf_reader()
+# idx = 10
 # %%
-from data.cMSI import MSI
-path_d_folder = r'D:\Cariaco Data for Weimin\490-495cm\2018_08_27 Cariaco 490-495 alkenones.i\2018_08_27 Cariaco 490-495 alkenones.d'
+# idx += 1
+# reader.get_spectrum(idx, limits=(552.52, 552.66)).plot()
+# P.msi.plt_comp('L')
 
-msi = MSI(path_d_folder)
-msi.load()
-
-
-mz_C37_2 = 553.53188756536
-mz_C37_3 = 551.51623750122
-
-msi.plt_comp(mz_C37_2)
-msi.plt_comp(mz_C37_3)
-
-# ts = msi.processing_zone_wise_average(zones_key='depth', columns=['551.5174', '553.5323', 'age'])
-# ts['Uk37'] = ts['553.5323'] / (ts['553.5323'] + ts['551.5174'])
-
-# df = pd.read_csv(r'C:/Users/yanni/Downloads/MD03-2621_UK37_SST_BAYSPLINE.tab', sep='\t')
-# df['Age'] *= 1000
-# # %%
-# mask = (df.Age >= ts.age.min()) & (df.Age <= ts.age.max())
-
-# plt.plot(ts['age'], ts['Uk37'], label='depth-wise')
-# plt.plot(df.loc[mask, 'Age'], df.loc[mask, "UK37"], label='reference')
-# plt.xlabel('age in yr b2k')
-# plt.ylabel("UK'37")
-# plt.legend()
-# plt.show()
+# s = Spectra(path_d_folder=os.path.join(path_folder, get_d_folder(path_folder)), load=True)
