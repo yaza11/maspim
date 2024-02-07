@@ -1,13 +1,18 @@
 """This module allows the usage of functions from the R rtms package in python."""
 import os
+from helper import get_r_home
+
 # specify the R installation folder here (required by rpy2 package)
-R_HOME = r"C:\Program Files\R\R-4.3.2"  # your installation path here
+try:
+    R_HOME = get_r_home()
+except EnvironmentError:
+    R_HOME = r"C:\Program Files\R\R-4.3.2"  # your installation path here
 os.environ["R_HOME"] = R_HOME  # adding R_HOME folder to environment parameters
-os.environ["PATH"]   = R_HOME + ";" + os.environ["PATH"]  # and to system path 
+os.environ["PATH"] = R_HOME + ";" + os.environ["PATH"]  # and to system path
 
 from util.manage_obj_saves import class_to_attributes
 
-from typing import Iterable 
+from typing import Iterable
 import re
 
 import matplotlib.pyplot as plt
@@ -36,8 +41,8 @@ class Spots:
         self.idxs = np.array(rspots[0])
         self.names = np.array(rspots[1])
         self.times = np.array(rspots[2])
-        
-        
+
+
 class Spectrum:
     def __init__(self, rspectrum, limits: tuple[float] | None = None):
         """
@@ -62,7 +67,7 @@ class Spectrum:
             mask = (self.mzs >= limits[0]) & (self.mzs <= limits[1])
             self.mzs = self.mzs[mask]
             self.intensities = self.intensities[mask]
-            
+
     def plot(self, *args, limits=None, hold=False, **kwargs):
         if len(args) == 0:
             args = ['+-']
@@ -77,12 +82,12 @@ class Spectrum:
         plt.plot(mzs, intensities, *args, **kwargs)
         plt.xlabel('m/z in Da')
         plt.ylabel('Intensities')
-        
+
         if hold:
             return fig, ax
         plt.show()
-        
-    def resample(self, delta_mz: float | Iterable[float] = 1e-4, check_intervals = False):
+
+    def resample(self, delta_mz: float | Iterable[float] = 1e-4, check_intervals=False):
         """
         Resample mzs and intensities to regular intervals.
         
@@ -111,35 +116,36 @@ class Spectrum:
         # overwrite objects mz vals and intensities
         self.mzs = mzs_ip
         self.intensities = ints_ip
-        
+
     def to_pandas(self):
         """Return mass and intensity as pandas dataframe."""
         df = pd.DataFrame({'mz': self.mzs, 'intensity': self.intensities})
         return df
-    
+
     def copy(self):
         """Return copy of object."""
         rspectrum = [self.mzs.copy(), self.intensities.copy()]
         new_spectrum = Spectrum(rspectrum)
         return new_spectrum
-    
-            
+
+
 class ReadBrukerMCF:
     """Python version of rtms ReadBrukerMCF."""
+
     def __init__(self, path_d_folder: str):
         self.path_d_folder = path_d_folder
-        
+
     def create_reader(self):
         """Create a new BrukerMCFReader object."""
         print('creating BrukerMCF reader ...')
         self.reader = rtms.newBrukerMCFReader(self.path_d_folder)
         print('done creating reader')
-        
+
     def create_indices(self):
         """Create indices of spectra in mcf file."""
         assert hasattr(self, 'reader'), 'create a reader with create_reader first'
         self.indices = np.array(rtms.getBrukerMCFIndices(self.reader))
-        
+
     def create_spots(self):
         """Create spots object with indices and names."""
         assert hasattr(self, 'reader'), 'create a reader with create_reader first'
@@ -147,7 +153,7 @@ class ReadBrukerMCF:
         rspots = rtms.getBrukerMCFSpots(self.reader)
         self.spots = Spots(rspots)
         print('done creating spots table')
-    
+
     def set_meta_data(self):
         """Fetch metadata for measurement from mcf file and turn into df."""
         # arbitrary index, metaData should be the same for all spectra
@@ -159,7 +165,7 @@ class ReadBrukerMCF:
             'DisplayName': np.array(metaData[3]),
             'Value': np.array(metaData[4])
         })
-    
+
     def set_QTOF_window(self):
         """Set mass window limits from QTOF values in metadata."""
         assert hasattr(self, 'metaData'), 'call set_meta_data first'
@@ -170,14 +176,14 @@ class ReadBrukerMCF:
         mass_center = float(self.metaData.loc[idx_center, 'Value'].iat[0].split()[0])
         mass_window_size = float(self.metaData.Value[idx_size].iat[0].split()[0])
         self.limits = (mass_center - mass_window_size / 2, mass_center + mass_window_size / 2)
-        
-    def get_spectrum(self, index : int, **kwargs) -> Spectrum:
+
+    def get_spectrum(self, index: int, **kwargs) -> Spectrum:
         """Get spectrum in mcf file by index (R index, so 1-based)."""
         rspectrum = rtms.getSpectrum(self.reader, index)
         # convert to python
         spectrum = Spectrum(rspectrum, **kwargs)
         return spectrum
-    
+
     def get_spectrum_by_spot(self, spot: str):
         """Get spectrum by spot-name (e.g. R00X102Y80)."""
         assert hasattr(self, 'spots'), 'create spots with create_spots first'
@@ -191,18 +197,19 @@ class ReadBrukerMCF:
         # the corresponding value
         # int is necessary because rpy2 is picky about types and argwhere
         # returns np.intc, not int
-        idx_spectrum = int(self.spots.idxs[idx_spot])  
+        idx_spectrum = int(self.spots.idxs[idx_spot])
         print(idx_spot, idx_spectrum)
         spectrum = self.get_spectrum(idx_spectrum)
         return spectrum
-    
-    
+
+
 class Spectra:
     """Container for multiple Spectrum objects and binning."""
+
     def __init__(
-            self, 
+            self,
             reader: ReadBrukerMCF | None = None,
-            limits: tuple[float] = None, 
+            limits: tuple[float] = None,
             delta_mz: float = 1e-4,
             indices: Iterable = None,
             load: bool = False,
@@ -239,7 +246,7 @@ class Spectra:
         """
         assert reader or (load and path_d_folder), \
             'Either pass a reader or load and the corresponding d-folder'
-        
+
         if load:
             self.path_d_folder = path_d_folder
             self.load()
@@ -247,7 +254,7 @@ class Spectra:
             self.path_d_folder = reader.path_d_folder
             self.delta_mz = delta_mz
             self.initiate(reader, indices, limits)
-        
+
     def set_masses(self):
         """Initiate masses and intensities summed spectrum."""
         # round to next smallest multiple of delta_mz
@@ -255,14 +262,14 @@ class Spectra:
         # round to next biggest multiple of delta_mz
         biggest_mz = (int(self.limits[1] / self.delta_mz) + 1) * self.delta_mz
         # equally spaced
-        self.mzs =  np.arange(smallest_mz, biggest_mz + self.delta_mz, self.delta_mz)
+        self.mzs = np.arange(smallest_mz, biggest_mz + self.delta_mz, self.delta_mz)
         self.intensities = np.zeros_like(self.mzs)
-    
+
     def initiate(self, reader, indices, limits):
         """Set limits and masses."""
         if indices is None:
             if not hasattr(reader, 'indices'):
-                reader.create_indices()    
+                reader.create_indices()
             indices = reader.indices
         self.indices = indices
         if limits is None:
@@ -272,23 +279,23 @@ class Spectra:
             limits = reader.limits
         self.limits = limits
         self.set_masses()
-    
+
     def add_spectrum(self, spectrum: Spectrum):
         """Add passed spectrum values to summed spectrum."""
         # spectrum = spectrum.copy()
         spectrum.resample(self.mzs)
 
         self.intensities += spectrum.intensities
-    
+
     def add_all_spectra(self, reader, **kwargs):
         """Add up all spectra found in the mcf file."""
         N = len(self.indices)
         print(f'adding up {N} spectra ...')
-            
+
         time0 = time.time()
         # iterate over all spectra
         for it, index in enumerate(self.indices):
-            spectrum = reader.get_spectrum(int(index)) 
+            spectrum = reader.get_spectrum(int(index))
             self.add_spectrum(spectrum, **kwargs)
             time_now = time.time()
             if it % 10 ** (np.around(np.log10(N), 0) - 2) == 0:
@@ -298,7 +305,7 @@ class Spectra:
         # subtract baseline
         self.intensities -= self.intensities.min()
         print('done adding up spectra')
-        
+
     def set_peaks(self, prominence: float | None = None, width=3, **kwargs):
         """
         Find peaks in summed spectrum using scipy's find_peaks function.
@@ -319,24 +326,24 @@ class Spectra:
         if prominence is None:
             median = np.median(self.intensities)
             prominence = .1 * median
-        
+
         self.peaks, self.peak_properties = find_peaks(
             self.intensities, prominence=prominence, width=width, **kwargs
         )
-        
+
         # save parameters to dict for later reference
         self.peak_setting_parameters = kwargs
         self.peak_setting_parameters['prominence'] = prominence
         self.peak_setting_parameters['width'] = width
-    
+
     def gaussian_from_peak(self, peak_idx):
-        assert hasattr(self, 'peaks'), 'call set_peaks first' 
+        assert hasattr(self, 'peaks'), 'call set_peaks first'
         mz_idx = self.peaks[peak_idx]  # mz index of of center 
-        
+
         # height at center of peak - prominence
         # I0 = self.intensities[mz_idx] - self.peak_properties['prominences'][peak_idx]
         I0 = 0
-        H = self.intensities[mz_idx] - I0 # corresponding height
+        H = self.intensities[mz_idx] - I0  # corresponding height
         # width of peak at half maximum
         FWHM_l = self.mzs[
             (self.peak_properties["left_ips"][peak_idx] + .5).astype(int)
@@ -347,15 +354,15 @@ class Spectra:
         mz_c = (FWHM_l + FWHM_r) / 2
         # convert FWHM to standard deviation
         sigma_l = -(FWHM_l - mz_c) / (2 * np.log(2))
-        sigma_r = (FWHM_r - mz_c) / (2 * np.log(2))        
+        sigma_r = (FWHM_r - mz_c) / (2 * np.log(2))
         sigma = (sigma_l + sigma_r) / 2
         return mz_c, I0, H, sigma
-    
+
     def kernel_fit_from_peak(self, peak_idx):
         """Find kernel parameters for a peak with the shape of a bigaussian."""
-        assert hasattr(self, 'peaks'), 'call set_peaks first' 
+        assert hasattr(self, 'peaks'), 'call set_peaks first'
         mz_idx = self.peaks[peak_idx]  # mz index of of center 
-        
+
         # height at center of peak - prominence
         I0 = self.intensities[mz_idx] - self.peak_properties['prominences'][peak_idx]
         # width of peak at half maximum
@@ -365,13 +372,13 @@ class Spectra:
         if hasattr(self, 'kernel_params') and np.any(self.kernel_params[peak_idx, :]):
             mz_c, I0, H, sigma, *sigma_r = self.kernel_params[peak_idx, :]
             bounds_l = [
-                mz_c - sigma / 4, 
+                mz_c - sigma / 4,
                 I0 - 1e-6,
-                H * .8, 
+                H * .8,
                 sigma * .8
             ]
             bounds_r = [
-                mz_c + sigma / 4,    
+                mz_c + sigma / 4,
                 I0 + 1e-6,
                 H * 1.2,
                 sigma * 1.2
@@ -380,25 +387,25 @@ class Spectra:
                 bounds_l.append(sigma_r[0] * .8)
                 bounds_r.append(sigma_r[0] * 1.2)
             params, _ = curve_fit(
-                f=self.kernel_func, 
-                xdata=self.mzs[mask], 
-                ydata=self.intensities[mask], 
+                f=self.kernel_func,
+                xdata=self.mzs[mask],
+                ydata=self.intensities[mask],
                 p0=self.kernel_params[peak_idx, :],
                 bounds=(bounds_l, bounds_r)
             )
         else:
             return self.kernel_params[peak_idx, :]
-        
+
         return params
-    
+
     def bigaussian_from_peak(self, peak_idx: int):
         """Find kernel parameters for a peak with the shape of a bigaussian."""
-        assert hasattr(self, 'peaks'), 'call set_peaks first' 
+        assert hasattr(self, 'peaks'), 'call set_peaks first'
         mz_idx = self.peaks[peak_idx]  # mz index of of center 
-        mz_c = self.mzs[mz_idx] # center of gaussian
+        mz_c = self.mzs[mz_idx]  # center of gaussian
         # height at center of peak - prominence
         I0 = self.intensities[mz_idx] - self.peak_properties['prominences'][peak_idx]
-        H = self.intensities[mz_idx] - I0 # corresponding height
+        H = self.intensities[mz_idx] - I0  # corresponding height
         # width of peak at half maximum
         FWHM_l = self.mzs[
             (self.peak_properties["left_ips"][peak_idx] + .5).astype(int)
@@ -408,13 +415,13 @@ class Spectra:
         ]
         # convert FWHM to standard deviation
         sigma_l = -(FWHM_l - mz_c) / (2 * np.log(2))
-        sigma_r = (FWHM_r - mz_c) / (2 * np.log(2))        
+        sigma_r = (FWHM_r - mz_c) / (2 * np.log(2))
         return mz_c, I0, H, sigma_l, sigma_r
-    
+
     @staticmethod
     def gaussian(x: np.ndarray, x_c, y0, H, sigma):
-        return y0 + H * np.exp(-1/2 * ((x - x_c) / sigma) ** 2)
-    
+        return y0 + H * np.exp(-1 / 2 * ((x - x_c) / sigma) ** 2)
+
     @staticmethod
     def bigaussian(x: np.ndarray, x_c, y0, H, sigma_l, sigma_r):
         """
@@ -443,24 +450,24 @@ class Spectra:
         """
         x_l = x[x <= x_c]
         x_r = x[x > x_c]
-        y_l =  y0 + H * np.exp(-1/2 * ((x_l - x_c) / sigma_l) ** 2)
-        y_r =  y0 + H * np.exp(-1/2 * ((x_r - x_c) / sigma_r) ** 2)
+        y_l = y0 + H * np.exp(-1 / 2 * ((x_l - x_c) / sigma_l) ** 2)
+        y_r = y0 + H * np.exp(-1 / 2 * ((x_r - x_c) / sigma_r) ** 2)
         return np.hstack([y_l, y_r])
-    
+
     @property
     def kernel_func(self):
         if self.kernel_shape == 'bigaussian':
             return self.bigaussian
         elif self.kernel_shape == 'gaussian':
             return self.gaussian
-        
+
     @property
     def kernel_func_from_peak(self):
         if self.kernel_shape == 'bigaussian':
             return self.bigaussian_from_peak
         elif self.kernel_shape == 'gaussian':
             return self.gaussian_from_peak
-    
+
     def set_kernels(self, use_bigaussian=False, fine_tune=False):
         """
         Based on the peak properties, find bigaussian parameters to 
@@ -469,14 +476,14 @@ class Spectra:
         shift, intensity at max, sigma left, sigma right
         """
         assert hasattr(self, 'peaks'), 'call set peaks first'
-        if use_bigaussian: 
+        if use_bigaussian:
             self.kernel_shape = 'bigaussian'
             self.kernel_params = np.zeros((len(self.peaks), 5))
         else:
             self.kernel_shape = 'gaussian'
             self.kernel_params = np.zeros((len(self.peaks), 4))
         kernel_func_from_peak = self.kernel_func_from_peak
-        
+
         for idx in range(len(self.peaks)):
             self.kernel_params[idx, :] = kernel_func_from_peak(idx)
             if fine_tune:
@@ -489,13 +496,13 @@ class Spectra:
                     print(idx, e)
         # vertical shifts get taken care of by taking sum
         self.kernel_params[:, 1] = 0
-        
+
     def plt_summed(self, plt_kernels=False):
         assert hasattr(self, 'kernel_params'), 'call set_kernels first'
         # calculate approximated signal by summing up kernels
         intensities_approx = np.zeros_like(self.intensities)
         plt.figure()
-        
+
         for i in range(len(self.peaks)):
             y = self.kernel_func(self.mzs, *self.kernel_params[i, :])
             intensities_approx += y
@@ -507,9 +514,10 @@ class Spectra:
         plt.xlabel(r'$m/z$ in Da')
         plt.ylabel('Intensity')
         plt.show()
-        
+
     def bin_spectra(self, reader: ReadBrukerMCF):
         """For each spectrum find overlap between kernels and signal."""
+
         def _bin_spectrum(spectrum, idx):
             """Find intensities of compound based on kernels."""
             if (len(spectrum.mzs) != len(self.mzs)) \
@@ -532,14 +540,14 @@ class Spectra:
             #     line_spectrum[idx_peak] = np.sum(weighted_signal) * dmz
             line_spectrum = (spectrum.intensities @ kernels) * dmz
             self.line_spectra[idx, :] = line_spectrum
-        
+
         assert hasattr(self, 'kernel_params'), 'calculate kernels with set_kernels'
-        
+
         indices_spectra = self.indices
         N_spectra = len(indices_spectra)  # number of spectra in mcf file
         N_peaks = len(self.peaks)  # number of identified peaks
         self.line_spectra = np.zeros((N_spectra, N_peaks))  # result array
-        
+
         # precompute bigaussians
         dmz = self.mzs[1] - self.mzs[0]
         kernels = np.zeros((N_peaks, len(self.mzs)))
@@ -550,11 +558,11 @@ class Spectra:
                 sigma_r = self.kernel_params[idx_peak, 4]
                 H = np.sqrt(2 / np.pi) / (sigma_l + sigma_r)  # normalization constant
                 kernels[idx_peak] = self.bigaussian(
-                    self.mzs, 
-                    x_c=self.kernel_params[idx_peak, 0], 
+                    self.mzs,
+                    x_c=self.kernel_params[idx_peak, 0],
                     y0=0,  # assert spectra have baseline subtracted
                     H=H,  # normalized kernels
-                    sigma_l=sigma_l, 
+                    sigma_l=sigma_l,
                     sigma_r=sigma_r
                 )
             kernels = kernels.T
@@ -564,19 +572,19 @@ class Spectra:
                 sigma = self.kernel_params[idx_peak, 3]
                 H = 1 / (np.sqrt(2 * np.pi) * sigma)  # normalization constant
                 kernels[idx_peak] = self.gaussian(
-                    self.mzs, 
-                    x_c=self.kernel_params[idx_peak, 0], 
+                    self.mzs,
+                    x_c=self.kernel_params[idx_peak, 0],
                     y0=0,  # assert spectra have baseline subtracted
                     H=H,  # normalized kernels
                     sigma=sigma
                 )
             kernels = kernels.T
-        
+
         # iterate over spectra and bin according to kernels
         print(f'binning {N_spectra} spectra into {N_peaks} bins ...')
         time0 = time.time()
         for it, idx_spectrum in enumerate(indices_spectra):
-            spectrum = reader.get_spectrum(int(idx_spectrum)) 
+            spectrum = reader.get_spectrum(int(idx_spectrum))
             _bin_spectrum(spectrum, it)
             if it % 10 ** (np.around(np.log10(N_spectra), 0) - 2) == 0:
                 time_now = time.time()
@@ -584,7 +592,7 @@ class Spectra:
                 predict = time_elapsed * N_spectra / (it + 1)
                 print(f'estimated time left: {(predict - time_elapsed):.1f} s')
         print('done binning spectra')
-        
+
     def binned_spectra_to_df(self, reader: ReadBrukerMCF):
         """Turn the line_spectra into the familiar df with R, x, y columns."""
         if hasattr(self, 'feature_table'):
@@ -592,9 +600,9 @@ class Spectra:
         assert hasattr(self, 'line_spectra'), 'create line spectra with bin_spectra'
         if not hasattr(reader, 'spots'):
             reader.create_spots()
-        
+
         df = pd.DataFrame(
-            data=self.line_spectra.copy(), 
+            data=self.line_spectra.copy(),
             columns=np.around(self.kernel_params[:, 0], 4).astype(str)
         )
         # add R, x, y columns
@@ -602,12 +610,13 @@ class Spectra:
         str_prefix = r'R(\d+)X'
         str_x = r'R\d+X(.*?)Y'
         str_y = r'Y(.*?)$'
-        
+
         def rxy(name):
             r = int(re.findall(str_prefix, name)[0])
             x = int(re.findall(str_x, name)[0])
             y = int(re.findall(str_y, name)[0])
             return [r, x, y]
+
         RXYs = np.array([rxy(name) for name in names])
         if self.indices.shape != reader.indices.shape:
             mask = np.array(
@@ -620,7 +629,7 @@ class Spectra:
         df['y'] = RXYs[mask, 2]
         self.feature_table = df
         return self.feature_table
-    
+
     def get_kernel_params_df(self):
         assert hasattr(self, 'kernel_params'), 'call set_kernels'
         if self.kernel_shape == 'bigaussian':
@@ -629,7 +638,7 @@ class Spectra:
             columns = ['mz', 'I0', 'H', 'sigma']
         df = pd.DataFrame(data=self.kernel_params, columns=columns)
         return df
-        
+
     def save(self):
         """Save object to d-folder."""
         dict_backup = self.__dict__.copy()
@@ -638,23 +647,18 @@ class Spectra:
         for attribute in existent_attributes:
             if attribute not in keep_attributes:
                 self.__delattr__(attribute)
-        
+
         file = self.path_d_folder + '/' + 'spectra_object.pickle'
         with open(file, 'wb') as inp:
             pickle.dump(self, inp, pickle.HIGHEST_PROTOCOL)
         self.__dict__ = dict_backup
-        
+
     def load(self):
         """Load object from d-folder."""
         file = self.path_d_folder + '/' + 'spectra_object.pickle'
         with open(file, 'rb') as inp:
             self.__dict__ = pickle.load(inp).__dict__
-        
+
 
 if __name__ == '__main__':
     pass
-    
-    
-            
-        
-
