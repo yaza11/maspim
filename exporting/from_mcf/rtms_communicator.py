@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import pickle
 from scipy.signal import find_peaks
+from scipy.optimize import curve_fit
 
 from rpy2.robjects.packages import importr, data, isinstalled
 from rpy2.robjects import pandas2ri
@@ -81,7 +82,7 @@ class Spectrum:
             return fig, ax
         plt.show()
         
-    def resample(self, delta_mz: float | Iterable[float] = 1e-4):
+    def resample(self, delta_mz: float | Iterable[float] = 1e-4, check_intervals = False):
         """
         Resample mzs and intensities to regular intervals.
         
@@ -98,9 +99,13 @@ class Spectrum:
             mzs_ip = np.arange(smallest_mz, biggest_mz + delta_mz, delta_mz)
         else:
             dmzs = np.diff(delta_mz)
-            assert np.allclose(dmzs[1:], dmzs[0]), \
-                'passed delta_mz must either be float or list of equally spaced mzs'
+            if check_intervals:
+                assert np.allclose(dmzs[1:], dmzs[0]), \
+                    'passed delta_mz must either be float or list of equally spaced mzs'
             mzs_ip = delta_mz
+        # already same mzs, nothing todo
+        if (len(self.mzs) == len(mzs_ip)) and np.allclose(self.mzs, mzs_ip):
+            return
         # interpolate to regular spaced mz values
         ints_ip = np.interp(mzs_ip, self.mzs, self.intensities)
         # overwrite objects mz vals and intensities
@@ -271,26 +276,20 @@ class Spectra:
     def add_spectrum(self, spectrum: Spectrum):
         """Add passed spectrum values to summed spectrum."""
         # spectrum = spectrum.copy()
-        # check if resampling is necessary
-        dmzs = np.diff(spectrum.mzs)
-        if not np.allclose(dmzs[1:], dmzs[0]) or dmzs[0] != self.delta_mz:
-            spectrum.resample(self.mzs)
+        spectrum.resample(self.mzs)
 
         self.intensities += spectrum.intensities
     
-    def add_all_spectra(self, reader):
+    def add_all_spectra(self, reader, **kwargs):
         """Add up all spectra found in the mcf file."""
-        if not hasattr(reader, 'indices'):
-            reader.create_indices()
-        indices = reader.indices
-        N = len(indices)
+        N = len(self.indices)
         print(f'adding up {N} spectra ...')
             
         time0 = time.time()
         # iterate over all spectra
-        for it, index in enumerate(indices):
+        for it, index in enumerate(self.indices):
             spectrum = reader.get_spectrum(int(index)) 
-            self.add_spectrum(spectrum)
+            self.add_spectrum(spectrum, **kwargs)
             time_now = time.time()
             if it % 10 ** (np.around(np.log10(N), 0) - 2) == 0:
                 time_elapsed = time_now - time0
@@ -329,14 +328,14 @@ class Spectra:
         self.peak_setting_parameters = kwargs
         self.peak_setting_parameters['prominence'] = prominence
         self.peak_setting_parameters['width'] = width
-        
+    
     def gaussian_from_peak(self, peak_idx):
-        """Find kernel parameters for a peak with the shape of a bigaussian."""
         assert hasattr(self, 'peaks'), 'call set_peaks first' 
         mz_idx = self.peaks[peak_idx]  # mz index of of center 
         
         # height at center of peak - prominence
-        I0 = self.intensities[mz_idx] - self.peak_properties['prominences'][peak_idx]
+        # I0 = self.intensities[mz_idx] - self.peak_properties['prominences'][peak_idx]
+        I0 = 0
         H = self.intensities[mz_idx] - I0 # corresponding height
         # width of peak at half maximum
         FWHM_l = self.mzs[
@@ -350,7 +349,47 @@ class Spectra:
         sigma_l = -(FWHM_l - mz_c) / (2 * np.log(2))
         sigma_r = (FWHM_r - mz_c) / (2 * np.log(2))        
         sigma = (sigma_l + sigma_r) / 2
-        return mz_c, I0, H, sigma_l, sigma_r
+        return mz_c, I0, H, sigma
+    
+    def kernel_fit_from_peak(self, peak_idx):
+        """Find kernel parameters for a peak with the shape of a bigaussian."""
+        assert hasattr(self, 'peaks'), 'call set_peaks first' 
+        mz_idx = self.peaks[peak_idx]  # mz index of of center 
+        
+        # height at center of peak - prominence
+        I0 = self.intensities[mz_idx] - self.peak_properties['prominences'][peak_idx]
+        # width of peak at half maximum
+        idx_l = (self.peak_properties["left_ips"][peak_idx] + .5).astype(int)
+        idx_r = (self.peak_properties["right_ips"][peak_idx] + .5).astype(int)
+        mask = slice(idx_l, idx_r)
+        if hasattr(self, 'kernel_params') and np.any(self.kernel_params[peak_idx, :]):
+            mz_c, I0, H, sigma, *sigma_r = self.kernel_params[peak_idx, :]
+            bounds_l = [
+                mz_c - sigma / 4, 
+                I0 - 1e-6,
+                H * .8, 
+                sigma * .8
+            ]
+            bounds_r = [
+                mz_c + sigma / 4,    
+                I0 + 1e-6,
+                H * 1.2,
+                sigma * 1.2
+            ]
+            if len(sigma_r) > 0:
+                bounds_l.append(sigma_r[0] * .8)
+                bounds_r.append(sigma_r[0] * 1.2)
+            params, _ = curve_fit(
+                f=self.kernel_func, 
+                xdata=self.mzs[mask], 
+                ydata=self.intensities[mask], 
+                p0=self.kernel_params[peak_idx, :],
+                bounds=(bounds_l, bounds_r)
+            )
+        else:
+            return self.kernel_params[peak_idx, :]
+        
+        return params
     
     def bigaussian_from_peak(self, peak_idx: int):
         """Find kernel parameters for a peak with the shape of a bigaussian."""
@@ -417,12 +456,12 @@ class Spectra:
         
     @property
     def kernel_func_from_peak(self):
-        if self.kernel_shape == 'bigaussian_from_peak':
-            return self.bigaussian
-        elif self.kernel_shape == 'gaussian_from_peak':
-            return self.gaussian
+        if self.kernel_shape == 'bigaussian':
+            return self.bigaussian_from_peak
+        elif self.kernel_shape == 'gaussian':
+            return self.gaussian_from_peak
     
-    def set_kernels(self, use_bigaussian=False):
+    def set_kernels(self, use_bigaussian=False, fine_tune=False):
         """
         Based on the peak properties, find bigaussian parameters to 
         approximate spectrum. Creates kernel_params where cols correspond to 
@@ -440,6 +479,14 @@ class Spectra:
         
         for idx in range(len(self.peaks)):
             self.kernel_params[idx, :] = kernel_func_from_peak(idx)
+            if fine_tune:
+                try:
+                    params = self.kernel_fit_from_peak(idx)
+                    self.kernel_params[idx, :] = params
+                except RuntimeError as e:
+                    print(idx, e)
+                except TypeError as e:
+                    print(idx, e)
         # vertical shifts get taken care of by taking sum
         self.kernel_params[:, 1] = 0
         
@@ -450,13 +497,15 @@ class Spectra:
         plt.figure()
         
         for i in range(len(self.peaks)):
-            y = self.bigaussian(self.mzs, *self.kernel_params[i, :])
+            y = self.kernel_func(self.mzs, *self.kernel_params[i, :])
             intensities_approx += y
             if plt_kernels:
                 plt.plot(self.mzs, y)
         plt.plot(self.mzs, self.intensities, label='summed intensity')
         plt.plot(self.mzs, intensities_approx, label='estimated')
         plt.legend()
+        plt.xlabel(r'$m/z$ in Da')
+        plt.ylabel('Intensity')
         plt.show()
         
     def bin_spectra(self, reader: ReadBrukerMCF):
@@ -485,10 +534,8 @@ class Spectra:
             self.line_spectra[idx, :] = line_spectrum
         
         assert hasattr(self, 'kernel_params'), 'calculate kernels with set_kernels'
-        if not hasattr(reader, 'indices'):
-            reader.create_indices()
         
-        indices_spectra = reader.indices
+        indices_spectra = self.indices
         N_spectra = len(indices_spectra)  # number of spectra in mcf file
         N_peaks = len(self.peaks)  # number of identified peaks
         self.line_spectra = np.zeros((N_spectra, N_peaks))  # result array
@@ -562,9 +609,15 @@ class Spectra:
             y = int(re.findall(str_y, name)[0])
             return [r, x, y]
         RXYs = np.array([rxy(name) for name in names])
-        df['R'] = RXYs[:, 0]
-        df['x'] = RXYs[:, 1]
-        df['y'] = RXYs[:, 2]
+        if self.indices.shape != reader.indices.shape:
+            mask = np.array(
+                [np.argwhere(idx == reader.indices)[0][0] for idx in self.indices]
+            )
+        else:
+            mask = np.ones_like(self.indices, dtype=bool)
+        df['R'] = RXYs[mask, 0]
+        df['x'] = RXYs[mask, 1]
+        df['y'] = RXYs[mask, 2]
         self.feature_table = df
         return self.feature_table
     
