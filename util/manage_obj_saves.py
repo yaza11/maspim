@@ -74,6 +74,15 @@ Spectra_attributes = {
     'line_spectra'
 }
 
+XRay_attributes = {
+    'path_image_file',
+    'depth_section',
+    'obj_color',
+    'depth_section',
+    'xywh_ROI',
+    'image_ROI'
+}
+
 name_to_attrs = {
     'Image': Image_disc_attributes,
     'ImageSample': ImageSample_disc_attributes,
@@ -85,7 +94,8 @@ name_to_attrs = {
     'TimeSeries': TimeSeries_disc_attributes,
     'MetaFeatures': MetaFeatures_disc_attributes,
     'SampleImageHandler': SampleImageHandler_attributes,
-    'Spectra': Spectra_attributes
+    'Spectra': Spectra_attributes,
+    'XRay': XRay_attributes
 }
 
 
