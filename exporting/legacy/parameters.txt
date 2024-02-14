@@ -1,0 +1,6 @@
+Q1mass=1320
+Width=20
+MPCmass=1324.3046
+customMethod=D:/Methods/DataAnalysis FTMS SNR0 calibCren.m
+RawDataPath="D:/SBB/raw_data"
+ExportDataPath="D:/SBB/exported_data"
