@@ -58,7 +58,15 @@ spectra.binned_spectra_to_df(con)
 spectra.save()  # save can be used at any step, to load call "spectra = Spectra(reader=con, load=True)" instead
 ```
 
-### export peaks from daExport results
+### export peaks from Bruker DataAnalysis
+in the `legacy` module: 
+- `openall.vbs` opens all the data files (e.g., alkenone window measurement from all slides);
+- `daCalib` calibrate all the data files in DataAnalysis and generate the chosen MPC after calibration, so one can have a good overview of the calibration;
+- `daExport` batch exports all the mass lists from DataAnalysis like the classic daExport script.
+All parameters need to be set are in a `parameters.txt` file.
+
+To parse the txt exports:
+
 ```python
 from exporting.legacy.parser import extract_mzs
 
