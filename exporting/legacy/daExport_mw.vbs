@@ -1,4 +1,5 @@
-' the modified script to export mass list to a text file
+' the modified script to export mass list to a text file in multiple write operations (every 1000 spectra)
+' warning: could throw an error 'run out of string space' if the number of peaks is too large
 
 ' Include the ReadParams.vbs file, needs absolute path if run from dataanalysis
 ExecuteGlobal CreateObject("Scripting.FileSystemObject").OpenTextFile("ReadParams.vbs", 1).ReadAll()
@@ -20,7 +21,10 @@ const spec_start = 1
 Set DA = GetObject("","BDal.DataAnalysis.Application")
 DA.Activate(0)
 
-For Each currentAnalysis in Analyses:
+Set fso = CreateObject("Scripting.FileSystemObject")
+
+For Each currentAnalysis in DA.Analyses:
+    savePath = currentAnalysis.Path & "\" & currentAnalysis.Name & ".txt"
 
     For SpecCounter = currentAnalysis.Spectra.Count to 1 Step -1  ' deletes all previously generated spectra
         currentAnalysis.Spectra.Delete SpecCounter
@@ -60,12 +64,17 @@ For Each currentAnalysis in Analyses:
 
         currentAnalysis.Spectra.Delete currentAnalysis.Spectra.Count ' Remove spectrum from compound list
 
+        If specIndex Mod 1000 = 0 Then ' Write the accumulated data to file every 100 spectra
+            Set logfile = fso.OpenTextFile(savePath, 8, True)
+            logfile.Write buffer
+            logfile.Close
+            buffer = "" ' Clear the buffer
+        End If
+
     Next
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    savePath = params("ExportDataPath") & "\" & currentAnalysis.Name & ".txt"
-    Set logfile = fso.OpenTextFile(savePath, 2, True)
-    logfile.Write buffer ' Write the accumulated data to file in one operation
+    ' Write the remaining data to file
+    Set logfile = fso.OpenTextFile(savePath, 8, True)
+    logfile.Write buffer
     logfile.Close
-
 Next
