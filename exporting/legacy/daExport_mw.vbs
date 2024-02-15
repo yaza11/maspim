@@ -14,8 +14,8 @@ Set params = ReadParametersFromFile(paramsFilePath)
 Set DA = GetObject("","BDal.DataAnalysis.Application")
 DA.Activate(0)
 
-mz_start = params("Q1mass") - params("Width")
-mz_end = params("Q1mass") + params("Width")
+mz_start = CInt(params("Q1mass")) - CInt(params("Width"))
+mz_end = CInt(params("Q1mass")) + CInt(params("Width"))
 const spec_start = 1
 
 Set DA = GetObject("","BDal.DataAnalysis.Application")
@@ -24,7 +24,7 @@ DA.Activate(0)
 Set fso = CreateObject("Scripting.FileSystemObject")
 
 For Each currentAnalysis in DA.Analyses:
-    savePath = currentAnalysis.Path & "\" & currentAnalysis.Name & ".txt"
+    savePath = params("ExportDataPath") & "\" & currentAnalysis.Name & ".txt"
 
     For SpecCounter = currentAnalysis.Spectra.Count to 1 Step -1  ' deletes all previously generated spectra
         currentAnalysis.Spectra.Delete SpecCounter
@@ -37,6 +37,7 @@ For Each currentAnalysis in DA.Analyses:
     Dim specIndex
 
     buffer = "" ' Use a buffer to accumulate lines before writing
+    buff = params("customMethod") & vbCrLf & "Spot Number;Number of Peaks;M/Z;Intensity;S/N" & vbCrLf
 
     For specIndex = spec_start To spec_end
         currentAnalysis.Spectra.Add specIndex, daProfileOnly
