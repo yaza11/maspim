@@ -8,12 +8,15 @@ from data.file_helpers import (get_folder_structure, find_files, get_mis_file,
 from data.cAgeModel import AgeModel
 from imaging.main.cImage import ImageSample, ImageROI, ImageClassified
 from imaging.util.Image_convert_types import ensure_image_is_gray
+from imaging.XRay.cXRay import XRay
+from imaging.misc.find_punch_holes import find_holes
 
 from timeSeries.cTimeSeries import TimeSeries
 from timeSeries.cProxy import RatioProxy, UK37
 
 import os
 import re
+import cv2
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
@@ -339,11 +342,15 @@ class Project:
         if hasattr(self, 'spectra_object_file'):
             self.spectra = Spectra(load=True, path_d_folder=self.path_d_folder)
             if hasattr(self.spectra, 'feature_table'):
-                return self.spectra
+                return
+            elif hasattr(self.spectra, 'line_spectra'):
+                self.spectra.binned_spectra_to_df(self.get_mcf_reader())
+                self.spectra.save()
+                return
         
         # create reader object
         if reader is None:
-            reader = self.get_mcf_reader
+            reader = self.get_mcf_reader()
         if not hasattr(reader, 'reader'):
             reader.create_reader()
         if not hasattr(reader, 'indices'):
@@ -464,7 +471,6 @@ class Project:
             average_by_col='classification_s', 
             **kwargs
     ) -> None:
-        # TODO: !!!
         self.time_series = TimeSeries(self.path_folder)
         if hasattr(self, 'TimeSeries_file'):
             self.time_series.load()
@@ -580,6 +586,249 @@ class Project:
         self.UK37_proxy = UK37(self.time_series, **kwargs)
         self.UK37_proxy.add_UK_proxy(corrected=correct_UK_vals)
         self.UK37_proxy.add_SST(method=method_SST, prior_std=prior_std_bayspline)
+        
+    def set_xray(
+            self, path_image_file, 
+            depth_section=None, obj_color='dark', **kwargs
+    ):
+        self.xray = XRay(
+            path_image_file, depth_section, obj_color=obj_color, **kwargs
+        )
+        # try to load from disc
+        folder = os.path.dirname(path_image_file)
+        name = 'XRay.pickle'
+        if os.path.exists(os.path.join(folder, name)):
+            self.xray.load()
+            if hasattr(self.xray, 'image_ROI'):
+                return
+            
+        self.xray.sget_sample_area()
+        self.xray.remove_bars()
+        self.xray.save()
+        
+    def set_holes(self, side: str, plts: bool = False, **kwargs):
+        """
+        Identify squre-shaped holes at top or bottom of sample in xray section
+        and MSI sample.
+
+        Parameters
+        ----------
+        side : str, optional
+            The side on which the holes are expected to be found, either 'top'
+            or 'bottom'.
+        plts : bool, optional
+            If True, will plot inbetween and final results in the hole 
+            identification.
+        **kwargs : dict
+            Additional kwargs passed on to the find_holes function.
+
+        Returns
+        -------
+        None.
+
+        """
+        assert hasattr(self, 'xray'), 'call set_xray first'
+        assert hasattr(self, 'image_roi'), 'call set_image_roi first'
+        
+        depth_section = self.depth_span[1] - self.depth_span[0]
+        
+        img_xray = self.xray.get_section(self.depth_span[0], self.depth_span[1])
+        # eliminate gelatine pixels
+        img_msi = self.image_roi.sget_simplified_image() \
+            * self.image_roi.sget_foreground_thr_and_pixels()[1]
+        
+        self.holes_xray = find_holes(
+            img_xray, 
+            obj_color=self.xray.obj_color, 
+            side=side,
+            plts=plts,
+            **kwargs
+        )
+        
+        self.holes_msi = find_holes(
+            img_msi, 
+            obj_color=self.image_roi.obj_color, 
+            depth_section=depth_section,
+            side=side,
+            plts=plts,
+            **kwargs
+        )
+        self.hole_side = side
+        
+    def set_msi_depth_correction_with_xray(self, method='linear'):
+        assert method in ('linear', 'cubic', 'piece-wise linear', 'l', 'c', 'pwl')
+        assert hasattr(self, 'holes_msi'), 'call set_holes'
+        assert hasattr(self, 'msi'), 'set msi object first'
+        assert 'depth' in self.msi.feature_table.columns, 'set depth column'
+        assert hasattr(self, 'depth_span'), 'set the depth section'
+        
+        def idx_to_depth(idx, img_shape):
+            """Convert the index into the relative depth."""
+            return idx / img_shape[1] * depth_section + self.depth_span[0]
+        
+        def append_top_bottom(arr: np.ndarray, img_shape):
+            # insert top
+            arr = np.insert(arr, 0, 0)
+            # append bottom
+            arr = np.append(arr, img_shape[1])
+            return arr
+        
+        depth_section = self.depth_span[1] - self.depth_span[0]
+        
+        img_xray_shape = self.xray.get_section(
+            self.depth_span[0], self.depth_span[1]
+        ).shape
+        # eliminate gelatine pixels
+        img_msi_shape = self.image_roi.sget_image_grayscale().shape
+        
+        # use holes as tie-points
+        idxs_xray = np.array([point[1] for point in self.holes_xray])
+        idxs_msi = np.array([point[1] for point in self.holes_msi])
+        
+        depths = self.msi.feature_table['depth']
+        
+        if method not in ('linear', 'l'):
+            idxs_xray = append_top_bottom(idxs_xray, img_xray_shape)
+            idxs_msi = append_top_bottom(idxs_msi, img_msi_shape)
+        
+        # depths xray --> assumed to be not deformed, therefore linear depth increase
+        if method in ('linear', 'l'):
+            # linear function to transform xray depth to msi depth
+            coeffs = np.polyfit(
+                idx_to_depth(idxs_xray, img_xray_shape), 
+                idx_to_depth(idxs_msi, img_msi_shape), 
+                1
+            )
+            pol = np.poly1d(coeffs)
+            depths_new = pol(depths)
+        elif method in ('cubic', 'c'):
+            # third degree polynomial fit with 4 points
+            # top and bottom are part of tie-points
+            coeffs = np.polyfit(
+                idx_to_depth(idxs_xray, img_xray_shape), 
+                idx_to_depth(idxs_msi, img_msi_shape), 
+                3
+            )
+            pol = np.poly1d(coeffs)
+            depths_new = pol(depths)
+        elif method in ('piece-wise linear', 'pwl'):
+            depths_new = np.zeros_like(depths)
+            for i in range(len(idxs_xray) - 1):
+                # get index pairs
+                idxs_xray_pair = idxs_xray[i:i+2]
+                idxs_msi_pair = idxs_msi[i:i+2]
+                coeffs = np.polyfit(
+                    idx_to_depth(idxs_xray_pair, img_xray_shape), 
+                    idx_to_depth(idxs_msi_pair, img_msi_shape), 
+                    1
+                )
+                pol = np.poly1d(coeffs)
+                # indices corresponding to current idx pair
+                depth_interval = idx_to_depth(idxs_msi_pair, img_msi_shape)
+                mask = (depths >= depth_interval[0]) &\
+                    (depths <= depth_interval[1])
+                depths_new[mask] = pol(depths[mask])
+        else:
+            raise NotImplementedError()
+                
+        self.msi.feature_table['depth_corrected'] = depths_new
+        
+    def add_xray_to_msi(self, plts=False, **kwargs):
+        # TODO: add nonrigid deform model
+        assert hasattr(self, 'msi'), 'set msi object first'
+        assert 'depth' in self.msi.feature_table.columns, 'set depth column'
+        assert hasattr(self, 'xray'), 'call set_xray first'
+        assert hasattr(self, 'image_roi'), 'call set_image_roi first'
+        assert hasattr(self, 'depth_span'), 'set the depth section'
+        assert hasattr(self, 'holes_msi'), 'call set_msi_depth_correction_with_xray'
+        
+        def find_line_contour_intersect(contour, holes, image):
+            # use opposite half of that where holes were searched
+            if self.hole_side == 'bottom':
+                mask_section = contour[:, 0, 1] < image.shape[0] / 2
+            else:
+                mask_section = contour[:, 0, 1] > image.shape[0] / 2
+            # extract the values of the contour in the depth-direction
+            x_contour = contour[mask_section, 0, 0]
+
+            # find idxs where contour intersects line
+            x_hole = holes[0][1]
+            idx_projected = np.argmin(np.abs(x_contour - x_hole))
+
+            projected_point = contour[mask_section, 0, :][idx_projected]
+            return projected_point[::-1]
+                
+        img_xray = ensure_image_is_gray(
+            self.xray.get_section(self.depth_span[0], self.depth_span[1])
+        )
+        # eliminate gelatine pixels
+        img_msi = self.image_roi.sget_simplified_image() \
+            * self.image_roi.sget_foreground_thr_and_pixels()[1]
+        
+        points_xray = list(self.holes_xray)
+        
+        points_msi = list(self.holes_msi)
+        
+        cont_msi = self.image_roi.get_main_contour(
+            self.image_roi.sget_simplified_image()
+        )
+        # TODO: replace with simplifie image
+        cont_xray = self.xray.get_main_contour(
+            img_xray
+        )
+        
+        points_xray.append(
+            find_line_contour_intersect(cont_xray, points_xray, img_xray)
+        )
+        
+        points_msi.append(
+            find_line_contour_intersect(cont_msi, points_msi, img_msi)
+        )
+        
+        # perform affine transformation
+        warp_matrix = cv2.getAffineTransform(
+            np.array(points_xray).astype(np.float32)[:, ::-1], 
+            np.array(points_msi).astype(np.float32)[:, ::-1]
+        )  # source: xray, target: msi
+        warped_xray = cv2.warpAffine(src=img_xray, M=warp_matrix, dsize=img_msi.T.shape)
+        # add to feature table
+        self.msi.add_attribute_from_image(warped_xray, 'xray')
+        
+        if plts:
+            # tie points on msi image
+            plt.figure()
+            plt.plot(cont_msi[:, 0, 0], cont_msi[:, 0, 1])
+            plt.imshow(img_msi)
+            plt.scatter(
+                [point[1] for point in points_msi], 
+                [point[0] for point in points_msi],
+                color='r'
+            )
+            plt.show()
+            
+            # tie points on xray section
+            plt.figure()
+            plt.imshow(img_xray)
+            plt.plot(cont_xray[:, 0, 0], cont_xray[:, 0, 1])
+            plt.scatter(
+                [point[1] for point in points_xray], 
+                [point[0] for point in points_xray]
+            )
+            plt.show()
+            
+            # warped xray image on top of msi
+            plt.figure()
+            mask = warped_xray == 0
+            img_xray = warped_xray.copy()
+            img_xray[mask] = 255
+            img_cpr = np.stack([
+                255 - img_xray, 
+                255 - img_xray, 
+                self.image_roi.sget_image_grayscale()
+            ], axis=-1)
+            plt.imshow(img_cpr)
+            plt.title('warped image')
+            plt.show()
             
     
 
