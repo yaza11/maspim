@@ -42,26 +42,15 @@ class RightClickOnLine(RightClickMenu):
         """tag the scale line with 'scale_line'"""
         # change the color of the scale line to blue
         self.app.canvas.itemconfig(item, fill="blue")
-        self.app.canvas.itemconfig(item, tags="scale_line")
-        # change the vl label to 'scale_line'
-        self.app.items[item].tag = "scale_line"
-        # rebind right-click event to the scale line
-        self.app.canvas.tag_bind("scale_line",
-                                 "<Button-2>",
-                                 lambda e: self.show_menu(e, item))
+        self.app.items[item].label = "scale_line"
+        self.app.scale_line.append(item)
 
     def set_sediment_start(self, item):
         """tag the vertical line with 'sediment_start'"""
         self.app.canvas.itemconfig(item, fill="green")
-        # tag the line with 'sediment_start'
-        self.app.canvas.itemconfig(item, tags="sediment_start_line")
-        # change the vl label to 'sediment_start_line'
-        self.app.items[item].tag = "sediment_start_line"
-
-        # rebind right-click event to the sediment start line
-        self.app.canvas.tag_bind("sediment_start_line",
-                                 "<Button-2>",
-                                 lambda e: self.show_menu(e, item))
+        # label the line with 'sediment_start'
+        self.app.items[item].label = "sediment_start_line"
+        self.app.sediment_start_line = item
 
     def delete_line(self, item):
         """delete the vertical line"""
@@ -75,6 +64,8 @@ class RightClickOnImage(RightClickMenu):
         self.menu.add_command(label="Rotate",
                               command=lambda: self.rotate_image(self.clicked_item))
 
+        self.menu.add_command(label="Add Label",
+                              command=lambda: self.add_label(self.clicked_item))
 
         chg_size = tk.Menu(self.menu, tearoff=0)
         chg_size.add_command(label="x0.5", command=lambda: self.enlarge_image(self.clicked_item, 0.5))
@@ -89,6 +80,14 @@ class RightClickOnImage(RightClickMenu):
                               command=lambda: self.lock_image(self.clicked_item))
         self.menu.add_command(label="Delete",
                               command=lambda: self.app.items[self.clicked_item].__del__(self.app))
+
+    def add_label(self, item):
+        """ add label to the item, unlike tag, label is not unique and can be changed and easy to understand"""
+        label = simpledialog.askstring("Input", "Enter the label")
+        if label:
+            self.app.items[item].label = label
+            # update the label column in the tree view
+            self.app.tree.set(self.app.items[item].tree_master, "label", label)
 
     def show_menu(self, event, item=None):
         # update the item to be right-clicked
@@ -120,7 +119,11 @@ class RightClickOnImage(RightClickMenu):
         self.app.canvas.tag_unbind(item, "<Button-1>")
         # on the left top corner, display 'locked'
         x1, y1, x2, y2 = self.app.canvas.bbox(item)
-        self.app.canvas.create_text(x1, y1, text=f"Locked", anchor="nw", tags=f"Locked{item}")
+        # create a text on the canvas
+        text = tk.Text(self.app.canvas, width=6, height=1)
+        text.insert(tk.END, "Locked")
+        text.config(state="disabled")
+        self.app.canvas.create_window(x1, y1, window=text, tags=f"Locked{item}")
         self.app.items[item].lock()
 
     def unlock_image(self, item):

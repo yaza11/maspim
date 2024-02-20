@@ -25,6 +25,9 @@ class MainApplication(tk.Tk):
         self.items = {}
         self.create_canvas()
 
+        self.scale_line = []
+        self.sediment_start_line = None
+
         self.create_tp_tree()
 
         self.cm_per_pixel = None
@@ -62,14 +65,16 @@ class MainApplication(tk.Tk):
         # create a treeview to display teaching points
         self.tree_frame = tk.Frame(self)
         self.tree_frame.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree = ttk.Treeview(self.tree_frame, columns=('n', 'x', 'y', 'd'))
+        self.tree = ttk.Treeview(self.tree_frame,
+                                 columns=('label', 'x', 'y', 'd'),
+                                 selectmode='browse')
         self.tree.heading('#0', text='img')
-        self.tree.heading('n', text='label')
+        self.tree.heading('label', text='label')
         self.tree.heading('x', text='X')
         self.tree.heading('y', text='Y')
         self.tree.heading('d', text='d')
         self.tree.column('#0', width=100)
-        self.tree.column('n', width=50)
+        self.tree.column('label', width=50)
         self.tree.column('x', width=50)
         self.tree.column('y', width=50)
         self.tree.column('d', width=50)
@@ -147,9 +152,8 @@ class MainApplication(tk.Tk):
         vl.create_on_canvas(self)
 
         # calculate the pixel distance between this ruler and sediment_start
-        sediment_start = self.canvas.find_withtag("sediment_start_line")
-        if sediment_start and self.cm_per_pixel is not None:
-            pixel_distance = self.canvas.coords(sediment_start[0])[0] - self.canvas.canvasx(event.x)
+        if self.sediment_start_line is not None and self.cm_per_pixel is not None:
+            pixel_distance = self.canvas.coords(self.sediment_start_line)[0] - self.canvas.canvasx(event.x)
             real_distance = pixel_distance * self.cm_per_pixel
             vl.add_depth_text(self, f"{abs(real_distance):.2f}")
 
@@ -231,8 +235,15 @@ class MainApplication(tk.Tk):
     def save(self):
         """Save the current state of the canvas"""
         # get the file path to save the state
-        file_path = filedialog.asksaveasfilename()
+        file_path = filedialog.asksaveasfilename(defaultextension=".json")
         data_to_save = {"cm_per_pixel": self.cm_per_pixel, "items": []}
+        try:
+            data_to_save["scale_line0"] = self.scale_line[0]
+            data_to_save["scale_line1"] = self.scale_line[1]
+        except IndexError:
+            pass
+        data_to_save["sediment_start_line"] = self.sediment_start_line
+
         # save the treeview in json format
         for k, v in self.items.items():
             data_to_save["items"].append(v.to_json())
@@ -241,10 +252,16 @@ class MainApplication(tk.Tk):
 
     def load(self):
         """Load the state of the canvas"""
-        file_path = filedialog.askopenfilename()
+        file_path = filedialog.askopenfilename(defaultextension=".json")
         with open(file_path, "r") as f:
             data = json.load(f)
             self.cm_per_pixel = data["cm_per_pixel"]
+            try:
+                self.scale_line.append(data["scale_line0"])
+                self.scale_line.append(data["scale_line1"])
+            except KeyError:
+                pass
+            self.sediment_start_line = data["sediment_start_line"]
 
             for item in data["items"]:
                 if item["type"] == "LoadedImage":
@@ -267,6 +284,15 @@ class MainApplication(tk.Tk):
                                              item.image_coords[0],
                                              item.image_coords[1],
                                              item.depth))
+
+    def export_tps(self, file_path):
+        """Export the teaching points to a json file"""
+        data_to_save = "img;label;x;y;d\n"
+        for k, v in self.items.items():
+            if v.type == "TeachingPoint":
+                data_to_save += f"{v.linked_im};{self.items[v.linked_im].label};{v.image_coords[0]};{v.image_coords[1]};{v.depth}\n"
+        with open(file_path, "w") as f:
+            f.write(data_to_save)
 
     def main(self):
         self.mainloop()

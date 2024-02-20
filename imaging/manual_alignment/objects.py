@@ -9,13 +9,18 @@ class LoadedImage:
         self.orig_img = None
         self.thumbnail = None
         self.tk_img = None
-        self.tag = None
+        self._tag = None
         self.rotation = 0
         self.locked = False
         self.position = (0, 0)
+        self.label = None
         self.thumbnail_size = (500, 500)
         self.tree_master = None
         self.type = "LoadedImage"
+
+    @property
+    def tag(self):
+        return self._tag
 
     def __str__(self):
         return self.path
@@ -27,7 +32,7 @@ class LoadedImage:
     def from_path(cls, path):
         self = cls()
         self.path = path
-        self.tag = 'im_' + os.path.basename(path)
+        self._tag = 'im_' + os.path.basename(path)
         self.orig_img = Image.open(path)
         self.thumbnail = self.orig_img.copy()
         self.thumbnail.thumbnail(self.thumbnail_size)
@@ -97,7 +102,7 @@ class LoadedImage:
     def from_json(cls, json_data, app):
         self = cls()
         self.path = json_data['path']
-        self.tag = json_data['label']
+        self._tag = json_data['label']
         self.rotation = json_data['rotation']
         self.locked = json_data['locked']
         self.thumbnail_size = json_data['thumbnail_size']
@@ -128,8 +133,12 @@ class TeachingPoint:
         self.path_to_image = None
         self.image_coords = None
         self.depth = None
-        self.tag = f"tp_{position[0]}"
+        self._tag = f"tp_{position[0]}"
         self.type = "TeachingPoint"
+
+    @property
+    def tag(self):
+        return self._tag
 
     @property
     def x(self):
@@ -169,7 +178,7 @@ class TeachingPoint:
     @classmethod
     def from_json(cls, json_data, app):
         self = cls(json_data['position'])
-        self.tag = json_data['tag']
+        self._tag = json_data['tag']
         self.path_to_image = json_data['path_to_image']
         self.image_coords = json_data['image_coords']
         self.depth = json_data['depth']
@@ -200,8 +209,13 @@ class VerticalLine:
         self.tree_master = None
         self.depth = None
         self.path_to_image = None
-        self.tag = f"vl_{position[0]}"
+        self.label = None
+        self._tag = f"vl_{position[0]}"
         self.type = "VerticalLine"
+
+    @property
+    def tag(self):
+        return self._tag
 
     def create_on_canvas(self, app):
         app.canvas.create_line(
@@ -218,10 +232,13 @@ class VerticalLine:
 
     def add_depth_text(self, app, depth):
         self.depth = depth
-        app.canvas.create_text(
+        text = tk.Text(app.canvas, height=1, width=8)
+        text.insert(tk.END, f"{depth}cm")
+        text.config(state=tk.DISABLED)
+        app.canvas.create_window(
             self.position[0],
             10,
-            text=f"{depth} cm",
+            window=text,
             anchor="nw",
             tags=self.tag
         )
@@ -236,8 +253,8 @@ class VerticalLine:
 
     @property
     def color(self):
-        if self.tag in self.color_map:
-            return self.color_map[self.tag]
+        if self.label in self.color_map:
+            return self.color_map[self.label]
         else:
             return "red"
 
@@ -256,7 +273,8 @@ class VerticalLine:
     @classmethod
     def from_json(cls, json_data, app):
         self = cls(json_data['position'])
-        self.tag = json_data['tag']
+        self._tag = json_data['tag']
+        self.label = json_data['label']
         self.path_to_image = json_data['path_to_image']
         self.depth = json_data['depth']
         self.create_on_canvas(app)
@@ -268,7 +286,8 @@ class VerticalLine:
             "tag": self.tag,
             "position": self.position,
             "path_to_image": self.path_to_image,
-            "depth": self.depth
+            "depth": self.depth,
+            "label": self.label
         }
 
 

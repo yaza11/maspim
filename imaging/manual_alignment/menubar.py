@@ -36,6 +36,12 @@ class MenuBar:
         # Add 'Cm/Px' to the calc menu
         self.calc_menu.add_command(label="cm/Px", command=self.calc_cm_per_px)
 
+        # Add 'Export' menu
+        self.export_menu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="Export", menu=self.export_menu)
+        # Add 'Export TPs' to the export menu
+        self.export_menu.add_command(label="Export TPs", command=self.export_tps)
+
     def add_images(self):
         """Load the images from the file paths"""
         file_paths = filedialog.askopenfilenames()
@@ -61,19 +67,29 @@ class MenuBar:
 
     def calc_cm_per_px(self):
         # get the two vertical scale lines
-        scale_lines = self.app.canvas.find_withtag("scale_line")
-        if len(scale_lines) < 2:
+        if len(self.app.scale_line) < 2:
             raise ValueError("You need to draw two vertical lines to calculate the scale")
-        elif len(scale_lines) > 2:
+        elif len(self.app.scale_line) > 2:
             raise ValueError("You have drawn more than two vertical lines")
         else:
             # calculate the distance between the two scale lines
             pixel_distance = abs(
-                self.app.canvas.coords(scale_lines[1])[0] - self.app.canvas.coords(scale_lines[0])[0])
+                self.app.canvas.coords(self.app.scale_line[1])[0] - self.app.canvas.coords(self.app.scale_line[0])[0])
             # calculate the distance in real world
             real_distance = simpledialog.askfloat("Real Distance", "Real Distance (cm):")
             # calculate the scale
             self.app.cm_per_pixel = real_distance / pixel_distance
             # create a text on the canvas to display the scale
-            self.app.canvas.create_text(10, 10, text=f"1cm = {pixel_distance / real_distance} pixel", anchor="nw",
-                                        tags="scale")
+            text = tk.Text(self.app.canvas, height=1, width=20)
+            text.insert(tk.END, f"1cm = {pixel_distance / real_distance} pixel")
+            text.config(state="disabled")
+            self.app.canvas.create_window(100, 100, window=text, tags="scale")
+
+    def export_tps(self):
+        """Export the teaching points to a json file"""
+        file_path = filedialog.asksaveasfilename(defaultextension=".json")
+        if file_path:
+            self.app.export_tps(file_path)
+            print(f"Teaching points have been exported to {file_path}")
+        else:
+            print("No file path is given")
