@@ -98,7 +98,9 @@ class LoadedImage:
             "locked": self.locked,
             "thumbnail_size": self.thumbnail_size,
             "position": self.position,
-            "tree_master": self.tree_master
+            "tree_master": self.tree_master,
+            "msi_rect": self.msi_rect,
+            "px_rect": self.px_rect
         }
 
     @classmethod
@@ -107,6 +109,8 @@ class LoadedImage:
         self.path = json_data['path']
         self._tag = json_data['label']
         self.rotation = json_data['rotation']
+        self.px_rect = json_data['px_rect']
+        self.msi_rect = json_data['msi_rect']
         self.locked = json_data['locked']
         self.thumbnail_size = json_data['thumbnail_size']
         self.position = json_data['position']
@@ -139,18 +143,6 @@ class TeachingPoint:
         self._tag = f"tp_{position[0]}_{position[1]}"
         self.msi_coords = None
         self.type = "TeachingPoint"
-
-    def _get_msi_coords(self, app, raster_size):
-        """get the MSI coordinates of the teaching point, given the raster size"""
-
-        # get the distance to the origin of the image
-        x = abs(self.position[0] - app.items[self.linked_im].position[0])
-        y = abs(self.position[1] - app.items[self.linked_im].position[1])
-
-        # calculate the MSI coordinates
-        msi_x = app.cm_per_pixel * x * 10000 / raster_size
-        msi_y = app.cm_per_pixel * y * 10000 / raster_size
-        return msi_x, msi_y
 
     def get_msi_coords_from_px(self, msi_rect, px_rect):
         print(f"msi_rect: {msi_rect}")
@@ -206,6 +198,7 @@ class TeachingPoint:
         self = cls(json_data['position'])
         self._tag = json_data['tag']
         self.path_to_image = json_data['path_to_image']
+        self.msi_coords = json_data['msi_coords']
         self.image_coords = json_data['image_coords']
         self.depth = json_data['depth']
         self.linked_im = json_data['linked_im']
@@ -220,7 +213,8 @@ class TeachingPoint:
             "path_to_image": self.path_to_image,
             "image_coords": self.image_coords,
             "depth": self.depth,
-            'linked_im': self.linked_im
+            'linked_im': self.linked_im,
+            'msi_coords': self.msi_coords
         }
 
 

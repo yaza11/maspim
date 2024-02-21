@@ -1,5 +1,7 @@
 import re
+
 import numpy as np
+
 
 def get_msi_rect_from_imaginginfo(xml_file):
     with open(xml_file, 'r') as f:
@@ -44,5 +46,18 @@ def get_px_rect_from_mis(mis_file):
 
 
 if __name__ == "__main__":
-    pass
+    # test the function
+    mis_file = '/Users/weimin/Downloads/MV0811-14TC_0-5_Q1_1320_w40_75DR.d.mis'
+    xml_file = '/Users/weimin/Downloads/ImagingInfo.xml'
+    im_name = get_image_file_from_mis(mis_file)
+    px_rect = get_px_rect_from_mis(mis_file)
+    msi_rect = get_msi_rect_from_imaginginfo(xml_file)
+    # store them in a sqlite database
+    import sqlite3
+    conn = sqlite3.connect('./data/test.db')
+    c = conn.cursor()
+    c.execute('CREATE TABLE IF NOT EXISTS mis (im_name TEXT, px_rect TEXT, msi_rect TEXT)')
+    c.execute('INSERT INTO mis VALUES (?, ?, ?)', (im_name, str(px_rect), str(msi_rect)))
+    conn.commit()
+    conn.close()
 

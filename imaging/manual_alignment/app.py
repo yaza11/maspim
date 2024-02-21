@@ -1,9 +1,7 @@
 import json
-import os.path
 import tkinter as tk
 from tkinter import ttk
-from PIL import Image, ImageTk
-from tkinter import filedialog, simpledialog
+from tkinter import filedialog
 from .objects import LoadedImage, TeachingPoint, VerticalLine
 from .menubar import MenuBar
 from .rclick import RightClickOnLine, RightClickOnImage, RightClickOnTeachingPoint
@@ -271,6 +269,8 @@ class MainApplication(tk.Tk):
         # get the file path to save the state
         file_path = filedialog.asksaveasfilename(defaultextension=".json")
         data_to_save = {"cm_per_pixel": self.cm_per_pixel, "items": []}
+
+
         try:
             data_to_save["scale_line0"] = self.scale_line[0]
             data_to_save["scale_line1"] = self.scale_line[1]

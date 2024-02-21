@@ -73,9 +73,6 @@ class RightClickOnImage(RightClickMenu):
         chg_size.add_command(label="x2", command=lambda: self.enlarge_image(self.clicked_item, 2))
         self.menu.add_cascade(label="Resize", menu=chg_size)
 
-        self.menu.add_command(label="Measure cm/Px",
-                              command=lambda: self.calc_cm_per_px_from_msi(self.clicked_item))
-
         self.menu.add_command(label="Unlock",
                               command=lambda: self.unlock_image(self.clicked_item))
 
@@ -116,28 +113,6 @@ class RightClickOnImage(RightClickMenu):
         """enlarge/shrink the image"""
         self.app.items[item].enlarge(scale_factor)
         self.app.canvas.itemconfig(item, image=self.app.items[item].tk_img)
-
-    def calc_cm_per_px_from_msi(self, item):
-        # make sure the item is an image
-        assert self.app.items[item].type=="LoadedImage", "You need to select an image"
-        # ask for the raster size, the xmax
-        raster_size = simpledialog.askinteger("Raster Size", "Raster Size (um):")
-        xmax = simpledialog.askinteger("Xmax", "Xmax (R00X?Y?):")
-        # get the width of the image item on canvas
-        width = abs(self.app.canvas.bbox(item)[2] - self.app.canvas.bbox(item)[0])
-        # calculate the cm per pixel
-        self.app.cm_per_pixel = raster_size * xmax / (10000*width)
-        # if the cm_per_pixel is already calculated, delete the text on the canvas
-        try:
-            self.app.canvas.delete("cm_per_px_text")
-        except tk.TclError:
-            pass
-        # create a text on the canvas to display the scale
-        text = tk.Text(self.app.canvas, height=1, width=20)
-        text.insert(tk.END, f"{round(self.app.cm_per_pixel,1)} cm/pixel")
-        text.config(state="disabled")
-        self.app.canvas.create_window(100, 100, window=text, tags="cm_per_px_text")
-
 
     def lock_image(self, item):
         """lock the image"""
