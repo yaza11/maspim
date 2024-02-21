@@ -1,6 +1,7 @@
 import os
 import tkinter as tk
 from PIL import Image, ImageTk
+Image.MAX_IMAGE_PIXELS = None
 
 
 class LoadedImage:
@@ -17,6 +18,8 @@ class LoadedImage:
         self.thumbnail_size = (500, 500)
         self.tree_master = None
         self.type = "LoadedImage"
+        self.msi_rect = None
+        self.px_rect = None
 
     @property
     def tag(self):
@@ -54,7 +57,7 @@ class LoadedImage:
             "",
             'end',
             text=self.tag,
-            values=("", "", "", "")
+            values=("", "", "", "", "", "")
         )
 
         # bind events to the image
@@ -116,7 +119,7 @@ class LoadedImage:
         self.create_im_on_canvas(app)
         return self
 
-    def __del__(self, app):
+    def rm(self, app):
         # remove the image from the canvas
         app.canvas.delete(self.tag)
         # remove the image from the tree
@@ -133,8 +136,31 @@ class TeachingPoint:
         self.path_to_image = None
         self.image_coords = None
         self.depth = None
-        self._tag = f"tp_{position[0]}"
+        self._tag = f"tp_{position[0]}_{position[1]}"
+        self.msi_coords = None
         self.type = "TeachingPoint"
+
+    def _get_msi_coords(self, app, raster_size):
+        """get the MSI coordinates of the teaching point, given the raster size"""
+
+        # get the distance to the origin of the image
+        x = abs(self.position[0] - app.items[self.linked_im].position[0])
+        y = abs(self.position[1] - app.items[self.linked_im].position[1])
+
+        # calculate the MSI coordinates
+        msi_x = app.cm_per_pixel * x * 10000 / raster_size
+        msi_y = app.cm_per_pixel * y * 10000 / raster_size
+        return msi_x, msi_y
+
+    def get_msi_coords_from_px(self, msi_rect, px_rect):
+        print(f"msi_rect: {msi_rect}")
+        print(f"px_rect: {px_rect}")
+        x_min, y_min, x_max, y_max = msi_rect
+        x_min_px, y_min_px, x_max_px, y_max_px = px_rect
+        msi_x = (self.image_coords[0] - x_min_px) / (x_max_px - x_min_px) * (x_max - x_min) + x_min
+        msi_y = (self.image_coords[1] - y_min_px) / (y_max_px - y_min_px) * (y_max - y_min) + y_min
+        self.msi_coords = (msi_x, msi_y)
+        return msi_x, msi_y
 
     @property
     def tag(self):
@@ -154,7 +180,7 @@ class TeachingPoint:
     def __repr__(self):
         return self.tag
 
-    def __del__(self, app):
+    def rm(self, app):
         # remove the teaching point from the canvas
         app.canvas.delete(self.tag)
         # remove the teaching point from the tree
@@ -264,7 +290,7 @@ class VerticalLine:
     def __repr__(self):
         return self.tag
 
-    def __del__(self, app):
+    def rm(self, app):
         # remove the teaching point from the canvas
         app.canvas.delete(self.tag)
         # remove from the items dictionary

@@ -54,7 +54,7 @@ class RightClickOnLine(RightClickMenu):
 
     def delete_line(self, item):
         """delete the vertical line"""
-        self.app.items[item].__del__(self.app)
+        self.app.items[item].rm(self.app)
 
 
 class RightClickOnImage(RightClickMenu):
@@ -73,13 +73,16 @@ class RightClickOnImage(RightClickMenu):
         chg_size.add_command(label="x2", command=lambda: self.enlarge_image(self.clicked_item, 2))
         self.menu.add_cascade(label="Resize", menu=chg_size)
 
+        self.menu.add_command(label="Measure cm/Px",
+                              command=lambda: self.calc_cm_per_px_from_msi(self.clicked_item))
+
         self.menu.add_command(label="Unlock",
                               command=lambda: self.unlock_image(self.clicked_item))
 
         self.menu.add_command(label="Lock",
                               command=lambda: self.lock_image(self.clicked_item))
         self.menu.add_command(label="Delete",
-                              command=lambda: self.app.items[self.clicked_item].__del__(self.app))
+                              command=lambda: self.app.items[self.clicked_item].rm(self.app))
 
     def add_label(self, item):
         """ add label to the item, unlike tag, label is not unique and can be changed and easy to understand"""
@@ -114,6 +117,28 @@ class RightClickOnImage(RightClickMenu):
         self.app.items[item].enlarge(scale_factor)
         self.app.canvas.itemconfig(item, image=self.app.items[item].tk_img)
 
+    def calc_cm_per_px_from_msi(self, item):
+        # make sure the item is an image
+        assert self.app.items[item].type=="LoadedImage", "You need to select an image"
+        # ask for the raster size, the xmax
+        raster_size = simpledialog.askinteger("Raster Size", "Raster Size (um):")
+        xmax = simpledialog.askinteger("Xmax", "Xmax (R00X?Y?):")
+        # get the width of the image item on canvas
+        width = abs(self.app.canvas.bbox(item)[2] - self.app.canvas.bbox(item)[0])
+        # calculate the cm per pixel
+        self.app.cm_per_pixel = raster_size * xmax / (10000*width)
+        # if the cm_per_pixel is already calculated, delete the text on the canvas
+        try:
+            self.app.canvas.delete("cm_per_px_text")
+        except tk.TclError:
+            pass
+        # create a text on the canvas to display the scale
+        text = tk.Text(self.app.canvas, height=1, width=20)
+        text.insert(tk.END, f"{round(self.app.cm_per_pixel,1)} cm/pixel")
+        text.config(state="disabled")
+        self.app.canvas.create_window(100, 100, window=text, tags="cm_per_px_text")
+
+
     def lock_image(self, item):
         """lock the image"""
         self.app.canvas.tag_unbind(item, "<Button-1>")
@@ -128,7 +153,9 @@ class RightClickOnImage(RightClickMenu):
 
     def unlock_image(self, item):
         """unlock the image"""
-        self.app.canvas.tag_bind(item, "<Button-1>", self.app.on_drag_start)
+        self.app.canvas.tag_bind(item,
+                                 "<Button-1>",
+                                 lambda event: self.app.on_drag_start(item, event))
         self.app.canvas.delete(f"Locked{item}")
         self.app.items[item].unlock()
 
@@ -148,4 +175,4 @@ class RightClickOnTeachingPoint(RightClickMenu):
         self.menu.post(event.x_root, event.y_root)
 
     def delete_teaching_point(self, item):
-        self.app.items[item].__del__(self.app)
+        self.app.items[item].rm(self.app)

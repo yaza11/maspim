@@ -4,9 +4,9 @@ import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
 from tkinter import filedialog, simpledialog
-from objects import LoadedImage, TeachingPoint, VerticalLine
-from imaging.manual_alignment.menubar import MenuBar
-from imaging.manual_alignment.rclick import RightClickOnLine, RightClickOnImage, RightClickOnTeachingPoint
+from .objects import LoadedImage, TeachingPoint, VerticalLine
+from .menubar import MenuBar
+from .rclick import RightClickOnLine, RightClickOnImage, RightClickOnTeachingPoint
 
 
 class MainApplication(tk.Tk):
@@ -66,17 +66,21 @@ class MainApplication(tk.Tk):
         self.tree_frame = tk.Frame(self)
         self.tree_frame.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree = ttk.Treeview(self.tree_frame,
-                                 columns=('label', 'x', 'y', 'd'),
+                                 columns=('label', 'px', 'py', 'mx', 'my', 'd'),
                                  selectmode='browse')
         self.tree.heading('#0', text='img')
         self.tree.heading('label', text='label')
-        self.tree.heading('x', text='X')
-        self.tree.heading('y', text='Y')
+        self.tree.heading('px', text='pX')
+        self.tree.heading('py', text='pY')
+        self.tree.heading('mx', text='mX')
+        self.tree.heading('my', text='mY')
         self.tree.heading('d', text='d')
         self.tree.column('#0', width=100)
         self.tree.column('label', width=50)
-        self.tree.column('x', width=50)
-        self.tree.column('y', width=50)
+        self.tree.column('px', width=50)
+        self.tree.column('py', width=50)
+        self.tree.column('mx', width=50)
+        self.tree.column('my', width=50)
         self.tree.column('d', width=50)
         self.tree.pack(side=tk.LEFT, fill=tk.Y)
 
@@ -201,6 +205,11 @@ class MainApplication(tk.Tk):
                     tp.linked_im = v.tag
                     tp.image_coords = (image_x, image_y)
 
+                    msi_x, msi_y = None, None
+                    # try adding the msi coordinates to the teaching point
+                    if v.msi_rect is not None and v.px_rect is not None:
+                        msi_x, msi_y = tp.get_msi_coords_from_px(v.msi_rect, v.px_rect)
+
                     # record the teaching point in the treeview, under the image name parent
                     tp.linked_tree_item = self.tree.insert(v.tree_master,
                                                            'end',
@@ -208,7 +217,7 @@ class MainApplication(tk.Tk):
                                                            values=(tp.tag,
                                                                    round(image_x, 0),
                                                                    round(image_y, 0),
-                                                                   tp.depth))
+                                                                   msi_x,msi_y, tp.depth))
                     break
 
     def bind_events_to_loaded_images(self, loaded_image):
@@ -231,6 +240,31 @@ class MainApplication(tk.Tk):
                              lambda e, item=f"{vertical_line.tag}": self.right_click_on_line.show_menu(e, item))
         # bind shift-left-click to add a teaching point
         self.canvas.tag_bind(f"{vertical_line.tag}", "<Shift-Button-1>", self.add_teaching_point)
+
+    def add_metadata(self):
+        """Add metadata to the app"""
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            # connect to the sqlite database
+            import sqlite3
+            conn = sqlite3.connect(file_path)
+            c = conn.cursor()
+            # get the image name, px_rect, and msi_rect
+            c.execute('SELECT * FROM mis')
+            data = c.fetchall()
+            for row in data:
+                im_name, px_rect, msi_rect = row
+                im_name = 'im_' + im_name
+                # attach the metadata to the corresponding image
+                try:
+                    self.items[im_name].px_rect = eval(px_rect)
+                    self.items[im_name].msi_rect = eval(msi_rect)
+                    print(f"px_rect: {self.items[im_name].px_rect}, msi_rect: {self.items[im_name].msi_rect}")
+                except KeyError:
+                    pass
+            conn.close()
+        else:
+            print("No file path is given")
 
     def save(self):
         """Save the current state of the canvas"""
@@ -277,20 +311,21 @@ class MainApplication(tk.Tk):
             # restore the treeview
             for item in self.items.values():
                 if item.type == "TeachingPoint":
-                    self.tree.insert(self.items[item.linked_im].tree_master,
-                                     'end',
-                                     text="",
-                                     values=(item.tag,
-                                             item.image_coords[0],
-                                             item.image_coords[1],
-                                             item.depth))
+                    item.linked_tree_item = self.tree.insert(self.items[item.linked_im].tree_master,
+                                                             'end',
+                                                             text="",
+                                                             values=(item.tag,
+                                                                     item.image_coords[0],
+                                                                     item.image_coords[1],
+                                                                     "", "",
+                                                                     item.depth))
 
     def export_tps(self, file_path):
         """Export the teaching points to a json file"""
-        data_to_save = "img;label;x;y;d\n"
+        data_to_save = "img;label;px;py;mx;my;d\n"
         for k, v in self.items.items():
             if v.type == "TeachingPoint":
-                data_to_save += f"{v.linked_im};{self.items[v.linked_im].label};{v.image_coords[0]};{v.image_coords[1]};{v.depth}\n"
+                data_to_save += f"{v.linked_im};{self.items[v.linked_im].label};{v.image_coords[0]};{v.image_coords[1]};{v.msi_coords[0]};{v.msi_coords[1]};{v.depth}\n"
         with open(file_path, "w") as f:
             f.write(data_to_save)
 

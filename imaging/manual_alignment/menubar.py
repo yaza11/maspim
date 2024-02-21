@@ -2,7 +2,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, simpledialog
 
-from imaging.manual_alignment.objects import LoadedImage
+from .objects import LoadedImage
 
 
 class MenuBar:
@@ -21,6 +21,8 @@ class MenuBar:
         self.file_menu.add_command(label="Load workspace", command=self.app.load)
         # Add 'Open' to the file menu
         self.file_menu.add_command(label="Add images", command=self.add_images)
+        # Add 'Add metadata' to the file menu
+        self.file_menu.add_command(label="Add metadata", command=self.app.add_metadata)
         # Add 'Exit' to the file menu
         self.file_menu.add_command(label="Quit", command=self.quit)
 
@@ -34,7 +36,9 @@ class MenuBar:
         self.calc_menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Calc", menu=self.calc_menu)
         # Add 'Cm/Px' to the calc menu
-        self.calc_menu.add_command(label="cm/Px", command=self.calc_cm_per_px)
+        self.calc_menu.add_command(label="cm/Px", command=self.calc_cm_per_px, state="disabled")
+        # Add 'MSI Coords' to the calc menu
+        self.calc_menu.add_command(label="MSI Coords", command=self.calc_msi_coords)
 
         # Add 'Export' menu
         self.export_menu = tk.Menu(self.menubar, tearoff=0)
@@ -47,8 +51,11 @@ class MenuBar:
         file_paths = filedialog.askopenfilenames()
         for file_path in file_paths:
             for k, v in self.app.items.items():
-                if v.path == file_path:
-                    raise ValueError(f"{file_path} has already been loaded")
+                try:
+                    if v.path == file_path:
+                        raise ValueError(f"{file_path} has already been loaded")
+                except AttributeError:
+                    pass
             loaded_image = LoadedImage.from_path(file_path)
             loaded_image.create_im_on_canvas(self.app)
             self.app.items[loaded_image.tag] = loaded_image
@@ -83,7 +90,30 @@ class MenuBar:
             text = tk.Text(self.app.canvas, height=1, width=20)
             text.insert(tk.END, f"1cm = {pixel_distance / real_distance} pixel")
             text.config(state="disabled")
-            self.app.canvas.create_window(100, 100, window=text, tags="scale")
+            self.app.canvas.create_window(100, 100, window=text, tags="cm_per_px_text")
+
+    # def calc_msi_coords(self):
+    #     """calculate the MSI coordinates for all teaching points using the cm_per_pixel attribute"""
+    #     # ask for the raster size
+    #     assert self.app.cm_per_pixel is not None, "You need to calculate the cm per pixel first"
+    #     raster_size = simpledialog.askinteger("Raster Size", "Raster Size (um):")
+    #     for k, v in self.app.items.items():
+    #         if v.type == "TeachingPoint":
+    #             v.msi_coords = v.get_msi_coords(self.app, raster_size)
+    #             # update the tree view, the mx and my columns, with label as v.tag
+    #             self.app.tree.set(v.linked_tree_item, "mx", v.msi_coords[0])
+    #             self.app.tree.set(v.linked_tree_item, "my", v.msi_coords[1])
+
+    def calc_msi_coords(self):
+        """calculate the MSI coordinates for all teaching points using the cm_per_pixel attribute"""
+        for k, v in self.app.items.items():
+            if v.type == "TeachingPoint":
+                print(self.app.items[v.linked_im].msi_rect)
+                if self.app.items[v.linked_im].msi_rect is not None and self.app.items[v.linked_im].px_rect is not None:
+                    v.get_msi_coords_from_px(self.app.items[v.linked_im].msi_rect, self.app.items[v.linked_im].px_rect)
+                    # update the tree view, the mx and my columns, with label as v.tag
+                    self.app.tree.set(v.linked_tree_item, "mx", v.msi_coords[0])
+                    self.app.tree.set(v.linked_tree_item, "my", v.msi_coords[1])
 
     def export_tps(self):
         """Export the teaching points to a json file"""
