@@ -1,7 +1,7 @@
 """ crawler for metadata """
 import os
 import tqdm
-
+import shutil
 # create a namedtuple for the metadata
 from collections import namedtuple
 
@@ -66,12 +66,7 @@ class MetadataCrawler:
             os.makedirs(target_dir)
         for k, v in tqdm.tqdm(self.metadata.items(), desc="Copying msi images"):
             # copy the msi image to the target directory
-            # if it's Windows, use copy
-            if os.name == "nt":
-                import shutil
-                os.system(f"shutil.copy({v.msi_img_file_path} {os.path.join(target_dir, v.msi_img_file_name)})")
-            else:
-                os.system(f"cp {v.msi_img_file_path} {os.path.join(target_dir, v.msi_img_file_name)}")
+            shutil.copy(v.msi_img_file_path, os.path.join(target_dir, v.msi_img_file_name))
 
 
 if __name__ == "__main__":
