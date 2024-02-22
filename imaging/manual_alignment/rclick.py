@@ -1,6 +1,9 @@
 """implement right click functionality for the application"""
+import logging
 import tkinter as tk
 from tkinter import simpledialog
+
+import numpy as np
 
 
 class RightClickMenu:
@@ -50,7 +53,7 @@ class RightClickOnLine(RightClickMenu):
         self.app.canvas.itemconfig(item, fill="green")
         # label the line with 'sediment_start'
         self.app.items[item].label = "sediment_start_line"
-        self.app.sediment_start_line = item
+        self.app.sediment_start = item
 
     def delete_line(self, item):
         """delete the vertical line"""
@@ -140,14 +143,20 @@ class RightClickOnTeachingPoint(RightClickMenu):
 
     def _add_menu_item(self):
         self.menu.add_command(label="Delete",
-                              command=lambda: self.delete_teaching_point(self.clicked_item))
+                              command=lambda: self.delete_teaching_point(self.clicked_event, self.clicked_item))
 
     def show_menu(self, event, item=None):
+        logging.debug(f"Teaching point {item} is right-clicked, the coordinates are {self.app.canvas.coords(item)}")
         # update the item to be right-clicked
         self.clicked_item = item
         self.clicked_event = event
         # show the menu
         self.menu.post(event.x_root, event.y_root)
 
-    def delete_teaching_point(self, item):
-        self.app.items[item].rm(self.app)
+    def delete_teaching_point(self, event, item):
+        """delete the teaching point"""
+        # find the clicked image
+        clicked_image = self.app.find_clicked_image(event)
+        self.app.items[clicked_image.tag].teaching_points.pop(item)
+        self.app.canvas.delete(item)
+        logging.debug(f"Teaching point {item} is deleted")

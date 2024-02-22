@@ -1,78 +1,69 @@
+import logging
 import os
 import tkinter as tk
 from PIL import Image, ImageTk
+
 Image.MAX_IMAGE_PIXELS = None
 
 
 class LoadedImage:
+    """A superclass for the loaded images"""
+
     def __init__(self):
-        self.path = None
-        self.orig_img = None
+        self.img_path = None
+        self.img = None
         self.thumbnail = None
+        self.thumbnail_size = (500, 500)  # the size of the thumbnail on the canvas
         self.tk_img = None
         self._tag = None
-        self.rotation = 0
         self.locked = False
-        self.position = (0, 0)
-        self.label = None
-        self.thumbnail_size = (500, 500)
-        self.tree_master = None
-        self.type = "LoadedImage"
-        self.img_type = None
-        self.msi_rect = None
-        self.px_rect = None
+        self.origin = (0, 0)  # the origin of the image on the canvas
+
+    @property
+    def x(self):
+        return self.origin[0]
+
+    @property
+    def y(self):
+        return self.origin[1]
 
     @property
     def tag(self):
         return self._tag
 
     def __str__(self):
-        return self.path
+        return self.img_path
 
     def __repr__(self):
-        return self.path
+        return self.img_path
 
     @classmethod
-    def from_path(cls, path):
+    def from_path(cls, img_path):
         self = cls()
-        self.path = path
-        self._tag = 'im_' + os.path.basename(path)
-        self.orig_img = Image.open(path)
-        self.thumbnail = self.orig_img.copy()
+        self.img_path = img_path
+        self._tag = os.path.basename(img_path)
+        self.img = Image.open(img_path)
+        self.thumbnail = self.img.copy()
         self.thumbnail.thumbnail(self.thumbnail_size)
         self.tk_img = ImageTk.PhotoImage(self.thumbnail)
-        self.tree_master = None
         return self
 
     def create_im_on_canvas(self, app):
         # create the image on the canvas
         app.canvas.create_image(
-            self.position[0],
-            self.position[1],
+            self.origin[0],
+            self.origin[1],
             anchor="nw",
             image=self.tk_img,
             tags=f"{self.tag}"
         )
-        # insert the tag into the tree
-        self.tree_master = app.tree.insert(
-            "",
-            'end',
-            text=self.tag,
-            values=("", "", "", "", "", "")
-        )
-
         # bind events to the image
         app.bind_events_to_loaded_images(self)
 
     def resize(self, size):
         self.thumbnail_size = size
-        self.thumbnail = self.orig_img.copy()
+        self.thumbnail = self.img.copy()
         self.thumbnail.thumbnail(size)
-        self.tk_img = ImageTk.PhotoImage(self.thumbnail)
-
-    def rotate(self):
-        self.rotation += 90
-        self.thumbnail = self.thumbnail.rotate(90, expand=True)
         self.tk_img = ImageTk.PhotoImage(self.thumbnail)
 
     def enlarge(self, scale_factor):
@@ -80,7 +71,7 @@ class LoadedImage:
             self.thumbnail.width * scale_factor,
             self.thumbnail.height * scale_factor
         )
-        self.thumbnail = self.orig_img.copy()
+        self.thumbnail = self.img.copy()
         self.thumbnail.thumbnail(self.thumbnail_size)
         self.tk_img = ImageTk.PhotoImage(self.thumbnail)
 
@@ -91,132 +82,173 @@ class LoadedImage:
         self.locked = False
 
     def to_json(self):
-        return {
-            "type": "LoadedImage",
-            "label": self.tag,
-            "path": self.path,
-            "rotation": self.rotation,
-            "locked": self.locked,
+        logging.debug(f"Saving {self.__class__.__name__} to json")
+        json_data = {
+            "type": self.__class__.__name__,
+            "img_path": self.img_path,
             "thumbnail_size": self.thumbnail_size,
-            "position": self.position,
-            "tree_master": self.tree_master,
-            "msi_rect": self.msi_rect,
-            "px_rect": self.px_rect
+            "origin": self.origin,
+            "locked": self.locked,
         }
+        return json_data
 
     @classmethod
     def from_json(cls, json_data, app):
         self = cls()
-        self.path = json_data['path']
-        self._tag = json_data['label']
-        self.rotation = json_data['rotation']
-        self.px_rect = json_data['px_rect']
-        self.msi_rect = json_data['msi_rect']
-        self.locked = json_data['locked']
+        self.img_path = json_data['img_path']
         self.thumbnail_size = json_data['thumbnail_size']
-        self.position = json_data['position']
-        self.orig_img = Image.open(self.path)
-        self.thumbnail = self.orig_img.copy()
+        self.origin = json_data['origin']
+        self.locked = json_data['locked']
+        self.img = Image.open(self.img_path)
+        self.thumbnail = self.img.copy()
         self.thumbnail.thumbnail(self.thumbnail_size)
-        self.thumbnail = self.thumbnail.rotate(self.rotation, expand=True)
         self.tk_img = ImageTk.PhotoImage(self.thumbnail)
-        self.tree_master = json_data['tree_master']
+        self._tag = os.path.basename(self.img_path)
         self.create_im_on_canvas(app)
+        return self
+
+    def rm(self, app):
+        pass
+
+
+def draw_teaching_points(x, y, app):
+    # mark the teaching point on the canvas
+    app.canvas.create_oval(
+        x - 5,
+        y - 5,
+        x + 5,
+        y + 5,
+        fill="red",
+        tags=f"tp_{int(x)}_{int(y)}"
+    )
+    # bind events to the teaching point
+    app.canvas.tag_bind(f"tp_{int(x)}_{int(y)}",
+                        "<Button-2>",
+                        lambda e: app.right_click_on_tp.show_menu(e, f"tp_{int(x)}_{int(y)}"))
+
+
+class TeachableImage(LoadedImage):
+    """A subclass of LoadedImage that holds the teachable images"""
+
+    def __init__(self):
+        super().__init__()
+        self.teaching_points = None  # a list of teaching points
+
+    def add_teaching_point(self, event, app):
+        canvas_x, canvas_y = app.canvas.canvasx(event.x), app.canvas.canvasy(event.y)
+        logging.debug(f"teaching point added canvas_x: {canvas_x}, canvas_y: {canvas_y}")
+        # draw the teaching point on the canvas
+        draw_teaching_points(canvas_x, canvas_y, app)
+        # try to find the approximate depth of the teaching point
+        if app.sediment_start is not None and app.cm_per_pixel is not None:
+            depth = abs(app.canvas.coords(app.sediment_start)[0] - canvas_x) * app.cm_per_pixel
+        else:
+            depth = None
+
+        original_width, original_height = self.img.size
+        scale_x = original_width / self.thumbnail.width
+        scale_y = original_height / self.thumbnail.height
+
+        # calculate the coordinates of the teaching point in the original image
+        img_x = (canvas_x - self.x) * scale_x
+        img_y = (canvas_y - self.y) * scale_y
+
+        if self.teaching_points is None:
+            self.teaching_points = {}
+        self.teaching_points[f"tp_{int(canvas_x)}_{int(canvas_y)}"] = (img_x, img_y, depth)
+
+    def to_json(self):
+        json_data = super().to_json()
+        json_data["teaching_points"] = self.teaching_points
+        return json_data
+
+    @classmethod
+    def from_json(cls, json_data, app):
+        self = super().from_json(json_data, app)
+        self.teaching_points = json_data['teaching_points']
+        logging.debug(f"teaching points: {self.teaching_points}")
+        # draw the teaching points on the canvas if they exist
+        if self.teaching_points is not None:
+            for _, tp in self.teaching_points.items():
+                img_x, img_y, _ = tp
+                x = img_x / (self.img.width / self.thumbnail.width) + self.x
+                y = img_y / (self.img.height / self.thumbnail.height) + self.y
+                draw_teaching_points(x, y, app)
+        return self
+
+
+class MsiImage(TeachableImage):
+    """A subclass of LoadedImage that holds the MSI image"""
+
+    def __init__(self):
+        super().__init__()
+        self.msi_rect = None  # the coordinates of the MSI image rectangle in R00X?Y? format
+        self.px_rect = None  # the coordinates of the MSI image rectangle in pixel
+        self.teaching_points_updated = False  # a flag to indicate if the teaching points have been updated
+
+    def update_tp_coords(self):
+        """ replace the coordinates of the teaching points with the MSI coordinates"""
+        assert self.teaching_points_updated is False, "The teaching points have already been updated"
+        assert self.msi_rect is not None and self.px_rect is not None, "You need to set the MSI and pixel rectangle first"
+        assert self.teaching_points is not None, "You need to add teaching points first"
+        logging.debug(f"msi_rect: {self.msi_rect}")
+        logging.debug(f"px_rect: {self.px_rect}")
+        x_min, y_min, x_max, y_max = self.msi_rect
+        x_min_px, y_min_px, x_max_px, y_max_px = self.px_rect
+        for k, v in self.teaching_points.items():
+            msi_x = (v[0] - x_min_px) / (x_max_px - x_min_px) * (x_max - x_min) + x_min
+            msi_y = (v[1] - y_min_px) / (y_max_px - y_min_px) * (y_max - y_min) + y_min
+            self.teaching_points[k] = (msi_x, msi_y, v[2])
+        self.teaching_points_updated = True
+
+    def to_json(self):
+        json_data = super().to_json()
+        json_data["msi_rect"] = self.msi_rect
+        json_data["px_rect"] = self.px_rect
+        json_data["teaching_points_updated"] = self.teaching_points_updated
+        return json_data
+
+    @classmethod
+    def from_json(cls, json_data, app):
+        self = super().from_json(json_data, app)
+        self.msi_rect = json_data['msi_rect']
+        self.px_rect = json_data['px_rect']
+        self.teaching_points_updated = json_data['teaching_points_updated']
         return self
 
     def rm(self, app):
         # remove the image from the canvas
         app.canvas.delete(self.tag)
-        # remove the image from the tree
-        app.tree.delete(self.tree_master)
         # remove from the items dictionary
         del app.items[self.tag]
 
 
-class TeachingPoint:
-    def __init__(self, position):
-        self.position = position
-        self.linked_tree_item = None
-        self.linked_im = None
-        self.path_to_image = None
-        self.image_coords = None
-        self.depth = None
-        self._tag = f"tp_{position[0]}_{position[1]}"
-        self.msi_coords = None
-        self.type = "TeachingPoint"
+class LinescanImage(LoadedImage):
+    """A subclass of LoadedImage that holds the linescan image"""
 
-    def get_msi_coords_from_px(self, msi_rect, px_rect):
-        print(f"msi_rect: {msi_rect}")
-        print(f"px_rect: {px_rect}")
-        x_min, y_min, x_max, y_max = msi_rect
-        x_min_px, y_min_px, x_max_px, y_max_px = px_rect
-        msi_x = (self.image_coords[0] - x_min_px) / (x_max_px - x_min_px) * (x_max - x_min) + x_min
-        msi_y = (self.image_coords[1] - y_min_px) / (y_max_px - y_min_px) * (y_max - y_min) + y_min
-        self.msi_coords = (msi_x, msi_y)
-        return msi_x, msi_y
-
-    @property
-    def tag(self):
-        return self._tag
-
-    @property
-    def x(self):
-        return self.position[0]
-
-    @property
-    def y(self):
-        return self.position[1]
-
-    def __str__(self):
-        return self.tag
-
-    def __repr__(self):
-        return self.tag
+    def __init__(self):
+        super().__init__()
 
     def rm(self, app):
-        # remove the teaching point from the canvas
+        # remove the image from the canvas
         app.canvas.delete(self.tag)
-        # remove the teaching point from the tree
-        app.tree.delete(self.linked_tree_item)
         # remove from the items dictionary
         del app.items[self.tag]
+        app.n_linescan -= 1
 
-    def create_on_canvas(self, app):
-        app.canvas.create_oval(
-            self.position[0] - 5,
-            self.position[1] - 5,
-            self.position[0] + 5,
-            self.position[1] + 5,
-            fill="red",
-            tags=self.tag
-        )
-        app.canvas.tag_bind(self.tag,
-                            "<Button-2>",
-                            lambda e: app.right_click_on_tp.show_menu(e, self.tag))
 
-    @classmethod
-    def from_json(cls, json_data, app):
-        self = cls(json_data['position'])
-        self._tag = json_data['tag']
-        self.path_to_image = json_data['path_to_image']
-        self.msi_coords = json_data['msi_coords']
-        self.image_coords = json_data['image_coords']
-        self.depth = json_data['depth']
-        self.linked_im = json_data['linked_im']
-        self.create_on_canvas(app)
-        return self
+class XrayImage(TeachableImage):
+    """A subclass of LoadedImage that holds the xray image"""
 
-    def to_json(self):
-        return {
-            "type": "TeachingPoint",
-            "tag": self.tag,
-            "position": self.position,
-            "path_to_image": self.path_to_image,
-            "image_coords": self.image_coords,
-            "depth": self.depth,
-            'linked_im': self.linked_im,
-            'msi_coords': self.msi_coords
-        }
+    def __init__(self):
+        super().__init__()
+
+    def rm(self, app):
+        # remove the image from the canvas
+        app.canvas.delete(self.tag)
+        # remove from the items dictionary
+        del app.items[self.tag]
+        app.n_xray -= 1
 
 
 class VerticalLine:
@@ -227,10 +259,7 @@ class VerticalLine:
 
     def __init__(self, position):
         self.position = position
-        self.tree_master = None
         self.depth = None
-        self.path_to_image = None
-        self.label = None
         self._tag = f"vl_{position[0]}"
         self.type = "VerticalLine"
 
@@ -274,8 +303,8 @@ class VerticalLine:
 
     @property
     def color(self):
-        if self.label in self.color_map:
-            return self.color_map[self.label]
+        if self.tag in self.color_map:
+            return self.color_map[self.tag]
         else:
             return "red"
 
@@ -295,8 +324,6 @@ class VerticalLine:
     def from_json(cls, json_data, app):
         self = cls(json_data['position'])
         self._tag = json_data['tag']
-        self.label = json_data['label']
-        self.path_to_image = json_data['path_to_image']
         self.depth = json_data['depth']
         self.create_on_canvas(app)
         return self
@@ -306,9 +333,7 @@ class VerticalLine:
             "type": "VerticalLine",
             "tag": self.tag,
             "position": self.position,
-            "path_to_image": self.path_to_image,
             "depth": self.depth,
-            "label": self.label
         }
 
 

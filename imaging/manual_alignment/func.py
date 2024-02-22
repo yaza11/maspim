@@ -15,6 +15,7 @@ def sort_points_clockwise(points):
     points = points[np.argsort(angles)]
     return points
 
+
 def get_msi_rect_from_imaginginfo(xml_file, return_spot_name=False):
     with open(xml_file, 'r') as f:
         xml = f.read()
@@ -115,11 +116,8 @@ class CorSolver:
             src_coordinate: the source coordinates that needs be transformed
         """
         dst_coordinate = src_coordinate.dot(self.transformation_matrix.T) + self.translation_vector
-        return np.round(dst_coordinate, 0)
-
-
+        return dst_coordinate
 
 
 if __name__ == "__main__":
     pass
-

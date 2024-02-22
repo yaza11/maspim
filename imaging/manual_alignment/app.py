@@ -1,22 +1,23 @@
 import json
+import re
 import tkinter as tk
-from tkinter import ttk
 from tkinter import filedialog
 
 import numpy as np
+import tqdm
 
-from .objects import LoadedImage, TeachingPoint, VerticalLine
-from .menubar import MenuBar
-from .rclick import RightClickOnLine, RightClickOnImage, RightClickOnTeachingPoint
-from .func import CorSolver, sort_points_clockwise
+from objects import LoadedImage, VerticalLine, MsiImage, XrayImage, LinescanImage
+from menubar import MenuBar
+from rclick import RightClickOnLine, RightClickOnImage, RightClickOnTeachingPoint
+from func import CorSolver, sort_points_clockwise
 import logging
 
 
 class MainApplication(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.tree = None
-        self.tree_frame = None
+        self.n_xray = 0
+        self.n_linescan = 0
         self.canvas = None
         self.canvas_frame = None
         self.right_click_on_tp = None
@@ -29,16 +30,11 @@ class MainApplication(tk.Tk):
         self.create_canvas()
 
         self.scale_line = []
-        self.sediment_start_line = None
-
-        self.create_tp_tree()
+        self.sediment_start = None
 
         self.cm_per_pixel = None
         # add menubar
         self.menu = MenuBar(self)
-
-        self.resizing = False
-        self.tree_visible = True
 
         self.create_right_click_op()
 
@@ -63,29 +59,6 @@ class MainApplication(tk.Tk):
         v_scroll.pack(side=tk.RIGHT, fill='y')
         # Configure the canvas to use the scrollbars
         self.canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
-
-    def create_tp_tree(self):
-        # create a treeview to display teaching points
-        self.tree_frame = tk.Frame(self)
-        self.tree_frame.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree = ttk.Treeview(self.tree_frame,
-                                 columns=('label', 'px', 'py', 'mx', 'my', 'd'),
-                                 selectmode='browse')
-        self.tree.heading('#0', text='img')
-        self.tree.heading('label', text='label')
-        self.tree.heading('px', text='pX')
-        self.tree.heading('py', text='pY')
-        self.tree.heading('mx', text='mX')
-        self.tree.heading('my', text='mY')
-        self.tree.heading('d', text='d')
-        self.tree.column('#0', width=100)
-        self.tree.column('label', width=50)
-        self.tree.column('px', width=50)
-        self.tree.column('py', width=50)
-        self.tree.column('mx', width=50)
-        self.tree.column('my', width=50)
-        self.tree.column('d', width=50)
-        self.tree.pack(side=tk.LEFT, fill=tk.Y)
 
     def on_drag_start(self, item, event):
         """Function to handle dragging"""
@@ -121,7 +94,7 @@ class MainApplication(tk.Tk):
         """Stop dragging the image"""
         # record the new position of the image
         x, y = self.canvas.coords(item)
-        self.items[item].position = (x, y)
+        self.items[item].origin = (x, y)
         # remove the rectangle from the canvas
         self.canvas.delete('rect')
         self.canvas.unbind("<B1-Motion>")
@@ -159,69 +132,19 @@ class MainApplication(tk.Tk):
         vl.create_on_canvas(self)
 
         # calculate the pixel distance between this ruler and sediment_start
-        if self.sediment_start_line is not None and self.cm_per_pixel is not None:
-            pixel_distance = self.canvas.coords(self.sediment_start_line)[0] - self.canvas.canvasx(event.x)
+        if self.sediment_start is not None and self.cm_per_pixel is not None:
+            pixel_distance = self.canvas.coords(self.sediment_start)[0] - self.canvas.canvasx(event.x)
             real_distance = pixel_distance * self.cm_per_pixel
             vl.add_depth_text(self, f"{abs(real_distance):.2f}")
 
-    def add_teaching_point(self, event):
-        """mark and record the teaching point with a dot on shift-left-click"""
-        # record the teaching point
-        tp = TeachingPoint([self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)])
-        tp.create_on_canvas(self)
-        self.items[tp.tag] = tp
-        # find the vertical lines that are close to the teaching point
-        min_vl_idx = None
+    def find_clicked_image(self, event):
         for k, v in self.items.items():
-            if v.type == "VerticalLine" and v.tag != "sediment_start_line" and v.tag != "scale_line":
-                if min_vl_idx is None:
-                    min_vl_idx = k
-                else:
-                    if abs(v.x - tp.x) < abs(self.items[min_vl_idx].x - tp.x):
-                        min_vl_idx = k
-        if min_vl_idx is not None:
-            tp.depth = self.items[min_vl_idx].depth
-
-        # find the image that contains the teaching point
-        for k, v in self.items.items():
-            if v.type == "LoadedImage":
+            if isinstance(v, LoadedImage):
+                logging.debug(f"v.tag: {v.tag}")
                 x1, y1, x2, y2 = self.canvas.bbox(v.tag)
                 if x1 <= self.canvas.canvasx(event.x) <= x2 and y1 <= self.canvas.canvasy(event.y) <= y2:
-                    # calculate the scale factor of the image on the canvas
-                    original_width, original_height = v.orig_img.width, v.orig_img.height
-                    scale_x = original_width / (x2 - x1)
-                    scale_y = original_height / (y2 - y1)
-                    # calculate the coordinates of the teaching point in the original image
-                    image_x = (self.canvas.canvasx(event.x) - x1) * scale_x
-                    image_y = (self.canvas.canvasy(event.y) - y1) * scale_y
-                    # adjust the coordinates to the rotated image
-                    rotation_angle = v.rotation
-                    # calculate the rotation angles if there are multiple 90-degree rotations
-                    rotation_angle = rotation_angle % 360
-                    if rotation_angle == 90:
-                        image_x, image_y = image_y, original_width - image_x
-                    elif rotation_angle == 180:
-                        image_x, image_y = original_width - image_x, original_height - image_y
-                    elif rotation_angle == 270:
-                        image_x, image_y = original_height - image_y, image_x
-
-                    tp.linked_im = v.tag
-                    tp.image_coords = (image_x, image_y)
-
-                    msi_x, msi_y = None, None
-                    # try adding the msi coordinates to the teaching point
-                    if v.msi_rect is not None and v.px_rect is not None:
-                        msi_x, msi_y = tp.get_msi_coords_from_px(v.msi_rect, v.px_rect)
-
-                    # record the teaching point in the treeview, under the image name parent
-                    tp.linked_tree_item = self.tree.insert(v.tree_master,
-                                                           'end',
-                                                           text="",
-                                                           values=(tp.tag,
-                                                                   round(image_x, 0),
-                                                                   round(image_y, 0),
-                                                                   msi_x, msi_y, tp.depth))
-                    break
+                    return v
+        return None
 
     def bind_events_to_loaded_images(self, loaded_image):
         """Bind events to the loaded images"""
@@ -230,33 +153,28 @@ class MainApplication(tk.Tk):
         # bind ctrl-left-click to add a ruler
         self.canvas.tag_bind(f"{loaded_image.tag}", "<Control-Button-1>", self.add_vertical_line)
         # bind shift-left-click to add a teaching point
-        self.canvas.tag_bind(f"{loaded_image.tag}", "<Shift-Button-1>", self.add_teaching_point)
+        self.canvas.tag_bind(f"{loaded_image.tag}", "<Shift-Button-1>",
+                             lambda e: self.add_teaching_point(e))
         # bind right-click event to the image
         self.canvas.tag_bind(f"{loaded_image.tag}",
                              "<Button-2>",
                              lambda e, item=f"{loaded_image.tag}": self.right_click_on_image.show_menu(e, item))
 
-    def cal_msi_xray_linescan(self):
+    def calc_transformation_matrix(self):
         """ solve the transformation among MSi coordinates, xray pixel coordinates, and line scan depth"""
         # get all fixed points from xray teaching points
         xray_tps = []
-        xray_ds = []
-        line_scan_tps = []
+        linescan_tps = []
         for k, v in self.items.items():
-            try:
-                if v.img_type == "xray":
-                    # get the column px and py from the treeview
-                    px = self.tree.item(v.tree_master, "values")[1]
-                    py = self.tree.item(v.tree_master, "values")[2]
-                    logging.debug(f"px: {px}, py: {py}")
-                    # append the teaching point to the list
-                    xray_tps.append((px, py))
-                    d = self.tree.item(v.tree_master, "values")[5]
-                    xray_ds.append(d)
-                    line_scan_tps.append((1, d))
-                    logging.debug(f"d: {d}")
-            except AttributeError:
-                pass
+            if isinstance(v, XrayImage):
+                logging.debug(f"v.tag: {v.tag} \n v.teaching_points: {v.teaching_points}")
+                xray_tps.extend(v.teaching_points.values())
+        # get all fixed points from xray teaching points
+        xray_ds = []
+        for i, v in enumerate(xray_tps):
+            xray_ds.append(v[2])
+            linescan_tps.append([v[2], v[1]])
+            xray_tps[i] = v[:2]
 
         # sort the xray_tps by the x coordinate, and cut them to groups, each with 3 points
         xray_tps = sorted(xray_tps, key=lambda x: x[0])
@@ -268,28 +186,28 @@ class MainApplication(tk.Tk):
 
         logging.debug(f"xray_tps: {xray_tps}")
         # in each group, sort the points clockwise
-        for group in xray_tps:
-            group = sort_points_clockwise(np.array(group))
+        for i, group in enumerate(xray_tps):
+            xray_tps[i] = sort_points_clockwise(np.array(group))
+            logging.debug(f"group: {group}")
+
+        # sort the linescan_tps by the x coordinate, and cut them to groups, each with 3 points
+        linescan_tps = sorted(linescan_tps, key=lambda x: x[0])
+        linescan_tps = [linescan_tps[i:i + 3] for i in range(0, len(linescan_tps), 3)]
+        # in each group, sort the points clockwise
+        for i, group in enumerate(linescan_tps):
+            linescan_tps[i] = sort_points_clockwise(np.array(group))
             logging.debug(f"group: {group}")
 
         msi_tps = {}
         msi_ds = {}
 
         for k, v in self.items.items():
-            try:
-                if v.img_type == "msi":
-                    # get the column mx and my from the treeview
-                    mx = self.tree.item(v.tree_master, "values")[3]
-                    my = self.tree.item(v.tree_master, "values")[4]
-                    logging.debug(f"mx: {mx}, my: {my}")
-                    # TODO: sort the points clockwise
-                    msi_tps[v.tag] = (mx, my)
-                    d = self.tree.item(v.tree_master, "values")[5]
-                    # get the centroid of the depth
-                    msi_ds[v.tag] = np.mean(d)
-                    logging.debug(f"d: {d}")
-            except AttributeError:
-                pass
+            if isinstance(v, MsiImage):
+                msi_tps[k] = v.teaching_points
+        for k, v in msi_tps.items():
+            msi_ds[k] = np.array(list(v.values()))[:, 2].mean()
+            msi_tps[k] = np.array(list(v.values()))[:, :2]
+            msi_tps[k] = sort_points_clockwise(np.array(msi_tps[k]))
 
         # solve the affine transformation of how to transform from msi_tps to xray_tps
         self.solvers_xray = {}
@@ -297,24 +215,77 @@ class MainApplication(tk.Tk):
         for k, v in msi_tps.items():
             msi_d = msi_ds[k]
             # find the index of the xray teaching points that are closest to the msi teaching points
-            vertical_distance = None
-            idx = None
-            for i, d in enumerate(xray_ds):
-                if vertical_distance is None:
-                    vertical_distance = abs(d - msi_d)
-                    idx = i
-                else:
-                    if abs(d - msi_d) < vertical_distance:
-                        vertical_distance = abs(d - msi_d)
-                        idx = i
-            assert vertical_distance < 0.5, f"vertical_distance: {vertical_distance} is too large"
+            diff = np.abs(np.array(xray_ds) - msi_d)
+            idx = np.argmin(diff)
+
+            assert diff.min() < 0.5, f"vertical_distance: {diff.min()} is too large"
+
             # get the xray teaching points that are closest to the msi teaching points
             self.solvers_xray[k] = CorSolver()
             self.solvers_xray[k].fit(v, xray_tps[idx])
-
             # solve the transformation of how to transform from msi_tps to line_scan_tps
             self.solvers_depth[k] = CorSolver()
-            self.solvers_depth[k].fit(v, line_scan_tps[idx])
+            self.solvers_depth[k].fit(v, linescan_tps[idx])
+
+    def machine_to_real_world(self):
+        """apply the transformation to the msi teaching points"""
+        # ask for the sqlite file to read the metadata
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            # connect to the sqlite database
+            import sqlite3
+            conn = sqlite3.connect(file_path)
+            c = conn.cursor()
+            try:
+                c.execute('SELECT msi_img_file_name, spot_array FROM transformation')
+                data = c.fetchall()
+            except sqlite3.OperationalError:
+                logging.debug("The transformation table does not exist yet, creating one")
+                c.execute('CREATE TABLE transformation (msi_img_file_name TEXT, spot_array BLOB)')
+                c.execute('SELECT msi_img_file_name, spot_name FROM metadata')
+                data = c.fetchall()
+                logging.debug(f"reading all the spotname from metadata table and convert them to array")
+                for row in tqdm.tqdm(data):
+                    im_name, spot_name = row
+                    spot_name = eval(spot_name)
+                    # apply the transformation to the spot_name
+                    spot_name = [re.findall(r'X(\d+)Y(\d+)', s) for s in spot_name]
+                    # flatten the list
+                    spot_name = [item for sublist in spot_name for item in sublist]
+                    # convert to an array
+                    spot_name = np.array(spot_name)
+                    # conver the spotname to int
+                    spot_name = spot_name.astype(int)
+                    # write the spotnames to the transformation table as a blob
+                    # insert the transformed spot_name to the transformation table
+                    c.execute('INSERT INTO transformation VALUES (?, ?)', (im_name,spot_name.tobytes()))
+                conn.commit()
+                c.execute('SELECT msi_img_file_name, spot_array FROM transformation')
+                data = c.fetchall()
+            for row in data:
+                im_name, spot_array = row
+                spot_array = np.frombuffer(spot_array, dtype=int).reshape(-1, 2)
+                logging.debug(f"im_name: {im_name}, spot_array: {spot_array}")
+                # apply the transformation to the spot_array
+                if im_name in self.solvers_xray.keys():
+                    xray_array = self.solvers_xray[im_name].transform(spot_array)
+                    linescan_array = self.solvers_depth[im_name].transform(spot_array)
+                    # insert the xray array to a new column in the transformation table
+                    c.execute('ALTER TABLE transformation ADD COLUMN xray_array BLOB')
+                    c.execute('UPDATE transformation SET xray_array = ? WHERE msi_img_file_name = ?',
+                              (xray_array.tobytes(), im_name))
+                    # insert the linescan array to a new column in the transformation table
+                    c.execute('ALTER TABLE transformation ADD COLUMN linescan_array BLOB')
+                    c.execute('UPDATE transformation SET linescan_array = ? WHERE msi_img_file_name = ?',
+                              (linescan_array.tobytes(), im_name))
+                else:
+                    logging.debug(f"{im_name} is not in the solvers_xray.keys()")
+            conn.commit()
+            conn.close()
+        else:
+            logging.debug("No file path is given")
+
+
 
     def bind_events_to_vertical_lines(self, vertical_line):
         """Bind events to the vertical lines"""
@@ -323,6 +294,16 @@ class MainApplication(tk.Tk):
                              lambda e, item=f"{vertical_line.tag}": self.right_click_on_line.show_menu(e, item))
         # bind shift-left-click to add a teaching point
         self.canvas.tag_bind(f"{vertical_line.tag}", "<Shift-Button-1>", self.add_teaching_point)
+
+    def add_teaching_point(self, event):
+        """Add a teaching point to the canvas"""
+        clicked_image = self.find_clicked_image(event)
+        assert isinstance(clicked_image, XrayImage) or isinstance(clicked_image, MsiImage), (
+            "You need to click on an xray image"
+            "or a MSI image to add a "
+            "teaching point")
+        if clicked_image is not None:
+            clicked_image.add_teaching_point(event, self)
 
     def add_metadata(self):
         """Add metadata to the app"""
@@ -333,11 +314,11 @@ class MainApplication(tk.Tk):
             conn = sqlite3.connect(file_path)
             c = conn.cursor()
             # get the image name, px_rect, and msi_rect
-            c.execute('SELECT * FROM mis')
+            c.execute('SELECT msi_img_file_name, px_rect, msi_rect FROM metadata')
             data = c.fetchall()
             for row in data:
                 im_name, px_rect, msi_rect = row
-                im_name = 'im_' + im_name
+                im_name = im_name
                 # attach the metadata to the corresponding image
                 try:
                     self.items[im_name].px_rect = eval(px_rect)
@@ -360,7 +341,7 @@ class MainApplication(tk.Tk):
             data_to_save["scale_line1"] = self.scale_line[1]
         except IndexError:
             pass
-        data_to_save["sediment_start_line"] = self.sediment_start_line
+        data_to_save["sediment_start"] = self.sediment_start
 
         # save the treeview in json format
         for k, v in self.items.items():
@@ -379,37 +360,30 @@ class MainApplication(tk.Tk):
                 self.scale_line.append(data["scale_line1"])
             except KeyError:
                 pass
-            self.sediment_start_line = data["sediment_start_line"]
+            self.sediment_start = data["sediment_start"]
 
             for item in data["items"]:
-                if item["type"] == "LoadedImage":
-                    loaded_image = LoadedImage.from_json(item, self)
+                if "MsiImage" in item["type"]:
+                    loaded_image = MsiImage.from_json(item, self)
                     self.items[loaded_image.tag] = loaded_image
-                elif item["type"] == "TeachingPoint":
-                    teaching_point = TeachingPoint.from_json(item, self)
-                    self.items[teaching_point.tag] = teaching_point
+                elif "XrayImage" in item["type"]:
+                    loaded_image = XrayImage.from_json(item, self)
+                    self.items[loaded_image.tag] = loaded_image
+                elif "LinescanImage" in item["type"]:
+                    loaded_image = LinescanImage.from_json(item, self)
+                    self.items[loaded_image.tag] = loaded_image
                 elif item["type"] == "VerticalLine":
                     vertical_line = VerticalLine.from_json(item, self)
                     self.items[vertical_line.tag] = vertical_line
-
-            # restore the treeview
-            for item in self.items.values():
-                if item.type == "TeachingPoint":
-                    item.linked_tree_item = self.tree.insert(self.items[item.linked_im].tree_master,
-                                                             'end',
-                                                             text="",
-                                                             values=(item.tag,
-                                                                     item.image_coords[0],
-                                                                     item.image_coords[1],
-                                                                     "", "",
-                                                                     item.depth))
+                    self.bind_events_to_vertical_lines(vertical_line)
 
     def export_tps(self, file_path):
         """Export the teaching points to a json file"""
-        data_to_save = "img;label;px;py;mx;my;d\n"
+        data_to_save = "img;x;y;d\n"
         for k, v in self.items.items():
-            if v.type == "TeachingPoint":
-                data_to_save += f"{v.linked_im};{self.items[v.linked_im].label};{v.image_coords[0]};{v.image_coords[1]};{v.msi_coords[0]};{v.msi_coords[1]};{v.depth}\n"
+            if hasattr(v, "teaching_points"):
+                for k, tp in v.teaching_points.items():
+                    data_to_save += f"{v.tag};{tp[0]};{tp[1]};{tp[2]}\n"
         with open(file_path, "w") as f:
             f.write(data_to_save)
 
