@@ -7,7 +7,12 @@ from collections import namedtuple
 
 from imaging.manual_alignment.func import get_image_file_from_mis, get_px_rect_from_mis, get_msi_rect_from_imaginginfo
 
-Metadata = namedtuple("Metadata", ["spec_file_name", "msi_img_file_path", "msi_img_file_name", "px_rect", "msi_rect"])
+Metadata = namedtuple("Metadata", ["spec_file_name",
+                                   "msi_img_file_path",
+                                   "msi_img_file_name",
+                                   "px_rect",
+                                   "msi_rect",
+                                   "spot_name"])
 
 
 class MetadataCrawler:
@@ -34,16 +39,17 @@ class MetadataCrawler:
                             try:
                                 px_rect = get_px_rect_from_mis(mis_file)
                                 xml_file = os.path.join(root, spec_file_name, "ImagingInfo.xml")
-                                msi_rect = get_msi_rect_from_imaginginfo(xml_file)
+                                msi_rect, spot_name = get_msi_rect_from_imaginginfo(xml_file, return_spot_name=True)
                                 im_name = get_image_file_from_mis(mis_file)
                                 im_file_path = os.path.join(root, im_name)
                                 assert im_name not in self.metadata.keys(), 'duplicate entries found'
                                 self.metadata[os.path.basename(spec_file_name)] = Metadata(
-                                    os.path.basename(spec_file_name),
-                                    im_file_path,
-                                    im_name,
-                                    px_rect,
-                                    msi_rect)
+                                    spec_file_name=os.path.basename(spec_file_name),
+                                    msi_img_file_path=im_file_path,
+                                    msi_img_file_name=im_name,
+                                    px_rect=px_rect,
+                                    msi_rect=msi_rect,
+                                    spot_name=spot_name)
                             except ValueError:
                                 continue
 
@@ -52,11 +58,11 @@ class MetadataCrawler:
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         c.execute('CREATE TABLE IF NOT EXISTS metadata (spec_file_name TEXT, msi_img_file_path TEXT, '
-                  'msi_img_file_name TEXT, px_rect TEXT, msi_rect TEXT)')
+                  'msi_img_file_name TEXT, px_rect TEXT, msi_rect TEXT, spot_name TEXT)')
         for k, v in self.metadata.items():
-            c.execute('INSERT INTO metadata VALUES (?, ?, ?, ?, ?)', (v.spec_file_name, v.msi_img_file_path,
-                                                                      v.msi_img_file_name, str(v.px_rect),
-                                                                      str(v.msi_rect)))
+            c.execute('INSERT INTO metadata VALUES (?, ?, ?, ?, ?, ?)', (v.spec_file_name, v.msi_img_file_path,
+                                                                         v.msi_img_file_name, str(v.px_rect),
+                                                                         str(v.msi_rect), str(v.spot_name)))
         conn.commit()
         conn.close()
 

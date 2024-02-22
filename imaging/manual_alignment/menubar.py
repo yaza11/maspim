@@ -21,7 +21,7 @@ class MenuBar:
         # Add 'Open' to the file menu
         self.file_menu.add_command(label="Add images", command=self.add_images)
         # Add 'Add metadata' to the file menu
-        self.file_menu.add_command(label="Attach metadata", command=self.app.add_metadata)
+        self.file_menu.add_command(label="Attach database", command=self.app.add_metadata)
         # Add 'Exit' to the file menu
         self.file_menu.add_command(label="Quit", command=self.quit)
 
@@ -101,6 +101,8 @@ class MenuBar:
                     # update the tree view, the mx and my columns, with label as v.tag
                     self.app.tree.set(v.linked_tree_item, "mx", v.msi_coords[0])
                     self.app.tree.set(v.linked_tree_item, "my", v.msi_coords[1])
+
+
 
     def export_tps(self):
         """Export the teaching points to a json file"""

@@ -18,6 +18,7 @@ class LoadedImage:
         self.thumbnail_size = (500, 500)
         self.tree_master = None
         self.type = "LoadedImage"
+        self.img_type = None
         self.msi_rect = None
         self.px_rect = None
 

@@ -2,9 +2,14 @@ import json
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
+
+import numpy as np
+
 from .objects import LoadedImage, TeachingPoint, VerticalLine
 from .menubar import MenuBar
 from .rclick import RightClickOnLine, RightClickOnImage, RightClickOnTeachingPoint
+from .func import CorSolver, sort_points_clockwise
+import logging
 
 
 class MainApplication(tk.Tk):
@@ -215,7 +220,7 @@ class MainApplication(tk.Tk):
                                                            values=(tp.tag,
                                                                    round(image_x, 0),
                                                                    round(image_y, 0),
-                                                                   msi_x,msi_y, tp.depth))
+                                                                   msi_x, msi_y, tp.depth))
                     break
 
     def bind_events_to_loaded_images(self, loaded_image):
@@ -230,6 +235,86 @@ class MainApplication(tk.Tk):
         self.canvas.tag_bind(f"{loaded_image.tag}",
                              "<Button-2>",
                              lambda e, item=f"{loaded_image.tag}": self.right_click_on_image.show_menu(e, item))
+
+    def cal_msi_xray_linescan(self):
+        """ solve the transformation among MSi coordinates, xray pixel coordinates, and line scan depth"""
+        # get all fixed points from xray teaching points
+        xray_tps = []
+        xray_ds = []
+        line_scan_tps = []
+        for k, v in self.items.items():
+            try:
+                if v.img_type == "xray":
+                    # get the column px and py from the treeview
+                    px = self.tree.item(v.tree_master, "values")[1]
+                    py = self.tree.item(v.tree_master, "values")[2]
+                    logging.debug(f"px: {px}, py: {py}")
+                    # append the teaching point to the list
+                    xray_tps.append((px, py))
+                    d = self.tree.item(v.tree_master, "values")[5]
+                    xray_ds.append(d)
+                    line_scan_tps.append((1, d))
+                    logging.debug(f"d: {d}")
+            except AttributeError:
+                pass
+
+        # sort the xray_tps by the x coordinate, and cut them to groups, each with 3 points
+        xray_tps = sorted(xray_tps, key=lambda x: x[0])
+        xray_tps = [xray_tps[i:i + 3] for i in range(0, len(xray_tps), 3)]
+        # sort the xray_ds, and cut them to groups, each with 3 points, and get the average depth
+        xray_ds = sorted(xray_ds)
+        xray_ds = [xray_ds[i:i + 3] for i in range(0, len(xray_ds), 3)]
+        xray_ds = [np.mean(d) for d in xray_ds]
+
+        logging.debug(f"xray_tps: {xray_tps}")
+        # in each group, sort the points clockwise
+        for group in xray_tps:
+            group = sort_points_clockwise(np.array(group))
+            logging.debug(f"group: {group}")
+
+        msi_tps = {}
+        msi_ds = {}
+
+        for k, v in self.items.items():
+            try:
+                if v.img_type == "msi":
+                    # get the column mx and my from the treeview
+                    mx = self.tree.item(v.tree_master, "values")[3]
+                    my = self.tree.item(v.tree_master, "values")[4]
+                    logging.debug(f"mx: {mx}, my: {my}")
+                    # TODO: sort the points clockwise
+                    msi_tps[v.tag] = (mx, my)
+                    d = self.tree.item(v.tree_master, "values")[5]
+                    # get the centroid of the depth
+                    msi_ds[v.tag] = np.mean(d)
+                    logging.debug(f"d: {d}")
+            except AttributeError:
+                pass
+
+        # solve the affine transformation of how to transform from msi_tps to xray_tps
+        self.solvers_xray = {}
+        self.solvers_depth = {}
+        for k, v in msi_tps.items():
+            msi_d = msi_ds[k]
+            # find the index of the xray teaching points that are closest to the msi teaching points
+            vertical_distance = None
+            idx = None
+            for i, d in enumerate(xray_ds):
+                if vertical_distance is None:
+                    vertical_distance = abs(d - msi_d)
+                    idx = i
+                else:
+                    if abs(d - msi_d) < vertical_distance:
+                        vertical_distance = abs(d - msi_d)
+                        idx = i
+            assert vertical_distance < 0.5, f"vertical_distance: {vertical_distance} is too large"
+            # get the xray teaching points that are closest to the msi teaching points
+            self.solvers_xray[k] = CorSolver()
+            self.solvers_xray[k].fit(v, xray_tps[idx])
+
+            # solve the transformation of how to transform from msi_tps to line_scan_tps
+            self.solvers_depth[k] = CorSolver()
+            self.solvers_depth[k].fit(v, line_scan_tps[idx])
 
     def bind_events_to_vertical_lines(self, vertical_line):
         """Bind events to the vertical lines"""
@@ -269,7 +354,6 @@ class MainApplication(tk.Tk):
         # get the file path to save the state
         file_path = filedialog.asksaveasfilename(defaultextension=".json")
         data_to_save = {"cm_per_pixel": self.cm_per_pixel, "items": []}
-
 
         try:
             data_to_save["scale_line0"] = self.scale_line[0]
