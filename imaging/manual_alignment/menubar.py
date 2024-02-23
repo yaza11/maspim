@@ -48,6 +48,12 @@ class MenuBar:
         # convert the machine coordinate to real world coordinate
         self.calc_menu.add_command(label="Machine to Real World", command=self.app.machine_to_real_world)
 
+        # Add a 'Dev' menu
+        self.dev_menu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="Dev", menu=self.dev_menu)
+        # Add 'Reset tp' to the dev menu
+        self.dev_menu.add_command(label="Reset TP", command=self.app.reset_tp)
+
         # Add 'Export' menu
         self.export_menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Export", menu=self.export_menu)

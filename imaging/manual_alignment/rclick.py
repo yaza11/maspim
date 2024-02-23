@@ -157,6 +157,11 @@ class RightClickOnTeachingPoint(RightClickMenu):
         """delete the teaching point"""
         # find the clicked image
         clicked_image = self.app.find_clicked_image(event)
-        self.app.items[clicked_image.tag].teaching_points.pop(item)
+        # delete the teaching point from the teaching_points dictionary
+        for k, v in clicked_image.teaching_points.items():
+            logging.debug(f"comparing {f'tp_{int(k[0])}_{int(k[1])}'}, {item}")
+            if f"tp_{int(k[0])}_{int(k[1])}" == item:
+                self.app.items[clicked_image.tag].teaching_points.pop(k)
+                break
         self.app.canvas.delete(item)
         logging.debug(f"Teaching point {item} is deleted")

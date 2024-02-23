@@ -155,7 +155,8 @@ class TeachableImage(LoadedImage):
 
         if self.teaching_points is None:
             self.teaching_points = {}
-        self.teaching_points[f"tp_{int(canvas_x)}_{int(canvas_y)}"] = (img_x, img_y, depth)
+        teaching_point_key = (canvas_x, canvas_y)
+        self.teaching_points[teaching_point_key] = (img_x, img_y, depth)
 
     def to_json(self):
         json_data = super().to_json()
@@ -168,12 +169,13 @@ class TeachableImage(LoadedImage):
         self.teaching_points = json_data['teaching_points']
         logging.debug(f"teaching points: {self.teaching_points}")
         # draw the teaching points on the canvas if they exist
-        if self.teaching_points is not None:
-            for _, tp in self.teaching_points.items():
-                img_x, img_y, _ = tp
-                x = img_x / (self.img.width / self.thumbnail.width) + self.x
-                y = img_y / (self.img.height / self.thumbnail.height) + self.y
-                draw_teaching_points(x, y, app)
+        try:
+            if self.teaching_points is not None:
+                for tp, _ in self.teaching_points.items():
+                    draw_teaching_points(tp[0], tp[1], app)
+        except Exception as e:
+            logging.error(e)
+            pass
         return self
 
 

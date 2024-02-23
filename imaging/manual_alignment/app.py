@@ -6,7 +6,7 @@ from tkinter import filedialog
 import numpy as np
 import tqdm
 
-from objects import LoadedImage, VerticalLine, MsiImage, XrayImage, LinescanImage
+from objects import LoadedImage, VerticalLine, MsiImage, XrayImage, LinescanImage, TeachableImage
 from menubar import MenuBar
 from rclick import RightClickOnLine, RightClickOnImage, RightClickOnTeachingPoint
 from func import CorSolver, sort_points_clockwise
@@ -16,15 +16,13 @@ import logging
 class MainApplication(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.geometry("1200x800")
         self.n_xray = 0
         self.n_linescan = 0
         self.canvas = None
-        self.canvas_frame = None
         self.right_click_on_tp = None
         self.right_click_on_image = None
         self.right_click_on_line = None
-        self._drag_offset_y = None
-        self._drag_offset_x = None
         self.title('Transformer')
         self.items = {}
         self.create_canvas()
@@ -47,15 +45,15 @@ class MainApplication(tk.Tk):
         canvas_width = 1000
         canvas_height = 1000
         # Create a frame for the canvas and scrollbars
-        self.canvas_frame = tk.Frame(self)
-        self.canvas_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.canvas = tk.Canvas(self.canvas_frame, width=canvas_width, height=canvas_height, bg='white',
+        canvas_frame = tk.Frame(self)
+        canvas_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(canvas_frame, width=canvas_width, height=canvas_height, bg='white',
                                 scrollregion=(0, 0, 5000, 5000))
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         # Create horizontal and vertical scrollbars
         h_scroll = tk.Scrollbar(self.canvas, orient='horizontal', command=self.canvas.xview)
         h_scroll.pack(side=tk.BOTTOM, fill='x')
-        v_scroll = tk.Scrollbar(self.canvas_frame, orient='vertical', command=self.canvas.yview)
+        v_scroll = tk.Scrollbar(canvas_frame, orient='vertical', command=self.canvas.yview)
         v_scroll.pack(side=tk.RIGHT, fill='y')
         # Configure the canvas to use the scrollbars
         self.canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
@@ -66,8 +64,8 @@ class MainApplication(tk.Tk):
         x1, y1, x2, y2 = self.canvas.bbox(item)
 
         # calculate the offset
-        self._drag_offset_x = self.canvas.canvasx(event.x) - x1
-        self._drag_offset_y = self.canvas.canvasy(event.y) - y1
+        _drag_offset_x = self.canvas.canvasx(event.x) - x1
+        _drag_offset_y = self.canvas.canvasy(event.y) - y1
         # Create a rectangle around the image
         self.canvas.create_rectangle(x1, y1, x2, y2, outline="blue", tags="rect")
 
@@ -82,12 +80,12 @@ class MainApplication(tk.Tk):
             self.canvas.bind("<ButtonRelease-1>", lambda e: self.on_resize_stop(e))
 
         else:
-            self.canvas.bind("<B1-Motion>", lambda e: self.on_drag_move(e, item))
+            self.canvas.bind("<B1-Motion>", lambda e: self.on_drag_move(e, item, _drag_offset_x, _drag_offset_y))
             self.canvas.bind("<ButtonRelease-1>", lambda e: self.on_drag_stop(e, item))
 
-    def on_drag_move(self, event, item):
+    def on_drag_move(self, event, item, _drag_offset_x, _drag_offset_y):
         """move the item to the new position"""
-        x, y = self.canvas.canvasx(event.x) - self._drag_offset_x, self.canvas.canvasy(event.y) - self._drag_offset_y
+        x, y = self.canvas.canvasx(event.x) - _drag_offset_x, self.canvas.canvasy(event.y) - _drag_offset_y
         self.canvas.coords(item, x, y)
 
     def on_drag_stop(self, event, item):
@@ -258,7 +256,7 @@ class MainApplication(tk.Tk):
                     spot_name = spot_name.astype(int)
                     # write the spotnames to the transformation table as a blob
                     # insert the transformed spot_name to the transformation table
-                    c.execute('INSERT INTO transformation VALUES (?, ?)', (im_name,spot_name.tobytes()))
+                    c.execute('INSERT INTO transformation VALUES (?, ?)', (im_name, spot_name.tobytes()))
                 conn.commit()
                 c.execute('SELECT msi_img_file_name, spot_array FROM transformation')
                 data = c.fetchall()
@@ -284,8 +282,6 @@ class MainApplication(tk.Tk):
             conn.close()
         else:
             logging.debug("No file path is given")
-
-
 
     def bind_events_to_vertical_lines(self, vertical_line):
         """Bind events to the vertical lines"""
@@ -386,6 +382,36 @@ class MainApplication(tk.Tk):
                     data_to_save += f"{v.tag};{tp[0]};{tp[1]};{tp[2]}\n"
         with open(file_path, "w") as f:
             f.write(data_to_save)
+
+    def reset_tp(self):
+        """
+        Reset the teaching points
+        """
+        # remove all the teaching points from the canvas
+        logging.debug("Resetting teaching points")
+        for k, v in self.items.items():
+            if isinstance(v, TeachableImage):
+                if v.teaching_points is not None:
+                    v.teaching_points = {}
+                    logging.debug(f"Reset teaching points attributes for {k} successfully")
+                if hasattr(v, "teaching_points_updated"):
+                    v.teaching_points_updated = False
+                    logging.debug(f"Reset teaching_points_updated attributes for {k} successfully")
+        # hard remove all the teaching points oval from the canvas with tag including 'tp_'
+        try:
+            self.canvas.delete(*app.canvas.find_withtag('tp_'))
+            logging.debug("Deleting teaching points from the canvas successfully")
+        except AttributeError:
+            logging.debug("No teaching points found")
+            pass
+
+        # clear the tree view
+        try:
+            self.tree.delete(*self.tree.get_children())
+            logging.debug("Reset the tree view successfully")
+        except AttributeError:
+            logging.debug("No tree view found")
+            pass
 
     def main(self):
         self.mainloop()
