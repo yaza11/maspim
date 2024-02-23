@@ -55,8 +55,28 @@ class MainApplication(tk.Tk):
         h_scroll.pack(side=tk.BOTTOM, fill='x')
         v_scroll = tk.Scrollbar(canvas_frame, orient='vertical', command=self.canvas.yview)
         v_scroll.pack(side=tk.RIGHT, fill='y')
+        # bind the mousewheel event to the canvas
         # Configure the canvas to use the scrollbars
         self.canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+        self.canvas.bind_all("<MouseWheel>", self.on_mousewheel)
+        self.canvas.bind_all("<Shift-MouseWheel>", self.horizontal_mousewheel)
+
+    def on_mousewheel(self, event):
+        try:
+            # For windows and MacOS
+            logging.debug(f"event.delta: {event.delta}")
+            self.canvas.yview_scroll(event.delta, "units")
+        except AttributeError:
+            raise AttributeError("The mousewheel event is not supported on this platform")
+
+    def horizontal_mousewheel(self, event):
+        try:
+            # For windows and MacOS
+            logging.debug(f"event.delta: {event.delta}")
+            self.canvas.xview_scroll(event.delta, "units")
+        except AttributeError:
+            raise AttributeError("The mousewheel event is not supported on this platform")
+
 
     def on_drag_start(self, item, event):
         """Function to handle dragging"""
