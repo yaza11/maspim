@@ -1,16 +1,19 @@
 import json
 import re
 import tkinter as tk
+from tkinter import ttk
 from tkinter import filedialog
+import logging
 
 import numpy as np
 import tqdm
+
+logging.basicConfig(level=logging.DEBUG)
 
 from objects import LoadedImage, VerticalLine, MsiImage, XrayImage, LinescanImage, TeachableImage
 from menubar import MenuBar
 from rclick import RightClickOnLine, RightClickOnImage, RightClickOnTeachingPoint
 from func import CorSolver, sort_points_clockwise
-import logging
 
 
 class MainApplication(tk.Tk):
@@ -23,9 +26,11 @@ class MainApplication(tk.Tk):
         self.right_click_on_tp = None
         self.right_click_on_image = None
         self.right_click_on_line = None
-        self.title('Transformer')
+        self.title('CorelDraw Imposter')
         self.items = {}
         self.create_canvas()
+
+        self.database_path = None
 
         self.scale_line = []
         self.sediment_start = None
@@ -76,7 +81,6 @@ class MainApplication(tk.Tk):
             self.canvas.xview_scroll(event.delta, "units")
         except AttributeError:
             raise AttributeError("The mousewheel event is not supported on this platform")
-
 
     def on_drag_start(self, item, event):
         """Function to handle dragging"""
@@ -248,7 +252,14 @@ class MainApplication(tk.Tk):
     def machine_to_real_world(self):
         """apply the transformation to the msi teaching points"""
         # ask for the sqlite file to read the metadata
-        file_path = filedialog.askopenfilename()
+        if self.database_path is None:
+            file_path = filedialog.askopenfilename()
+            if file_path:
+                self.database_path = file_path
+            else:
+                raise ValueError("You need to select a database file")
+        # connect to the sqlite database
+        file_path = self.database_path
         if file_path:
             # connect to the sqlite database
             import sqlite3
@@ -323,34 +334,46 @@ class MainApplication(tk.Tk):
 
     def add_metadata(self):
         """Add metadata to the app"""
-        file_path = filedialog.askopenfilename()
-        if file_path:
-            # connect to the sqlite database
-            import sqlite3
-            conn = sqlite3.connect(file_path)
-            c = conn.cursor()
-            # get the image name, px_rect, and msi_rect
-            c.execute('SELECT msi_img_file_name, px_rect, msi_rect FROM metadata')
-            data = c.fetchall()
-            for row in data:
-                im_name, px_rect, msi_rect = row
-                im_name = im_name
-                # attach the metadata to the corresponding image
-                try:
-                    self.items[im_name].px_rect = eval(px_rect)
-                    self.items[im_name].msi_rect = eval(msi_rect)
-                    print(f"px_rect: {self.items[im_name].px_rect}, msi_rect: {self.items[im_name].msi_rect}")
-                except KeyError:
-                    pass
-            conn.close()
-        else:
-            print("No file path is given")
+        if self.database_path is None:
+            file_path = filedialog.askopenfilename()
+            if file_path:
+                self.database_path = file_path
+            else:
+                raise ValueError("You need to select a database file")
+        # connect to the sqlite database
+        import sqlite3
+        conn = sqlite3.connect(file_path)
+        c = conn.cursor()
+        # get the image name, px_rect, and msi_rect
+        c.execute('SELECT msi_img_file_name, px_rect, msi_rect FROM metadata')
+        data = c.fetchall()
+        for row in data:
+            im_name, px_rect, msi_rect = row
+            im_name = im_name
+            # attach the metadata to the corresponding image
+            try:
+                self.items[im_name].px_rect = eval(px_rect)
+                self.items[im_name].msi_rect = eval(msi_rect)
+                print(f"px_rect: {self.items[im_name].px_rect}, msi_rect: {self.items[im_name].msi_rect}")
+            except KeyError:
+                pass
+        conn.close()
+
+    def use_as_ref_to_resize(self, item):
+        """use the selected image as the reference to resize other images"""
+        ref_width = self.items[item].thumbnail.width
+        for k, v in self.items.items():
+            logging.debug(f"{k} has the class of {v.__class__}")
+            if isinstance(v, MsiImage):
+                scale_factor = ref_width / v.thumbnail.width
+                self.items[k].enlarge(scale_factor)
+                self.canvas.itemconfig(k, image=self.items[k].tk_img)
 
     def save(self):
         """Save the current state of the canvas"""
         # get the file path to save the state
         file_path = filedialog.asksaveasfilename(defaultextension=".json")
-        data_to_save = {"cm_per_pixel": self.cm_per_pixel, "items": []}
+        data_to_save = {"cm_per_pixel": self.cm_per_pixel, "items": [], 'database_path': self.database_path}
 
         try:
             data_to_save["scale_line0"] = self.scale_line[0]
@@ -371,6 +394,10 @@ class MainApplication(tk.Tk):
         with open(file_path, "r") as f:
             data = json.load(f)
             self.cm_per_pixel = data["cm_per_pixel"]
+            try:
+                self.database_path = data["database_path"]
+            except KeyError:
+                pass
             try:
                 self.scale_line.append(data["scale_line0"])
                 self.scale_line.append(data["scale_line1"])

@@ -158,6 +158,10 @@ class TeachableImage(LoadedImage):
         teaching_point_key = (canvas_x, canvas_y)
         self.teaching_points[teaching_point_key] = (img_x, img_y, depth)
 
+        # once a teaching point is added, lock the image
+        if len(self.teaching_points) > 0 and not self.locked:
+            self.lock()
+
     def to_json(self):
         json_data = super().to_json()
         json_data["teaching_points"] = self.teaching_points

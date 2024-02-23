@@ -5,6 +5,9 @@ from tkinter import simpledialog
 
 import numpy as np
 
+from imaging.manual_alignment import objects
+from imaging.manual_alignment.objects import MsiImage
+
 
 class RightClickMenu:
     """ this is the superclass for the right-click menu"""
@@ -64,8 +67,6 @@ class RightClickOnImage(RightClickMenu):
     """this is the right-click menu for the image"""
 
     def _add_menu_item(self):
-        self.menu.add_command(label="Rotate",
-                              command=lambda: self.rotate_image(self.clicked_item))
 
         self.menu.add_command(label="Add Label",
                               command=lambda: self.add_label(self.clicked_item))
@@ -74,7 +75,11 @@ class RightClickOnImage(RightClickMenu):
         chg_size.add_command(label="x0.5", command=lambda: self.enlarge_image(self.clicked_item, 0.5))
         chg_size.add_command(label="x1.5", command=lambda: self.enlarge_image(self.clicked_item, 1.5))
         chg_size.add_command(label="x2", command=lambda: self.enlarge_image(self.clicked_item, 2))
+        chg_size.add_command(label="Auto", command=lambda: self.enlarge_image(self.clicked_item, 'auto'))
         self.menu.add_cascade(label="Resize", menu=chg_size)
+
+        self.menu.add_command(label="Use as Reference to Resize",
+                              command=lambda: self.app.use_as_ref_to_resize(self.clicked_item))
 
         self.menu.add_command(label="Unlock",
                               command=lambda: self.unlock_image(self.clicked_item))
@@ -83,6 +88,9 @@ class RightClickOnImage(RightClickMenu):
                               command=lambda: self.lock_image(self.clicked_item))
         self.menu.add_command(label="Delete",
                               command=lambda: self.app.items[self.clicked_item].rm(self.app))
+
+        self.menu.add_command(label="Send to Back",
+                              command=lambda: self.app.canvas.tag_lower(self.clicked_item))
 
     def add_label(self, item):
         """ add label to the item, unlike tag, label is not unique and can be changed and easy to understand"""
@@ -106,14 +114,19 @@ class RightClickOnImage(RightClickMenu):
         # show the menu
         self.menu.post(event.x_root, event.y_root)
 
-    def rotate_image(self, item):
-        """rotate the image by 90 degrees"""
-        # rotate the image by 90 degrees
-        self.app.items[item].rotate()
-        self.app.canvas.itemconfig(item, image=self.app.items[item].tk_img)
-
     def enlarge_image(self, item, scale_factor):
         """enlarge/shrink the image"""
+        if scale_factor == 'auto':
+            logging.debug(f"Try to auto resize the image {self.app.items[item]}")
+            # assert isinstance(self.app.items[item], MsiImage), "You can only auto resize the msi image"
+            assert self.app.cm_per_pixel is not None, "You need to set the cm_per_pixel first"
+            logging.debug(f"Auto resizing the image {item}")
+            # the real length of the slide that currently used is approximately 7.87cm
+            real_size = 8
+            logging.debug(f"real size: {real_size}")
+            # calculate the new size of the image
+            new_width = real_size / self.app.cm_per_pixel
+            scale_factor = new_width / self.app.items[item].thumbnail.width
         self.app.items[item].enlarge(scale_factor)
         self.app.canvas.itemconfig(item, image=self.app.items[item].tk_img)
 

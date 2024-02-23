@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import filedialog, simpledialog, ttk
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
 
 from objects import XrayImage, LinescanImage, MsiImage
 
