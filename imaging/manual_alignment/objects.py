@@ -161,11 +161,16 @@ class TeachableImage(LoadedImage):
     def to_json(self):
         json_data = super().to_json()
         json_data["teaching_points"] = self.teaching_points
+        # json data key cannot be a tuple, convert the key to a string
+        json_data["teaching_points"] = {str(k): v for k, v in json_data["teaching_points"].items()}
+        logging.debug(f"json data to write: {json_data}")
         return json_data
 
     @classmethod
     def from_json(cls, json_data, app):
         self = super().from_json(json_data, app)
+        # convert the key back to a tuple
+        json_data["teaching_points"] = {eval(k): v for k, v in json_data["teaching_points"].items()}
         self.teaching_points = json_data['teaching_points']
         logging.debug(f"teaching points: {self.teaching_points}")
         # draw the teaching points on the canvas if they exist
