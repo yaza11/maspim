@@ -52,6 +52,11 @@ class MenuBar:
         self.menubar.add_cascade(label="Dev", menu=self.dev_menu)
         # Add 'Reset tp' to the dev menu
         self.dev_menu.add_command(label="Reset TP", command=self.app.reset_tp)
+        self.dev_menu.add_command(label="Set TP Size", command=self.app.set_tp_size)
+        # lock all the images
+        self.dev_menu.add_command(label="Lock All Images", command=self.app.lock_all)
+        # move all teaching points to the top of the canvas
+        self.dev_menu.add_command(label="Move All TPs to Top", command=self.app.move_all_tps_to_top)
 
         # Add 'Export' menu
         self.export_menu = tk.Menu(self.menubar, tearoff=0)

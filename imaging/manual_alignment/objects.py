@@ -1,6 +1,8 @@
 import logging
 import os
 import tkinter as tk
+from tkinter import simpledialog
+
 from PIL import Image, ImageTk
 
 Image.MAX_IMAGE_PIXELS = None
@@ -111,20 +113,25 @@ class LoadedImage:
         pass
 
 
-def draw_teaching_points(x, y, app):
+def draw_teaching_points(x, y, app, size=3):
     # mark the teaching point on the canvas
     app.canvas.create_oval(
-        x - 5,
-        y - 5,
-        x + 5,
-        y + 5,
+        x - size,
+        y - size,
+        x + size,
+        y + size,
         fill="red",
         tags=f"tp_{int(x)}_{int(y)}"
     )
+
+
     # bind events to the teaching point
     app.canvas.tag_bind(f"tp_{int(x)}_{int(y)}",
                         "<Button-2>",
                         lambda e: app.right_click_on_tp.show_menu(e, f"tp_{int(x)}_{int(y)}"))
+
+    # return the tag of the teaching point
+    return f"tp_{int(x)}_{int(y)}"
 
 
 class TeachableImage(LoadedImage):
@@ -133,12 +140,14 @@ class TeachableImage(LoadedImage):
     def __init__(self):
         super().__init__()
         self.teaching_points = None  # a list of teaching points
+        self.tp_size = 3  # the size of the teaching point on the canvas
 
     def add_teaching_point(self, event, app):
         canvas_x, canvas_y = app.canvas.canvasx(event.x), app.canvas.canvasy(event.y)
         logging.debug(f"teaching point added canvas_x: {canvas_x}, canvas_y: {canvas_y}")
         # draw the teaching point on the canvas
-        draw_teaching_points(canvas_x, canvas_y, app)
+        draw_teaching_points(canvas_x, canvas_y, app, size=self.tp_size)
+
         # try to find the approximate depth of the teaching point
         if app.sediment_start is not None and app.cm_per_pixel is not None:
             depth = abs(app.canvas.coords(app.sediment_start)[0] - canvas_x) * app.cm_per_pixel
@@ -166,7 +175,17 @@ class TeachableImage(LoadedImage):
         json_data = super().to_json()
         json_data["teaching_points"] = self.teaching_points
         # json data key cannot be a tuple, convert the key to a string
-        json_data["teaching_points"] = {str(k): v for k, v in json_data["teaching_points"].items()}
+        try:
+            json_data["teaching_points"] = {str(k): v for k, v in json_data["teaching_points"].items()}
+            if hasattr(self, 'teaching_points_px_coords'):
+                try:
+                    json_data["teaching_points_px_coords"] = {str(k): v for k, v in json_data["teaching_points_px_coords"].items()}
+                except Exception as e:
+                    logging.error(e)
+                    pass
+        except Exception as e:
+            logging.error(e)
+            pass
         logging.debug(f"json data to write: {json_data}")
         return json_data
 
@@ -175,6 +194,13 @@ class TeachableImage(LoadedImage):
         self = super().from_json(json_data, app)
         # convert the key back to a tuple
         json_data["teaching_points"] = {eval(k): v for k, v in json_data["teaching_points"].items()}
+        if hasattr(self, 'teaching_points_px_coords'):
+            try:
+                json_data["teaching_points_px_coords"] = {eval(k): v for k, v in json_data["teaching_points_px_coords"].items()}
+                self.teaching_points_px_coords = json_data['teaching_points_px_coords']
+            except Exception as e:
+                logging.error(e)
+                pass
         self.teaching_points = json_data['teaching_points']
         logging.debug(f"teaching points: {self.teaching_points}")
         # draw the teaching points on the canvas if they exist
@@ -195,28 +221,28 @@ class MsiImage(TeachableImage):
         super().__init__()
         self.msi_rect = None  # the coordinates of the MSI image rectangle in R00X?Y? format
         self.px_rect = None  # the coordinates of the MSI image rectangle in pixel
-        self.teaching_points_updated = False  # a flag to indicate if the teaching points have been updated
+        self.teaching_points_px_coords = None  # the coordinates of the teaching points in the MSI image
 
     def update_tp_coords(self):
         """ replace the coordinates of the teaching points with the MSI coordinates"""
-        assert self.teaching_points_updated is False, "The teaching points have already been updated"
+        # copy the values to px_coords when this command is first called
+        if self.teaching_points_px_coords is None:
+            self.teaching_points_px_coords = self.teaching_points.copy()
         assert self.msi_rect is not None and self.px_rect is not None, "You need to set the MSI and pixel rectangle first"
         assert self.teaching_points is not None, "You need to add teaching points first"
         logging.debug(f"msi_rect: {self.msi_rect}")
         logging.debug(f"px_rect: {self.px_rect}")
         x_min, y_min, x_max, y_max = self.msi_rect
         x_min_px, y_min_px, x_max_px, y_max_px = self.px_rect
-        for k, v in self.teaching_points.items():
+        for k, v in self.teaching_points_px_coords.items():
             msi_x = (v[0] - x_min_px) / (x_max_px - x_min_px) * (x_max - x_min) + x_min
             msi_y = (v[1] - y_min_px) / (y_max_px - y_min_px) * (y_max - y_min) + y_min
             self.teaching_points[k] = (msi_x, msi_y, v[2])
-        self.teaching_points_updated = True
 
     def to_json(self):
         json_data = super().to_json()
         json_data["msi_rect"] = self.msi_rect
         json_data["px_rect"] = self.px_rect
-        json_data["teaching_points_updated"] = self.teaching_points_updated
         return json_data
 
     @classmethod
@@ -224,14 +250,17 @@ class MsiImage(TeachableImage):
         self = super().from_json(json_data, app)
         self.msi_rect = json_data['msi_rect']
         self.px_rect = json_data['px_rect']
-        self.teaching_points_updated = json_data['teaching_points_updated']
         return self
 
     def rm(self, app):
-        # remove the image from the canvas
-        app.canvas.delete(self.tag)
-        # remove from the items dictionary
-        del app.items[self.tag]
+        f = simpledialog.askstring("Remove MSI Image", "Are you sure you want to remove the MSI image? (Y/N)")
+        if f.lower() == "y":
+            # remove the image from the canvas
+            app.canvas.delete(self.tag)
+            # remove from the items dictionary
+            del app.items[self.tag]
+        else:
+            return
 
 
 class LinescanImage(LoadedImage):
@@ -241,11 +270,15 @@ class LinescanImage(LoadedImage):
         super().__init__()
 
     def rm(self, app):
-        # remove the image from the canvas
-        app.canvas.delete(self.tag)
-        # remove from the items dictionary
-        del app.items[self.tag]
-        app.n_linescan -= 1
+        f = simpledialog.askstring("Remove Linescan Image", "Are you sure you want to remove the linescan image? (Y/N)")
+        if f.lower() == "y":
+            # remove the image from the canvas
+            app.canvas.delete(self.tag)
+            # remove from the items dictionary
+            del app.items[self.tag]
+            app.n_linescan -= 1
+        else:
+            return
 
 
 class XrayImage(TeachableImage):
@@ -255,11 +288,15 @@ class XrayImage(TeachableImage):
         super().__init__()
 
     def rm(self, app):
-        # remove the image from the canvas
-        app.canvas.delete(self.tag)
-        # remove from the items dictionary
-        del app.items[self.tag]
-        app.n_xray -= 1
+        f = simpledialog.askstring("Remove Xray Image", "Are you sure you want to remove the xray image? (Y/N)")
+        if f.lower() == "y":
+            # remove the image from the canvas
+            app.canvas.delete(self.tag)
+            # remove from the items dictionary
+            del app.items[self.tag]
+            app.n_xray -= 1
+        else:
+            return
 
 
 class VerticalLine:

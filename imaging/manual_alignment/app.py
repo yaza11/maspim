@@ -1,7 +1,7 @@
 import json
 import re
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, simpledialog
 from tkinter import filedialog
 import logging
 
@@ -160,13 +160,41 @@ class MainApplication(tk.Tk):
             vl.add_depth_text(self, f"{abs(real_distance):.2f}")
 
     def find_clicked_image(self, event):
+        # TODO: could be optimized by using addtag_withtag when creating the images and the items
+        clicked_images = []
         for k, v in self.items.items():
             if isinstance(v, LoadedImage):
                 logging.debug(f"v.tag: {v.tag}")
                 x1, y1, x2, y2 = self.canvas.bbox(v.tag)
                 if x1 <= self.canvas.canvasx(event.x) <= x2 and y1 <= self.canvas.canvasy(event.y) <= y2:
-                    return v
-        return None
+                    clicked_images.append(v)
+
+        if len(clicked_images) == 1:
+            return clicked_images[0]
+        elif len(clicked_images) > 1:
+            # when images are overlapping, find the front image
+            # first call find_all to get the current order of the images
+            current_order = self.canvas.find_all()
+            # sort the clicked images based on the current order
+            clicked_images = sorted(clicked_images, key=lambda x: current_order.index(self.canvas.find_withtag(x.tag)[0]))
+            logging.debug(f'the front image is {clicked_images[-1]}')
+            return clicked_images[-1]
+        else:
+            return None
+
+    def lock_all(self):
+        # invoke lock_image method for all the images
+        for k, v in self.items.items():
+            if isinstance(v, LoadedImage):
+                self.right_click_on_image.lock_image(k)
+        logging.debug("All the images are locked")
+
+    def move_all_tps_to_top(self):
+        # move all the teaching points (with tag 'tp_*') in canvas to the top
+        tps = self.find_wildcard('tp_')
+        for tp in tps:
+            self.canvas.tag_raise(tp)
+        logging.debug("All the teaching points are moved to the top")
 
     def bind_events_to_loaded_images(self, loaded_image):
         """Bind events to the loaded images"""
@@ -314,6 +342,14 @@ class MainApplication(tk.Tk):
         else:
             logging.debug("No file path is given")
 
+    def set_tp_size(self):
+        """set the size of the teaching points"""
+        size = simpledialog.askinteger("Input", "Enter the size of the teaching points", initialvalue=5)
+        size = size if size is not None else 5
+        for k, v in self.items.items():
+            if isinstance(v, TeachableImage):
+                v.tp_size = size
+
     def bind_events_to_vertical_lines(self, vertical_line):
         """Bind events to the vertical lines"""
         self.canvas.tag_bind(f"{vertical_line.tag}",
@@ -430,6 +466,16 @@ class MainApplication(tk.Tk):
         with open(file_path, "w") as f:
             f.write(data_to_save)
 
+    def find_wildcard(self, wildcard):
+        """find the tag with the wildcard"""
+        items = self.canvas.find_all()
+        matched_items = []
+        for item in items:
+            logging.debug(f"item: {item}, tags: {self.canvas.gettags(item)[0]}")
+            if wildcard in self.canvas.gettags(item)[0]:
+                matched_items.append(self.canvas.gettags(item))
+        return matched_items
+
     def reset_tp(self):
         """
         Reset the teaching points
@@ -446,7 +492,11 @@ class MainApplication(tk.Tk):
                     logging.debug(f"Reset teaching_points_updated attributes for {k} successfully")
         # hard remove all the teaching points oval from the canvas with tag including 'tp_'
         try:
-            self.canvas.delete(*app.canvas.find_withtag('tp_'))
+            # list all tags
+            tps = self.find_wildcard('tp_')
+            logging.debug(f"tps: {tps}")
+            for tp in tps:
+                self.canvas.delete(tp)
             logging.debug("Deleting teaching points from the canvas successfully")
         except AttributeError:
             logging.debug("No teaching points found")

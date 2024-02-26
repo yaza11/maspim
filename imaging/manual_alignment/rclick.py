@@ -1,6 +1,7 @@
 """implement right click functionality for the application"""
 import logging
 import tkinter as tk
+from math import sqrt
 from tkinter import simpledialog
 
 import numpy as np
@@ -92,6 +93,8 @@ class RightClickOnImage(RightClickMenu):
         self.menu.add_command(label="Send to Back",
                               command=lambda: self.app.canvas.tag_lower(self.clicked_item))
 
+
+
     def add_label(self, item):
         """ add label to the item, unlike tag, label is not unique and can be changed and easy to understand"""
         label = simpledialog.askstring("Input", "Enter the label")
@@ -171,10 +174,18 @@ class RightClickOnTeachingPoint(RightClickMenu):
         # find the clicked image
         clicked_image = self.app.find_clicked_image(event)
         # delete the teaching point from the teaching_points dictionary
+        closest_tp = None
         for k, v in clicked_image.teaching_points.items():
             logging.debug(f"comparing {f'tp_{int(k[0])}_{int(k[1])}'}, {item}")
-            if f"tp_{int(k[0])}_{int(k[1])}" == item:
-                self.app.items[clicked_image.tag].teaching_points.pop(k)
-                break
+            # find the closest teaching point to the clicked point
+            distance = sqrt((k[0] - self.app.canvas.coords(item)[0]) ** 2 +
+                               (k[1] - self.app.canvas.coords(item)[1]) ** 2)
+            if closest_tp is None:
+                closest_tp = (k, distance)
+            elif distance < closest_tp[1]:
+                closest_tp = (k, distance)
+        # delete the teaching point from the teaching_points dictionary
+        self.app.items[clicked_image.tag].teaching_points.pop(closest_tp[0])
+        logging.debug(f"Teaching point {closest_tp[0]} is deleted from {clicked_image.tag}")
         self.app.canvas.delete(item)
         logging.debug(f"Teaching point {item} is deleted")
