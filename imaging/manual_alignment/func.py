@@ -1,4 +1,6 @@
+import logging
 import re
+import sqlite3
 
 import numpy as np
 
@@ -14,6 +16,23 @@ def sort_points_clockwise(points):
     # sort the points based on the angles
     points = points[np.argsort(angles)]
     return points
+
+
+def store_blob_info(conn, var_name, dtype, shape):
+    """store the blob info to the sqlite database"""
+    c = conn.cursor()
+    try:
+        # check if 'blob_info' table exists
+        c.execute('SELECT * FROM blob_info')
+    except sqlite3.OperationalError:
+        logging.debug("The blob_info table does not exist yet, creating one")
+        # create a blob_info table
+        c.execute('CREATE TABLE blob_info (var_name TEXT, dtype TEXT, shape TEXT)')
+        conn.commit()
+    # store the blob info to the blob_info table
+    c.execute('INSERT INTO blob_info (var_name, dtype, shape) VALUES (?, ?, ?)',
+              (var_name, str(dtype), str(shape)))
+    conn.commit()
 
 
 def get_msi_rect_from_imaginginfo(xml_file, return_spot_name=False):

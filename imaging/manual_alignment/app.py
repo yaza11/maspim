@@ -1,5 +1,6 @@
 import json
 import re
+import sqlite3
 import tkinter as tk
 from tkinter import ttk, simpledialog
 from tkinter import filedialog
@@ -122,6 +123,76 @@ class MainApplication(tk.Tk):
         self.canvas.unbind("<B1-Motion>")
         self.canvas.unbind("<ButtonRelease-1>")
 
+    def view_blob_data(self):
+        # get a popup window to choose SPEC_ID and COLUMN_NAME
+        popup = tk.Toplevel()
+        popup.title("View BLOB Data")
+        popup.geometry("300x200")
+        # create a label to display the SPEC_ID
+        spec_id_label = tk.Label(popup, text="SPEC_ID:")
+        spec_id_label.pack()
+        spec_id_entry = tk.Entry(popup)
+        spec_id_entry.pack()
+        # create a label to display the COLUMN_NAME
+        column_name_label = tk.Label(popup, text="COLUMN_NAME:")
+        column_name_label.pack()
+        column_name_entry = tk.Entry(popup)
+        column_name_entry.pack()
+        # create a label to display the Table Name
+        table_name_label = tk.Label(popup, text="Table Name:")
+        table_name_label.pack()
+        table_name_entry = tk.Entry(popup)
+        table_name_entry.pack()
+        # create a button to submit the SPEC_ID and COLUMN_NAME
+        submit_button = tk.Button(popup, text="Submit", command=lambda: self.get_blob_data(spec_id_entry.get(),
+                                                                                           table_name_entry.get(),
+                                                                                           column_name_entry.get()))
+        submit_button.pack()
+
+    def get_blob_data(self, spec_id, table_name, column_name):
+        if self.database_path is None:
+            file_path = filedialog.askopenfilename()
+            if file_path:
+                database_path = file_path
+            else:
+                raise ValueError("You need to select a database file")
+        else:
+            database_path = self.database_path
+        conn = sqlite3.connect(database_path)
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT {column_name} FROM {table_name} WHERE spec_id={spec_id};")
+        blob = cursor.fetchone()[0]
+        conn.close()
+
+        if 'spot' in column_name:
+            array = np.frombuffer(blob, dtype=np.int64).reshape(-1, 2)
+        else:
+            array = np.frombuffer(blob, dtype=np.float64).reshape(-1, 2)
+        logging.debug(f"array: {array}")
+
+        # popup a window to display the blob data and add a scrollbar
+        popup = tk.Toplevel()
+        popup.title("BLOB Data")
+        popup.geometry("800x600")
+        container = tk.Frame(popup)
+        container.pack(fill=tk.BOTH, expand=True)
+        # create a treeview to display the blob data
+        tree = ttk.Treeview(container, show="headings")
+        # Initialize Treeview columns on first load
+        tree['columns'] = ['x', 'y']
+        tree.heading('x', text='x')
+        tree.heading('y', text='y')
+        # add a scrollbar to the treeview
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        # Pack the Treeview and Scrollbar in the container frame
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side="right", fill="y")
+        # insert the blob data to the treeview
+        for i, row in enumerate(array):
+            tree.insert("", "end", values=(row[0], row[1]))
+        conn.close()
+
     def on_resize(self, event, item):
         """Resize the image based on mouse position"""
         x1, y1, x2, y2 = self.canvas.bbox(item)
@@ -176,7 +247,8 @@ class MainApplication(tk.Tk):
             # first call find_all to get the current order of the images
             current_order = self.canvas.find_all()
             # sort the clicked images based on the current order
-            clicked_images = sorted(clicked_images, key=lambda x: current_order.index(self.canvas.find_withtag(x.tag)[0]))
+            clicked_images = sorted(clicked_images,
+                                    key=lambda x: current_order.index(self.canvas.find_withtag(x.tag)[0]))
             logging.debug(f'the front image is {clicked_images[-1]}')
             return clicked_images[-1]
         else:
@@ -290,16 +362,16 @@ class MainApplication(tk.Tk):
         file_path = self.database_path
         if file_path:
             # connect to the sqlite database
-            import sqlite3
             conn = sqlite3.connect(file_path)
             c = conn.cursor()
             try:
                 # check if the transformation table exists
-                c.execute('SELECT spec_id FROM transformation')
+                c.execute('SELECT * FROM transformation')
             except sqlite3.OperationalError:
                 logging.debug("The transformation table does not exist yet, creating one")
                 # create a transformation table with metadata(spec_id) as the reference key
-                c.execute('CREATE TABLE transformation (spec_id INTEGER, msi_img_file_name TEXT, spot_array BLOB, xray_array BLOB, linescan_array BLOB, FOREIGN KEY(spec_id) REFERENCES metadata(spec_id))')
+                c.execute(
+                    'CREATE TABLE transformation (spec_id INTEGER, msi_img_file_name TEXT, spot_array BLOB, xray_array BLOB, linescan_array BLOB, FOREIGN KEY(spec_id) REFERENCES metadata(spec_id))')
                 conn.commit()
                 # read all the spotname from metadata table and convert them to array
                 c.execute('SELECT spec_id, msi_img_file_name, spot_name FROM metadata')
@@ -318,10 +390,11 @@ class MainApplication(tk.Tk):
                     # conver the spotname to int
                     spot_name = spot_name.astype(int)
                     # write the spotnames to the transformation table as a blob
-                    # insert the transformed spot_name to the transformation table
                     c.execute('INSERT INTO transformation (spec_id, msi_img_file_name, spot_array) VALUES (?, ?, ?)',
-                               (spec_id, im_name, spot_name.tobytes()))
+                              (spec_id, im_name, spot_name.tobytes()))
                     conn.commit()
+                    # store_blob_info(conn, 'spot_array', spot_name.dtype, spot_name.shape)
+
             c.execute('SELECT spec_id, msi_img_file_name, spot_array FROM transformation')
             data = c.fetchall()
             for row in data:
@@ -332,15 +405,25 @@ class MainApplication(tk.Tk):
                 # apply the transformation to the spot_array
                 if im_name in self.solvers_xray.keys():
                     xray_array = self.solvers_xray[im_name].transform(spot_array)
+                    xray_array_dtype = xray_array.dtype
+                    logging.debug(f"xray_array_dtype: {xray_array_dtype}")
+                    # store_blob_info(conn, 'xray_array', xray_array_dtype, xray_array.shape)
+                    xray_array_shape = xray_array.shape
+                    logging.debug(f"xray_array_shape: {xray_array_shape}")
                     linescan_array = self.solvers_depth[im_name].transform(spot_array)
-
+                    # line_scan_dtype = linescan_array.dtype
+                    # linescan_array_shape = linescan_array.shape
+                    # store_blob_info(conn, 'linescan_array', line_scan_dtype, linescan_array_shape)
                     c.execute('UPDATE transformation SET xray_array = ? WHERE spec_id = ?',
                               (xray_array.tobytes(), spec_id))
                     c.execute('UPDATE transformation SET linescan_array = ? WHERE spec_id = ?',
                               (linescan_array.tobytes(), spec_id))
                 else:
                     logging.debug(f"{im_name} is not in the solvers_xray.keys()")
+            # store the blob info to the blob_info table
+
             conn.commit()
+
             conn.close()
         else:
             logging.debug("No file path is given")

@@ -34,6 +34,8 @@ class MenuBar:
         self.view_menu.add_command(label="Toggle TP View", command=self.tg_tp_view)
         # update the teaching points view
         self.view_menu.add_command(label="Update TP View", command=self.update_tp_view)
+        # a simple way to view the BLOB data in the database
+        self.view_menu.add_command(label="View BLOB Data", command=self.app.view_blob_data)
 
         # Add 'Calc' menu
         self.calc_menu = tk.Menu(self.menubar, tearoff=0)
