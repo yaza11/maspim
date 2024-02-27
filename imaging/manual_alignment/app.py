@@ -294,16 +294,20 @@ class MainApplication(tk.Tk):
             conn = sqlite3.connect(file_path)
             c = conn.cursor()
             try:
-                c.execute('SELECT msi_img_file_name, spot_array FROM transformation')
-                data = c.fetchall()
+                # check if the transformation table exists
+                c.execute('SELECT spec_id FROM transformation')
             except sqlite3.OperationalError:
                 logging.debug("The transformation table does not exist yet, creating one")
-                c.execute('CREATE TABLE transformation (msi_img_file_name TEXT, spot_array BLOB)')
-                c.execute('SELECT msi_img_file_name, spot_name FROM metadata')
+                # create a transformation table with metadata(spec_id) as the reference key
+                c.execute('CREATE TABLE transformation (spec_id INTEGER, msi_img_file_name TEXT, spot_array BLOB, xray_array BLOB, linescan_array BLOB, FOREIGN KEY(spec_id) REFERENCES metadata(spec_id))')
+                conn.commit()
+                # read all the spotname from metadata table and convert them to array
+                c.execute('SELECT spec_id, msi_img_file_name, spot_name FROM metadata')
                 data = c.fetchall()
-                logging.debug(f"reading all the spotname from metadata table and convert them to array")
+                assert len(data) > 0, "No data is found in the metadata table"
                 for row in tqdm.tqdm(data):
-                    im_name, spot_name = row
+                    spec_id, im_name, spot_name = row
+                    spec_id = int(spec_id)
                     spot_name = eval(spot_name)
                     # apply the transformation to the spot_name
                     spot_name = [re.findall(r'X(\d+)Y(\d+)', s) for s in spot_name]
@@ -315,26 +319,25 @@ class MainApplication(tk.Tk):
                     spot_name = spot_name.astype(int)
                     # write the spotnames to the transformation table as a blob
                     # insert the transformed spot_name to the transformation table
-                    c.execute('INSERT INTO transformation VALUES (?, ?)', (im_name, spot_name.tobytes()))
-                conn.commit()
-                c.execute('SELECT msi_img_file_name, spot_array FROM transformation')
-                data = c.fetchall()
+                    c.execute('INSERT INTO transformation (spec_id, msi_img_file_name, spot_array) VALUES (?, ?, ?)',
+                               (spec_id, im_name, spot_name.tobytes()))
+                    conn.commit()
+            c.execute('SELECT spec_id, msi_img_file_name, spot_array FROM transformation')
+            data = c.fetchall()
             for row in data:
-                im_name, spot_array = row
+                spec_id, im_name, spot_array = row
+                spec_id = int(spec_id)
                 spot_array = np.frombuffer(spot_array, dtype=int).reshape(-1, 2)
-                logging.debug(f"im_name: {im_name}, spot_array: {spot_array}")
+                logging.debug(f"spec_id: {spec_id}, im_name: {im_name}, spot_array: {spot_array}")
                 # apply the transformation to the spot_array
                 if im_name in self.solvers_xray.keys():
                     xray_array = self.solvers_xray[im_name].transform(spot_array)
                     linescan_array = self.solvers_depth[im_name].transform(spot_array)
-                    # insert the xray array to a new column in the transformation table
-                    c.execute('ALTER TABLE transformation ADD COLUMN xray_array BLOB')
-                    c.execute('UPDATE transformation SET xray_array = ? WHERE msi_img_file_name = ?',
-                              (xray_array.tobytes(), im_name))
-                    # insert the linescan array to a new column in the transformation table
-                    c.execute('ALTER TABLE transformation ADD COLUMN linescan_array BLOB')
-                    c.execute('UPDATE transformation SET linescan_array = ? WHERE msi_img_file_name = ?',
-                              (linescan_array.tobytes(), im_name))
+
+                    c.execute('UPDATE transformation SET xray_array = ? WHERE spec_id = ?',
+                              (xray_array.tobytes(), spec_id))
+                    c.execute('UPDATE transformation SET linescan_array = ? WHERE spec_id = ?',
+                              (linescan_array.tobytes(), spec_id))
                 else:
                     logging.debug(f"{im_name} is not in the solvers_xray.keys()")
             conn.commit()

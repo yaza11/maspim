@@ -113,7 +113,7 @@ class LoadedImage:
         pass
 
 
-def draw_teaching_points(x, y, app, size=3):
+def draw_teaching_points(x, y, app, size=3, img_tag=None):
     # mark the teaching point on the canvas
     app.canvas.create_oval(
         x - size,
@@ -123,6 +123,9 @@ def draw_teaching_points(x, y, app, size=3):
         fill="red",
         tags=f"tp_{int(x)}_{int(y)}"
     )
+    # bundle the teaching point with the image
+    if img_tag is not None:
+        app.canvas.addtag_withtag(img_tag, f"tp_{int(x)}_{int(y)}")
 
 
     # bind events to the teaching point
@@ -146,7 +149,7 @@ class TeachableImage(LoadedImage):
         canvas_x, canvas_y = app.canvas.canvasx(event.x), app.canvas.canvasy(event.y)
         logging.debug(f"teaching point added canvas_x: {canvas_x}, canvas_y: {canvas_y}")
         # draw the teaching point on the canvas
-        draw_teaching_points(canvas_x, canvas_y, app, size=self.tp_size)
+        draw_teaching_points(canvas_x, canvas_y, app, size=self.tp_size, img_tag=self.tag)
 
         # try to find the approximate depth of the teaching point
         if app.sediment_start is not None and app.cm_per_pixel is not None:
@@ -166,10 +169,6 @@ class TeachableImage(LoadedImage):
             self.teaching_points = {}
         teaching_point_key = (canvas_x, canvas_y)
         self.teaching_points[teaching_point_key] = (img_x, img_y, depth)
-
-        # once a teaching point is added, lock the image
-        if len(self.teaching_points) > 0 and not self.locked:
-            self.lock()
 
     def to_json(self):
         json_data = super().to_json()
@@ -207,7 +206,7 @@ class TeachableImage(LoadedImage):
         try:
             if self.teaching_points is not None:
                 for tp, _ in self.teaching_points.items():
-                    draw_teaching_points(tp[0], tp[1], app)
+                    draw_teaching_points(tp[0], tp[1], app, size=self.tp_size, img_tag=self.tag)
         except Exception as e:
             logging.error(e)
             pass
@@ -238,6 +237,7 @@ class MsiImage(TeachableImage):
             msi_x = (v[0] - x_min_px) / (x_max_px - x_min_px) * (x_max - x_min) + x_min
             msi_y = (v[1] - y_min_px) / (y_max_px - y_min_px) * (y_max - y_min) + y_min
             self.teaching_points[k] = (msi_x, msi_y, v[2])
+        print('yes')
 
     def to_json(self):
         json_data = super().to_json()

@@ -185,7 +185,11 @@ class RightClickOnTeachingPoint(RightClickMenu):
             elif distance < closest_tp[1]:
                 closest_tp = (k, distance)
         # delete the teaching point from the teaching_points dictionary
-        self.app.items[clicked_image.tag].teaching_points.pop(closest_tp[0])
-        logging.debug(f"Teaching point {closest_tp[0]} is deleted from {clicked_image.tag}")
+        try:
+            self.app.items[clicked_image.tag].teaching_points.pop(closest_tp[0])
+            logging.debug(f"Teaching point {closest_tp[0]} is deleted from {clicked_image.tag}")
+        except TypeError:
+            logging.debug(f"Teaching point {item} is deleted")
+            pass
         self.app.canvas.delete(item)
         logging.debug(f"Teaching point {item} is deleted")

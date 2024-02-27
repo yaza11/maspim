@@ -54,13 +54,18 @@ class MetadataCrawler:
                                 continue
 
     def to_sqlite(self, db_path):
+        # create a sqlite database if it does not exist
+        if not os.path.exists(db_path):
+            open(db_path, 'w').close()
+        # write the metadata to the sqlite database
         import sqlite3
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
-        c.execute('CREATE TABLE IF NOT EXISTS metadata (spec_file_name TEXT, msi_img_file_path TEXT, '
+        c.execute('CREATE TABLE IF NOT EXISTS metadata (spec_id INTEGER PRIMARY KEY, spec_file_name TEXT, msi_img_file_path TEXT, '
                   'msi_img_file_name TEXT, px_rect TEXT, msi_rect TEXT, spot_name TEXT)')
         for k, v in self.metadata.items():
-            c.execute('INSERT INTO metadata VALUES (?, ?, ?, ?, ?, ?)', (v.spec_file_name, v.msi_img_file_path,
+            c.execute('INSERT INTO metadata (spec_file_name, msi_img_file_path, msi_img_file_name, px_rect, msi_rect, spot_name) VALUES (?, ?, ?, ?, ?, ?)',
+                                                            (v.spec_file_name, v.msi_img_file_path,
                                                                          v.msi_img_file_name, str(v.px_rect),
                                                                          str(v.msi_rect), str(v.spot_name)))
         conn.commit()
