@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import tkinter as tk
 from tkinter import simpledialog
 
@@ -127,11 +128,17 @@ def draw_teaching_points(x, y, app, size=3, img_tag=None):
     if img_tag is not None:
         app.canvas.addtag_withtag(img_tag, f"tp_{int(x)}_{int(y)}")
 
-
     # bind events to the teaching point
-    app.canvas.tag_bind(f"tp_{int(x)}_{int(y)}",
-                        "<Button-2>",
-                        lambda e: app.right_click_on_tp.show_menu(e, f"tp_{int(x)}_{int(y)}"))
+    if sys.platform == "darwin":
+        app.canvas.tag_bind(f"tp_{int(x)}_{int(y)}",
+                            "<Button-2>",
+                            lambda e: app.right_click_on_tp.show_menu(e, f"tp_{int(x)}_{int(y)}"))
+    elif sys.platform == "win32":
+        app.canvas.tag_bind(f"tp_{int(x)}_{int(y)}",
+                            "<Button-3>",
+                            lambda e: app.right_click_on_tp.show_menu(e, f"tp_{int(x)}_{int(y)}"))
+    else:
+        raise Exception("Unsupported platform")
 
     # return the tag of the teaching point
     return f"tp_{int(x)}_{int(y)}"
@@ -178,7 +185,8 @@ class TeachableImage(LoadedImage):
             json_data["teaching_points"] = {str(k): v for k, v in json_data["teaching_points"].items()}
             if hasattr(self, 'teaching_points_px_coords'):
                 try:
-                    json_data["teaching_points_px_coords"] = {str(k): v for k, v in json_data["teaching_points_px_coords"].items()}
+                    json_data["teaching_points_px_coords"] = {str(k): v for k, v in
+                                                              json_data["teaching_points_px_coords"].items()}
                 except Exception as e:
                     logging.error(e)
                     pass
@@ -195,7 +203,8 @@ class TeachableImage(LoadedImage):
         json_data["teaching_points"] = {eval(k): v for k, v in json_data["teaching_points"].items()}
         if hasattr(self, 'teaching_points_px_coords'):
             try:
-                json_data["teaching_points_px_coords"] = {eval(k): v for k, v in json_data["teaching_points_px_coords"].items()}
+                json_data["teaching_points_px_coords"] = {eval(k): v for k, v in
+                                                          json_data["teaching_points_px_coords"].items()}
                 self.teaching_points_px_coords = json_data['teaching_points_px_coords']
             except Exception as e:
                 logging.error(e)

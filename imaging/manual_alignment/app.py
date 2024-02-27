@@ -1,6 +1,7 @@
 import json
 import re
 import sqlite3
+import sys
 import tkinter as tk
 from tkinter import ttk, simpledialog
 from tkinter import filedialog
@@ -278,9 +279,16 @@ class MainApplication(tk.Tk):
         self.canvas.tag_bind(f"{loaded_image.tag}", "<Shift-Button-1>",
                              lambda e: self.add_teaching_point(e))
         # bind right-click event to the image
-        self.canvas.tag_bind(f"{loaded_image.tag}",
-                             "<Button-2>",
-                             lambda e, item=f"{loaded_image.tag}": self.right_click_on_image.show_menu(e, item))
+        if sys.platform == "darwin":
+            self.canvas.tag_bind(f"{loaded_image.tag}",
+                                 "<Button-2>",
+                                 lambda e, item=f"{loaded_image.tag}": self.right_click_on_image.show_menu(e, item))
+        elif sys.platform == "win32":
+            self.canvas.tag_bind(f"{loaded_image.tag}",
+                                 "<Button-3>",
+                                 lambda e, item=f"{loaded_image.tag}": self.right_click_on_image.show_menu(e, item))
+        else:
+            raise ValueError("The platform is not supported")
 
     def calc_transformation_matrix(self):
         """ solve the transformation among MSi coordinates, xray pixel coordinates, and line scan depth"""
@@ -438,9 +446,16 @@ class MainApplication(tk.Tk):
 
     def bind_events_to_vertical_lines(self, vertical_line):
         """Bind events to the vertical lines"""
-        self.canvas.tag_bind(f"{vertical_line.tag}",
-                             "<Button-2>",
-                             lambda e, item=f"{vertical_line.tag}": self.right_click_on_line.show_menu(e, item))
+        if sys.platform == "darwin":
+            self.canvas.tag_bind(f"{vertical_line.tag}",
+                                 "<Button-2>",
+                                 lambda e, item=f"{vertical_line.tag}": self.right_click_on_line.show_menu(e, item))
+        elif sys.platform == "win32":
+            self.canvas.tag_bind(f"{vertical_line.tag}",
+                                 "<Button-3>",
+                                 lambda e, item=f"{vertical_line.tag}": self.right_click_on_line.show_menu(e, item))
+        else:
+            raise ValueError("The platform is not supported")
         # bind shift-left-click to add a teaching point
         self.canvas.tag_bind(f"{vertical_line.tag}", "<Shift-Button-1>", self.add_teaching_point)
 
