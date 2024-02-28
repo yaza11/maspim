@@ -1,4 +1,5 @@
-' the modified script to export mass list to a text file
+' the modified script to export mass list to a text file in a single write operation
+' warning: could throw an error 'run out of string space' if the number of peaks is too large
 
 ' Include the ReadParams.vbs file, needs absolute path if run from dataanalysis
 ExecuteGlobal CreateObject("Scripting.FileSystemObject").OpenTextFile("ReadParams.vbs", 1).ReadAll()
@@ -20,7 +21,7 @@ const spec_start = 1
 Set DA = GetObject("","BDal.DataAnalysis.Application")
 DA.Activate(0)
 
-For Each currentAnalysis in Analyses:
+For Each currentAnalysis in DA.Analyses:
 
     For SpecCounter = currentAnalysis.Spectra.Count to 1 Step -1  ' deletes all previously generated spectra
         currentAnalysis.Spectra.Delete SpecCounter

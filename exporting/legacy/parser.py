@@ -79,5 +79,23 @@ def extract_mzs(target_mz, txt_path, tol=0.01, min_int=10000, min_snr=0):
         return df
 
 
+def extract_all(txt_path, min_int=10000, min_snr=1, peak_th=0.1, min_member=0.1, tol=10):
+    # test if module 'mfe' is installed
+    try:
+        import mfe
+        from mfe.from_txt import msi_from_txt, get_ref_peaks, create_feature_table
+    except ImportError:
+        raise ImportError(
+            'Please install mfe first by running "pip install git+https://github.com/weimin-liu/msi_feature_extraction.git"')
+
+    spectra = msi_from_txt(raw_txt_path=txt_path, min_int=min_int, min_snr=min_snr)
+
+    ref = get_ref_peaks(spectra, peak_th=peak_th, min_member=min_member, tol=tol)
+
+    feature_table = create_feature_table(spectra, ref[peak_th], tol=tol)
+
+    return feature_table
+
+
 if __name__ == "__main__":
     pass
