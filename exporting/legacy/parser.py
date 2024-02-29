@@ -36,6 +36,19 @@ def extract_mzs(target_mz, txt_path, tol=0.01, min_int=10000, min_snr=0):
     :param min_snr: the minimum signal-to-noise ratio
     :return: a dataframe containing the target m/z values and intensities for all spectra, and the ppm error for each
     """
+    # preprocessing target_mz if it's a dictionary
+    if isinstance(target_mz, dict):
+        mz_names = list(target_mz.keys())
+        target_mz = list(target_mz.values())
+    elif isinstance(target_mz, float):
+        target_mz = [target_mz]
+        mz_names = [0]
+    else:
+        mz_names = range(len(target_mz))
+
+    # convert them to strings
+    mz_names = [str(mz) for mz in mz_names]
+
     # read the txt file
     with open(txt_path, 'r') as f:
         lines = f.readlines()
@@ -53,30 +66,19 @@ def extract_mzs(target_mz, txt_path, tol=0.01, min_int=10000, min_snr=0):
     intensities = [[float(intensity) for intensity in intensity_list] for intensity_list in intensities]
     snrs = [line.split(';')[4::3] for line in lines]
     snrs = [[float(snr) for snr in snr_list] for snr_list in snrs]
-
-    if isinstance(target_mz, float):
-        mz = np.zeros(len(spot_names))
-        intensity = np.zeros(len(spot_names))
-        snr = np.zeros(len(spot_names))
-        for i in range(len(spot_names)):
-            spec = np.array([mzs[i], intensities[i], snrs[i]]).T
-            mz[i], intensity[i], snr[i] = extract_mz(target_mz, spec, tol, min_int, min_snr)
-        df = pd.DataFrame({'spot_name': spot_names, 'mz': mz, 'intensity': intensity, 'snr': snr})
-        return df
-    else:
-        mz = np.zeros((len(spot_names), len(target_mz)))
-        intensity = np.zeros((len(spot_names), len(target_mz)))
-        snr = np.zeros((len(spot_names), len(target_mz)))
-        for i in range(len(spot_names)):
-            spec = np.array([mzs[i], intensities[i], snrs[i]]).T
-            for j in range(len(target_mz)):
-                mz[i, j], intensity[i, j], snr[i, j] = extract_mz(target_mz[j], spec, tol, min_int, min_snr)
-        df = pd.DataFrame({'spot_name': spot_names})
-        for i in range(len(target_mz)):
-            df['mz_' + str(i)] = mz[:, i]
-            df['intensity_' + str(i)] = intensity[:, i]
-            df['snr_' + str(i)] = snr[:, i]
-        return df
+    mz = np.zeros((len(spot_names), len(target_mz)))
+    intensity = np.zeros((len(spot_names), len(target_mz)))
+    snr = np.zeros((len(spot_names), len(target_mz)))
+    for i in range(len(spot_names)):
+        spec = np.array([mzs[i], intensities[i], snrs[i]]).T
+        for j in range(len(target_mz)):
+            mz[i, j], intensity[i, j], snr[i, j] = extract_mz(target_mz[j], spec, tol, min_int, min_snr)
+    df = pd.DataFrame({'spot_name': spot_names})
+    for i in range(len(target_mz)):
+        df['mz_' + mz_names[i]] = mz[:, i]
+        df['Int_' + mz_names[i]] = intensity[:, i]
+        df['snr_' + mz_names[i]] = snr[:, i]
+    return df
 
 
 def extract_all(txt_path, min_int=10000, min_snr=1, peak_th=0.1, min_member=0.1, tol=10):
