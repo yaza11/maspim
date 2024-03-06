@@ -1,0 +1,3 @@
+[submodule "imaging/msiAlign"]
+	path = imaging/msiAlign
+	url = git@github.com:weimin-liu/msiAlign.git
