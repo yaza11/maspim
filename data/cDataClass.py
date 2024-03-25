@@ -1,14 +1,13 @@
 """Superclass for cMSI, cXRF, cXRay."""
 from res.constants import dict_labels, key_hole_pixels
 
-from util.cClass import Convinience, verbose_function, return_existing
-from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
+from util.cClass import Convinience, return_existing
 
 import imaging.util.Image_convert_types as Image_convert_types
 from imaging.util.Image_plotting import plt_cv2_image
 from imaging.util.Image_helpers import exclude_missing_pixels_in_feature_table
 
-from exporting.from_mcf.rtms_communicator import Spectra
+from exporting.from_mcf.cSpectrum import Spectra
 
 import pickle
 import glob
@@ -114,357 +113,8 @@ def PCA_biplot(score, coeffs, labels=None, var=None, title='', hold=False, add_a
         plt.show()
 
 
-class Data(Convinience):
-    """Class to manipulate and analyze MSI or XRF data."""
-    def load(self, **kwargs) -> None:
-        """Actions to performe when object was loaded from disc."""
-        if __name__ == '__main__':
-            raise RuntimeError('Cannot load obj from file where it is defined.')
-        
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        with open(os.path.join(self.path_d_folder, name), 'rb') as f:
-            obj = pickle.load(f)
-        
-        self.__dict__ = obj.__dict__
-        
-        self.plts = False
-        self.verbose = False
-        ft_nondata = self.feature_table.copy()
-        self.__delattr__('feature_table')
-        ft_data = self.sget_feature_table(**kwargs)
-        self.feature_table = ft_data.join(ft_nondata)
-
-    @verbose_function
-    def save(self) -> None:
-        """Actions to performe before saving to disc."""
-        if __name__ == '__main__':
-            raise RuntimeError('Cannot save object from the file in which it is defined.')
-        dict_backup = self.__dict__.copy()
-        # delete all attributes that are not flagged as relevant
-        existent_attributes = list(self.__dict__.keys())
-        keep_attributes = set(existent_attributes) & class_to_attributes(self)
-        nondata_columns_to_keep = list(Data_nondata_columns & set(self.feature_table.columns))
-        for attribute in existent_attributes:
-            if attribute not in keep_attributes:
-                self.__delattr__(attribute)
-        # drop data columns from current feature table
-        if hasattr(self, 'feature_table'):
-            # make sure feature table is sorted
-            self.feature_table = self.feature_table\
-                .sort_values(by=['y', 'x']).reset_index(drop=True)
-            self.feature_table = self.feature_table.loc[:, nondata_columns_to_keep].copy()
-        
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        with open(os.path.join(self.path_d_folder, name), 'wb') as f:
-            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
-        self.__dict__ = dict_backup
-
-    def add_graylevel_from_data_frame(self, overwrite=False) -> None:
-        """Apply grayscale conversion in feature table."""
-        # https://docs.opencv.org/3.4/de/d25/imgproc_color_conversions.html
-        if ('L' in self.sget_feature_table().columns) and (not overwrite):
-            return
-        self.feature_table['L'] = self.sget_feature_table().apply(
-            lambda row:
-            round(0.299 * row.R + 0.587 * row.G + 0.114 * row.B),
-            axis=1
-        )
-
-    @return_existing('feature_table_paths_dict')
-    def sget_existing_feature_table_paths(self) -> dict:
-        feature_table_path = os.path.join(
-            self.dir_saves, 'raw_feature_tables', self._section_str,
-            self._window)
-        feature_tables = glob.glob('feature_table*.csv', root_dir=feature_table_path)
-        feature_table_paths_dict = {}
-        for feature_table in feature_tables:
-            if self._data_type == 'msi':
-                # th is something like 0.2
-                th = float(feature_table.split('_')[-1]
-                           .split('.')[0]
-                           .replace('dot', '.'))
-                feature_table_paths_dict[th] = os.path.join(feature_table_path,
-                                                            feature_table)
-            elif self._data_type == 'xrf':
-                file_type = feature_table.split(
-                    '_')[-1].split('.')[0]  # S or D
-                feature_table_paths_dict[file_type] = os.path.join(
-                    feature_table_path, feature_table)
-        self.feature_table_paths_dict = feature_table_paths_dict
-        return self.feature_table_paths_dict
-
-    def get_key_for_feature_table(self) -> float | str:
-        if self._data_type == 'msi':
-            key = self.peak_th_ref_peak
-        elif self._data_type == 'xrf':
-            key = self.default_file_type
-        return key
-
-    def load_feature_table(self, key, ft_path=None, **kwargs) -> pd.DataFrame | None:
-        if (ft_path is None) and (not (key in self.sget_existing_feature_table_paths())):
-            return None
-        if ft_path is None:
-            ft_path = self.sget_existing_feature_table_paths()[key]
-        if self.verbose:
-            print(f'loading raw feature table from {ft_path}')
-        if (suffix := ft_path.split('.')[-1]) == 'csv':
-            ft = pd.read_csv(ft_path, index_col=0)\
-                .sort_values(by=['y', 'x']).reset_index(drop=True)
-        elif suffix == 'feather':
-            ft = pd.read_feather(ft_path)\
-                .sort_values(by=['y', 'x']).reset_index(drop=True)
-        return ft
-
-    def load_feature_table_common_mzs(
-            self, key, section: tuple[float] | None = None
-    ):
-        if self._window == 'FA':
-            combined_sections = '490-510'
-        else:
-            combined_sections = '490-510'
-        ft_path = os.path.join(
-            self.dir_saves,
-            'raw_feature_tables',
-            combined_sections,
-            self._window
-        )
-        print('looking in dir', ft_path)
-
-        ft_files = glob.glob('feature_table*.csv', root_dir=ft_path)
-        if len(ft_files) > 1:
-            print('found more than one feature table:', ft_files)
-            print('picking', ft_files[0])
-        if len(ft_files) == 0:
-            print('did not find any feature tables in', ft_path)
-            return None
-        ft_file = ft_files[0]
-        ft = pd.read_csv(os.path.join(ft_path, ft_file), index_col=0)
-        # filter out relevant columns
-        if (section is None) and (self._window != 'FA'):
-            mask_columns = ft.R == self._section[0]
-            ft = ft.loc[mask_columns, :].copy()
-            if 'R' in ft.columns:
-                ft = ft.drop(columns='R')
-        else:
-            pass
-        ft = ft.sort_values(by=['y', 'x']).reset_index(drop=True)
-        return ft
-
-    @return_existing('feature_table')
-    def sget_feature_table(self):
-        # enter d-folder, locate spectra file
-        spectra = Spectra(path_d_folder=self.path_d_folder, load=True)
-        assert hasattr(spectra, 'feature_table'), 'properly save spectra object'
-        self.feature_table = spectra.feature_table
-        return self.feature_table
-
-
-    @return_existing('feature_table')
-    def sget_feature_table_old(
-            self,
-            key: float | str | None = None,
-            use_common_mzs: bool = False,
-            **kwargs
-    ) -> pd.DataFrame:
-        """
-        Load feature table from disc if it exists or create new one.
-
-        Parameters
-        ----------
-        key : float | str | None, optional
-            for MSI the peak thr, for XRF S or D. The default is None.
-        use_common_mzs: bool
-            If this option is toggled to true, will load/create feature table
-            with masses shared over all sections. The default is False.
-
-        Returns
-        -------
-        pd.DataFrame
-            The loaded/created feature table.
-
-        """
-        raise NotImplementedError('Depricated, use sget_feature_table')
-        if key is None:
-            key = self.get_key_for_feature_table()
-
-        # decide how to get ft based on options
-        if use_common_mzs and (self._data_type == 'msi'):
-            ft = self.load_feature_table_common_mzs(key)
-            if ft is None:
-                raise ValueError(
-                    'no saved feature table with common mzs exists'
-                )
-
-        elif (ft := self.load_feature_table(key, **kwargs)) is None:
-            print(f'creating raw feature table w/ {key}')
-            ft = self.get_data_frames_from_txt([key])[key]\
-                .sort_values(by=['y', 'x']).reset_index(drop=True)
-
-        self.feature_table = ft
-        return self.feature_table
-
-    def combine_photo_feature_table(self):
-        '''
-        put the pixel values of an image into a feature table by reading data from
-        the mis-file
-
-        Parameters
-        ----------
-        img_path : str
-            the directory path to the image file.
-        FT : pd.DataFrame
-            the feature table to which the image shall be matched.
-        plts : bool, optional
-            whether to plot inbetween results. The default is False.
-
-        Returns:
-        -------
-        FT_new : pd.DataFrame
-            The new FT, either the old FT with appended image-columns or an
-            entirely new object with only image data, depending on create_sep_FT.
-
-        '''
-        img_resized = self.sget_photo_ROI()
-        # exclude missing values
-        mask_valid = exclude_missing_pixels_in_feature_table(self.get_xy())
-
-        pixels_valid = np.array(img_resized)[mask_valid]
-
-        if img_resized.mode == 'RGB':
-            self.feature_table['R'] = pixels_valid[:, 0]
-            self.feature_table['G'] = pixels_valid[:, 1]
-            self.feature_table['B'] = pixels_valid[:, 2]
-            self.feature_table['RGB'] = list(zip(
-                self.feature_table.R,
-                self.feature_table.G,
-                self.feature_table.B
-            ))
-        elif img_resized.mode == 'L':
-            self.feature_table['L'] = pixels_valid[:]
-        else:
-            raise ValueError('image with mode {img_resized.mode} is of \
-invalid format. Image should have 1 or 3 channels.')
-
-        if self.plts:
-            self.plt_photo()
-
-        return self.feature_table
-
-    def pixels_get_photo_ROI_to_ROI(
-            self, data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh: tuple[int]
-        ):
-        """
-        Add x_ROI, y_ROI columns.        
-        """
-        # pixel coords of data, set by get_photo_ROI
-        (xd, yd, wd, hd) = data_ROI_xywh  # data units
-        # corner and dimensions of data ROI in original image
-        (xp, yp, wp, hp) = photo_ROI_xywh  # photo units
-        # region of ROI defined by find_sample_region in pixel coords of
-        # original image
-        (xr, yr, wr, hr) = image_ROI_xywh
-        # transform the pixel coords in the feature table to ROI pixel
-        # coordinates by
-        #   1. get values
-        x_ft = self.get_xy()['x'].to_numpy()
-        y_ft = self.get_xy()['y'].to_numpy()
-        #   2. shift to 0
-        x_ft = x_ft - xd
-        y_ft = y_ft - yd
-        #   3. scale so that coordinates are in terms of photo
-        x_ft = x_ft / wd * wp
-        y_ft = y_ft / hd * hp
-        # --> coordinates in terms of photo_ROI
-        #   4. shift accordingly in detected ROI
-        # first add the corners defined in photo_ROI, then subtract the
-        # offset of the detected ROI
-        # --> pixel coordinetes in photo-units
-        x_ft += xp
-        y_ft += yp
-        # shift relativ to origin of image ROI
-        x_ft -= xr
-        y_ft -= yr
-        # append to feature_table, so now each (x, y) has an according
-        # (x_ROI, y_ROI) corresponding to pixels in the ROI
-        self.feature_table['x_ROI'] = (x_ft + .5).astype(int)
-        self.feature_table['y_ROI'] = (y_ft + .5).astype(int)
-
-    def add_attribute_from_image(self, image, column_name, median=False):
-        """
-        Add a column to the feature table from an image (ROI of sample)
-
-        Parameters
-        ----------
-        image : np.ndarray
-            The image to add to the feature table, must be grayscale and in the 
-            region of interest.
-        column_name : str
-            Name of the new column in the dataframe.
-        median : bool, optional
-            Whether to average out values around measurement points.
-            The default is False.
-
-        Returns
-        -------
-        None.
-
-        """
-        assert len(image.shape) == 2, 'image must be single channel'
-        if median:
-            # footprint of area to average out for classification
-            length_median = int(
-                np.median(np.diff(self.feature_table.x_ROI)) / 2)
-            if not length_median % 2:
-                length_median += 1
-            # for each point in feature table, take the median of an
-            # dpixels/2 x dpixels/2 area to classify point
-            image = cv2.medianBlur(image, length_median)
-
-        # zero pad for pixels outside of image extent
-        # number of pixels in the data ROI (in image coordinates)
-        y_ROI_max = self.feature_table.y_ROI.max()
-        x_ROI_max = self.feature_table.x_ROI.max()
-        image_zeropad = np.zeros(
-            (np.max([y_ROI_max, image.shape[0]]) + 1,
-             np.max([x_ROI_max, image.shape[1]]) + 1),
-            dtype=image.dtype)
-
-        # set values in zeropadded array
-        image_zeropad[:image.shape[0],
-                      :image.shape[1]] = image
-        # add values for each row according to pixels in image
-        # 0 + to avoid bug???
-        self.feature_table[column_name] = self.feature_table.apply(
-                lambda row: 0 + image_zeropad[int(row.y_ROI), int(row.x_ROI)],
-                axis='columns'
-        )
-            
-        if self.plts:
-            idxs = np.c_[self.feature_table.y_ROI, self.feature_table.x_ROI]
-            plt.figure()
-            plt.imshow(image)
-            plt.plot(idxs[:, 1], idxs[:, 0], '-')
-            plt.show()
-            
-            plt_cv2_image(
-                image_zeropad,
-                'zeropaded')
-            
-            if median:
-                plt_cv2_image(
-                    image,
-                    'classification after blurring according to data points')
-
-            plt_cv2_image(image_zeropad, 'final classification')
-
-            plt.figure()
-            plt.imshow(
-                self.feature_table.pivot(
-                    index='y_ROI', columns='x_ROI', values=column_name),
-                cmap='rainbow')
-            plt.title('classification in feature table')
-            plt.show()
-
+class Lamination:
+    """Special functionality for laminated samples."""
     def add_laminae_classification(
             self, image_classification=None, overwrite=False):
         """Add classification column to feature table."""
@@ -496,7 +146,7 @@ invalid format. Image should have 1 or 3 channels.')
             image_simplified_classification, 'classification_s', median=False)
         mask = self.feature_table.classification_s == 0
         self.feature_table.loc[mask, 'classification_s'] = np.nan
-
+        
     def add_seed_classification(self):
         from cImage import ImageClassified
         image_obj = ImageClassified(self._section, self._window)
@@ -510,106 +160,337 @@ invalid format. Image should have 1 or 3 channels.')
         mask = self.feature_table.seed == 0
         self.feature_table.loc[mask, 'seed'] = np.nan
         
-    def correct_depths_by_angle(self):
-        # TODO: this
-        pass
-
-    def split_at_depth(self, depth: float):
-        """Split feature table at depth [cm] and return upper and lowersection."""
-        self.add_depth_column()
-
-        idxs_u = np.argwhere(self.feature_table.depth < depth)[:, 0]
-        idxs_l = np.argwhere(self.feature_table.depth >= depth)[:, 0]
-
-        if self._window == 'xrf':
-            from cXRF import XRF
-            Du = XRF((self._section[0], depth), self._window)
-            Dl = XRF((depth, self._section[1]), self._window)
-        else:
-            from cMSI import MSI
-            Du = MSI((self._section[0], depth), self._window)
-            Dl = MSI((depth, self._section[1]), self._window)
-
-        Du.feature_table = self.feature_table.iloc[idxs_u, :]
-        Dl.feature_table = self.feature_table.loc[idxs_l, :]
-        return Du, Dl
-
-    def get_data(self):
-        return self.feature_table.loc[:, self.get_data_columns()]
-
-    def get_xy(self):
-        return self.feature_table.loc[:, ['x', 'y']]
-
-    def get_x(self):
-        return self.feature_table.loc[:, ['x']]
-
-    def get_y(self):
-        return self.feature_table.loc[:, ['y']]
-
-    def get_nondata_columns(self):
-        # cols to check against
-        dcols = set(self.get_data_columns())
-        nondata_columns = [
-            col for col in self.feature_table.columns
-            if col not in dcols]
-        return nondata_columns
-
-    def get_nondata(self):
-        nondata = self.feature_table.loc[
-            :, self.get_nondata_columns()]
-        return nondata
-
-    def get_data_for_columns(self, columns):
-        """Return part of the feature table specified by columns."""
-        return self.feature_table.loc[:, columns]
-
-    def get_data_mean(self):
-        return self.get_data().mean(axis=0)
-
-    def get_data_zeros_corrected(self):
+    def calculate_KL_div(
+            self, col: str | int) -> tuple[float]:
         """
-        Return copy of current ft with corrected zeros.
+        Calculate KL divergence for an image in the feature table.
 
-        Zeros are shifted by 1/2 the lowest value in each spectrum.
-        Since 0 could be anything between 0 and the SNR, this is on average
-        closer to the real value if equal likelyhood is assumed.
+        For an image with no seasonality the entropy within the light and dark
+        pixels should be the same. Or in other words: the probability
+        distribution of the light pixels should be the same as that for the
+        whole image.
+
+        Parameters
+        ----------
+        col : str | int
+            The column in the feature table for which to calculate the KL div.
+        bin_log: bool. The default is True.
+            If True, will use log scale for bin edges.
 
         Returns
         -------
-        pd.DataFrame
-            The feature table with shifted zeros.
+        tuple[float]
+            Entropy of image, entropy of light pixels, entropy of dark pixels,
+            KL of light pixels, KL of dark pixels.
 
         """
-        # data columns
-        cols = self.get_data_columns()
-        # nonzero mask
-        nonzero = self.feature_table.loc[:, cols] > 0
-        # the lowest nonzero value for each pixel
-        mins = (self.feature_table[nonzero].loc[:, cols].min(axis=1)).to_numpy()
-        # add 1/2 of min to each nonzero
+        I = self.feature_table[col].loc[
+            (self.feature_table.classification != 0) &
+            (self.feature_table[col] >= 0)]
+        I_light = I.loc[self.feature_table.classification == 255]
+        I_dark = I.loc[self.feature_table.classification == 127]
+        # estimate the probability distribution in the entire image
+        prob, bin_edges, bin_centers = estimate_probability_distribution(I)
+        # estimate the probability distribution in the light/dark pixels of the image
+        #   using the same bin_edges
+        prob_light, _, _ = estimate_probability_distribution(
+            I_light, bin_edges=bin_edges)
+        prob_dark, _, _ = estimate_probability_distribution(
+            I_dark, bin_edges=bin_edges)
 
-        def replace_zeros(col):
-            col = col.to_numpy()
-            col[col == 0] = mins[col == 0] / 2
-            return col
+        if self.plts:
+            fig, axs = plt.subplots(nrows=1, ncols=2)
+            axs[0].loglog(bin_centers, prob, label='pdf img')
+            axs[0].plot(bin_centers, prob_light, label='pdf light')
+            axs[0].plot(bin_centers, prob_dark, label='pdf dark')
+            axs[0].legend()
+            axs[0].set_xlabel('intensity')
+            axs[0].set_ylabel('probability density')
 
-        ft = self.feature_table.copy()
-        ft.loc[:, cols] = ft.loc[:, cols].apply(lambda col: replace_zeros(col), axis=0)
-        return ft
+            axs[1].plot(bin_centers, prob, label='pdf img')
+            axs[1].plot(bin_centers, prob_light, label='pdf light')
+            axs[1].plot(bin_centers, prob_dark, label='pdf dark')
+            axs[1].legend()
+            axs[1].set_xlabel('intensity')
+            # axs[1].set_ylabel('probability density')
 
-    def update_flow_feature_tables(self, new_feature_table):
-        # unlink current FT
-        self.flow_feature_tables.pop()
-        # add unlinked copy
-        self.flow_feature_tables.append(self.feature_table.copy())
-        # add linked copy
-        self.feature_table = new_feature_table
-        self.flow_feature_tables.append(self.feature_table)
-        # reset results of PCA, NMF, kmeans
-        self.results_NMF = {}
-        self.results_kmeans = {}
-        self.pca, self.pcs = None, None
+            plt.show()
 
+        D_light = scipy.stats.entropy(prob_light, prob)
+        D_dark = scipy.stats.entropy(prob_dark, prob)
+
+        # calculate entropy, relative entropy
+        if self.verbose:
+            print(
+                f'Kullback-Leibler divergence for light pixels {D_light:.4f}')
+            print(
+                f'Kullback-Leibler divergence for dark pixels {D_dark:.4f}')
+
+        return D_light, D_dark
+        
+    def calculate_lightdark_rankings(
+            self, use_intensities=True, use_successes=False, use_KL_div=False,
+            scale=False, columns=None, classification_column='classification',
+            calc_corrs=False, **kwargs):
+        if not any((use_intensities, use_successes, use_KL_div)):
+            raise KeyError('Use at least one of the methods.')
+
+        if columns is None:
+            columns = self.get_data_columns()
+
+        # initiate data_frame
+        self.rankings = pd.DataFrame(index=columns)
+
+        ft_averages = self.processing_zone_wise_average(
+            zones_key=classification_column, columns=columns).drop(columns=['x'])
+        light = ft_averages.loc[255]
+        self.rankings['av_intensity_light'] = light
+        dark = ft_averages.loc[127]
+        self.rankings['av_intensity_dark'] = dark
+
+        # calculate the average intensity in the light and dark pixels
+        # respectively and calculate the distribution of light
+        # (ratio of .5 corresponds to even distribution)
+
+        ratio_intensities = light / (light + dark) - .5
+        # even if the ratio_intensities is not used, the sign is needed for
+        # KL_div
+        if not use_intensities:
+            ratio_intensities = np.sign(ratio_intensities)
+
+        # count the successfull spectra for each compound in the specified zone
+        if use_successes:
+            ft_nonzeros = self.processing_zone_wise_average(
+                zones_key=classification_column, astype=bool, columns=columns).drop(columns=['x'])
+
+            ratio_nonzeros = np.zeros(len(columns))
+            # use density in light for predominantly light layers
+            mask_light = (ratio_intensities > 0).to_numpy()
+            ratio_nonzeros[mask_light] = ft_nonzeros.loc[255].iloc[mask_light]
+            ratio_nonzeros[~mask_light] = ft_nonzeros.loc[127].iloc[~mask_light]
+        else:
+            ratio_nonzeros = 1
+
+        if use_KL_div:
+            KL_divs = pd.DataFrame(data=np.empty(
+                (len(columns), 2)), index=columns, columns=['KL_light', 'KL_dark'])
+            p = 0
+            for idx, col in enumerate(columns):
+                if self.verbose and (p != (p := round(idx / len(columns) * 100))):
+                    print(f'{p} percent done')
+                KL_divs.loc[col, :] = self.calculate_KL_div(col)
+            KL_div = (KL_divs['KL_light'] + KL_divs['KL_dark']) / 2
+        else:
+            KL_div = 1
+            KL_divs = {'KL_light': 1, 'KL_dark': 1}
+
+        self.rankings['KL_div_light'] = KL_divs['KL_light']
+        self.rankings['KL_div_dark'] = KL_divs['KL_dark']
+
+        if scale:
+            # scale max(abs) to 1
+            ratio_intensities /= np.max(np.abs(ratio_intensities))
+            ratio_nonzeros /= np.max(ratio_nonzeros)
+            KL_div /= np.max(KL_div)
+
+        self.rankings['intensity_div'] = ratio_intensities
+        self.rankings['density_nonzero'] = ratio_nonzeros
+        self.rankings['KL_div'] = KL_div
+
+        rankings = ratio_intensities * ratio_nonzeros * KL_div
+        self.rankings['score'] = rankings
+
+        if calc_corrs:
+            mask_nonholes = self.feature_table[classification_column] != 0
+            self.rankings['corr_L'] = self.get_data().loc[mask_nonholes, :]\
+                .corrwith(self.feature_table.L[mask_nonholes])
+            self.rankings[f'corr_{classification_column}'] = \
+                self.get_data().loc[mask_nonholes, :].corrwith(
+                    self.feature_table[classification_column][mask_nonholes]
+            )
+
+        return self.rankings
+
+    def plt_PCA_rankings(
+            self,
+            columns=None,
+            sign_criteria=False,
+            add_laminae_averages=False,
+            **kwargs
+    ):
+        # create biplot
+        # https://stackoverflow.com/questions/39216897/plot-pca-loadings-and-loading-in-biplot-in-sklearn-like-rs-autoplot
+        # calculate PCA of scaled columns
+        if columns is None:
+            columns = self.rankings.columns
+        rankings = self.rankings[columns].copy()
+
+        if add_laminae_averages:
+            from cTimeSeries import TimeSeries
+            TS = TimeSeries(self._section, self._window)
+            TS.load()
+            r_av_L = TS.get_corr_with_grayscale().copy()
+            r_av_C = TS.get_corr_with_grayscale(contrast=True).copy()
+            del TS
+
+            if not sign_criteria:
+                r_av_L = np.abs(r_av_L)
+                r_av_C = np.abs(r_av_C)
+            # add median seasonality
+            rankings['corr_av_L'] = r_av_L
+            rankings['corr_av_C'] = r_av_C
+            columns = list(columns) + ['corr_av_C', 'corr_av_L']
+
+        if sign_criteria:
+            signs = np.sign(self.rankings['intensity_div'])
+            for c in ('KL_div', 'density_nonzero'):
+                if c in columns:
+                    rankings[c] *= signs
+
+        X = StandardScaler().fit_transform(rankings)
+        # do PCA:
+        pca = PCA(n_components=2)
+        # compounds in new frame of reference
+        pcs = pd.DataFrame(
+            data=pca.fit_transform(X),
+            columns=[f'PC {i + 1}' for i in range(pca.n_components)],
+            index=rankings.index
+        )
+        # get coefficients of criteria
+        coeffs = pd.DataFrame(data=pca.components_, columns=columns)
+        PCA_biplot(pcs, coeffs, var=pca.explained_variance_ratio_, **kwargs)
+        
+    def plt_overview_rankings(self, cols=None, **kwargs):
+        if cols is None:
+            cols = self.get_data_columns()
+        # calculate the light, dark and ratio
+        ft_averages = self.processing_zone_wise_average(
+            zones_key='classification').drop(columns='x')
+        light_average = ft_averages.iloc[2]
+        dark_average = ft_averages.iloc[1]
+        ratio_intensities = light_average / (light_average + dark_average) - .5
+        sign_intensities = np.sign(ratio_intensities)
+
+        # count the nonzeros in light, dark
+        ft_nonzeros = self.processing_zone_wise_average(
+            zones_key='classification', dtype=bool).drop(columns='x')
+        nonzeros_light = ft_nonzeros.iloc[2]
+        nonzeros_dark = ft_nonzeros.iloc[1]
+
+        # calculate the divergences
+        KL_divs = pd.DataFrame(data=np.empty(
+            (len(cols), 2)), index=cols, columns=['KL_light', 'KL_dark'])
+
+        for idx, col in enumerate(cols):
+            KL_divs.loc[col, :] = self.calculate_KL_div(
+                col, **kwargs)
+
+        KL_divs_av = (KL_divs['KL_light'] + KL_divs['KL_dark']) / 2
+
+        scaled_intensity = ratio_intensities / \
+            np.max(np.abs(ratio_intensities))
+        scaled_KL_div = KL_divs_av / np.max(KL_divs_av)
+        scaled_nonzeros_light = nonzeros_light / np.max(nonzeros_light)
+        scaled_nonzeros_dark = nonzeros_dark / np.max(nonzeros_dark)
+
+        scaled_score = scaled_intensity * scaled_KL_div * scaled_nonzeros_light
+        scaled_score_dark = scaled_intensity * scaled_KL_div * scaled_nonzeros_dark
+        scaled_score_light = scaled_intensity * scaled_KL_div * scaled_nonzeros_light
+        # plot the scores
+        # o = np.argsort(KL_divs_av * sign_intensities).to_numpy()
+        o = np.argsort(scaled_score).to_numpy()
+        x = np.array(cols)[o]
+        # plt.plot(x, ratio_intensities.to_numpy()[o], label='intensity div', color='blue')
+        # plt.plot(x, nonzeros_light.to_numpy()[o], label='density nonzeros light', alpha=.5)
+        # plt.plot(x, nonzeros_dark.to_numpy()[o], label='density nonzeros dark', alpha=.5)
+        # plt.plot(x, (KL_divs['KL_light'] * sign_intensities).to_numpy()[o], label='KL div light', alpha=.5)
+        # plt.plot(x, (KL_divs['KL_dark'] * sign_intensities).to_numpy()[o], label='KL div dark', alpha=.5)
+        # plt.plot(x, (KL_divs_av * sign_intensities).to_numpy()[o], label='KL div av', color='red')
+        plt.plot(x, scaled_KL_div.to_numpy()[o], label='scaled KL div')
+        plt.plot(x, scaled_intensity.to_numpy()[o], label='scaled intensity')
+        plt.plot(x, scaled_nonzeros_light.to_numpy()[
+                 o], label='scaled nonzero light density')
+        plt.plot(x, scaled_nonzeros_dark.to_numpy()[
+                 o], label='scaled nonzero dark density')
+        plt.plot(x, scaled_score_light.to_numpy()[o], label='score light')
+        plt.plot(x, scaled_score_dark.to_numpy()[o], label='score dark')
+        plt.legend()
+        plt.xticks([])
+
+    def plt_top_comps_laminated(
+            self, columns=None, light_or_dark='light', N_top=10, hold=False, **kwargs):
+        """Calculate and plot av. intensity in light, dark and hole pixels."""
+        if columns is None:
+            columns = self.get_data_columns()
+        rankings = self.calculate_lightdark_rankings(columns=columns, **kwargs)
+
+        sorting = rankings.score.sort_values()
+        print(sorting)
+        if light_or_dark == 'light':
+            cols_top = sorting.index[-N_top:].tolist()[::-1]
+            rankings_top = sorting[-N_top:].tolist()[::-1]
+        elif light_or_dark == 'dark':
+            cols_top = sorting.index[:N_top].tolist()
+            rankings_top = sorting[:N_top].tolist()
+        else:
+            raise KeyError('light_or_dark must be one of "light", "dark".')
+        print(cols_top)
+        print(rankings_top)
+        o = plt_comps(self.feature_table, cols_top,
+                      suptitle=f'top {N_top} in {light_or_dark} layers',
+                      titles=[f's.: {ranking:.3f}' for ranking in rankings_top],
+                      hold=hold,
+                      ** kwargs)
+        if not hold:
+            plt.show()
+        else:
+            return o
+        
+    def plt_contrasts(self, q=.5):
+        ft_contrast = self.calculate_contrasts_simplified_laminae()
+
+        x = ft_contrast['x']
+
+        seasonalities = np.abs(ft_contrast.drop(columns='x'))
+        cols = seasonalities.columns
+        plt.stem(cols.astype(float),
+                 seasonalities.quantile(q=.90, axis=0).to_numpy(),
+                 markerfmt='',
+                 label='q 90',
+                 linefmt='C3')
+        plt.stem(cols.astype(float),
+                 seasonalities.quantile(q=.75, axis=0).to_numpy(),
+                 markerfmt='',
+                 label='q 75',
+                 linefmt='C2')
+        plt.stem(cols.astype(float),
+                 seasonalities.mean(axis=0).to_numpy(),
+                 markerfmt='',
+                 label='av',
+                 linefmt='C1')
+        plt.stem(cols.astype(float),
+                 seasonalities.median(axis=0).to_numpy(),
+                 markerfmt='',
+                 label='med',
+                 linefmt='C0', basefmt='k')
+        plt.legend()
+        plt.xlabel('mz')
+        plt.ylabel('contrast')
+        plt.title('magnitude of average, median, 75th, 90th percentile')
+        plt.show()
+
+        y = seasonalities.quantile(q=q, axis=0)
+        o = np.argsort(y.to_numpy())[::-1]
+        cols = cols[o]
+        plt_comps(
+            self.feature_table, cols=cols[:10], remove_holes=True,
+            suptitle=f'comps with highest {round(q*100)}th quantile seasonality in \
+{self._window} window'
+        )
+
+
+class ProcessingData:
+    """Functionality to clean and decompose data."""
     def analyzing_PCA(self, columns=None, TH_PCA=.95, exclude_holes=False):
         if columns is None:
             columns = self.get_data_columns()
@@ -1040,229 +921,361 @@ rectangular grid. You may have to use processing_fill_missing')
             return feature_table_averages, feature_table_stds, feature_table_Ns
 
         return feature_table_averages
-
-    def calculate_KL_div(
-            self, col: str | int) -> tuple[float]:
+    
+    def get_data_zeros_corrected(self):
         """
-        Calculate KL divergence for an image in the feature table.
+        Return copy of current ft with corrected zeros.
 
-        For an image with no seasonality the entropy within the light and dark
-        pixels should be the same. Or in other words: the probability
-        distribution of the light pixels should be the same as that for the
-        whole image.
-
-        Parameters
-        ----------
-        col : str | int
-            The column in the feature table for which to calculate the KL div.
-        bin_log: bool. The default is True.
-            If True, will use log scale for bin edges.
+        Zeros are shifted by 1/2 the lowest value in each spectrum.
+        Since 0 could be anything between 0 and the SNR, this is on average
+        closer to the real value if equal likelyhood is assumed.
 
         Returns
         -------
-        tuple[float]
-            Entropy of image, entropy of light pixels, entropy of dark pixels,
-            KL of light pixels, KL of dark pixels.
+        pd.DataFrame
+            The feature table with shifted zeros.
 
         """
-        I = self.feature_table[col].loc[
-            (self.feature_table.classification != 0) &
-            (self.feature_table[col] >= 0)]
-        I_light = I.loc[self.feature_table.classification == 255]
-        I_dark = I.loc[self.feature_table.classification == 127]
-        # estimate the probability distribution in the entire image
-        prob, bin_edges, bin_centers = estimate_probability_distribution(I)
-        # estimate the probability distribution in the light/dark pixels of the image
-        #   using the same bin_edges
-        prob_light, _, _ = estimate_probability_distribution(
-            I_light, bin_edges=bin_edges)
-        prob_dark, _, _ = estimate_probability_distribution(
-            I_dark, bin_edges=bin_edges)
+        # data columns
+        cols = self.get_data_columns()
+        # nonzero mask
+        nonzero = self.feature_table.loc[:, cols] > 0
+        # the lowest nonzero value for each pixel
+        mins = (self.feature_table[nonzero].loc[:, cols].min(axis=1)).to_numpy()
+        # add 1/2 of min to each nonzero
 
-        if self.plts:
-            fig, axs = plt.subplots(nrows=1, ncols=2)
-            axs[0].loglog(bin_centers, prob, label='pdf img')
-            axs[0].plot(bin_centers, prob_light, label='pdf light')
-            axs[0].plot(bin_centers, prob_dark, label='pdf dark')
-            axs[0].legend()
-            axs[0].set_xlabel('intensity')
-            axs[0].set_ylabel('probability density')
+        def replace_zeros(col):
+            col = col.to_numpy()
+            col[col == 0] = mins[col == 0] / 2
+            return col
 
-            axs[1].plot(bin_centers, prob, label='pdf img')
-            axs[1].plot(bin_centers, prob_light, label='pdf light')
-            axs[1].plot(bin_centers, prob_dark, label='pdf dark')
-            axs[1].legend()
-            axs[1].set_xlabel('intensity')
-            # axs[1].set_ylabel('probability density')
+        ft = self.feature_table.copy()
+        ft.loc[:, cols] = ft.loc[:, cols].apply(lambda col: replace_zeros(col), axis=0)
+        return ft
+    
+    def plt_PCA(self, N_top=10, title_appendix='', **kwargs):
+        if self.pca is None:
+            self.analyzing_PCA(**kwargs)
+        # calculate loadings
+        if ('columns' not in kwargs) or ((index_loadings := kwargs['columns']) is None):
+            index_loadings = self.get_data_columns()
+        loadings = pd.DataFrame(
+            self.pca.components_.T,
+            columns=['PC' + str(i) for i in range(np.shape(self.pcs)[1])],
+            index=index_loadings)
 
+        top_compounds = self.pca.explained_variance_ratio_.cumsum()
+        plt.figure()
+        plt.plot(top_compounds)
+        plt.grid('on')
+        plt.xlabel('modes')
+        plt.ylabel('cumulative explained variance')
+        plt.show()
+
+        fig, axs = plt.subplots(nrows=N_top,
+                                ncols=2,
+                                sharex='col',
+                                figsize=(20, 20))
+        # df with x, y like original FT
+        pc_mode = self.pca_xy.copy()
+        for i in range(N_top):
+            pc_mode[i] = self.pcs[:, i]
+            axs[i, 0].imshow(pc_mode.pivot(index='y', columns='x', values=i),
+                             aspect='equal',
+                             interpolation='none')
+            if self._data_type == 'xrf':
+                labels = list(loadings.index)
+            else:
+                labels = [float(loading) for loading in loadings.index]
+            axs[i, 1].stem(labels,
+                           loadings['PC' + str(i)],
+                           markerfmt=' ')
+        if self._data_type == 'msi':
+            title = f'PCA on {self._section}cm, {self._window} in \
+{self._mass_window} Da, th_ref={self.peak_th_ref_peak},\n' + title_appendix
+        elif self._data_type == 'xrf':
+            title = f'PCA on {self._section}cm' + title_appendix
+        elif self._data_type == 'combined':
+            title = f'PCA on {self._section}cm' + title_appendix
+        fig.suptitle(title)
+        plt.tight_layout()
+
+    def plt_NMF(self, k,
+                plot_log_scale=False, hold=False, **kwargs):
+        if ('W' in kwargs.keys()) and ('H' in kwargs.keys()):
+            W = kwargs['W']
+            H = kwargs['H']
+        elif k in self.results_NMF.keys():
+            W, H = self.results_NMF[k]
+        else:
+            W, H = self.analyzing_NMF(k, **kwargs)
+
+        # put in df
+        W_df = pd.DataFrame(W, index=self.nmf_xy.index)
+
+        W_df[['x', 'y']] = self.nmf_xy
+
+        fig, axs = plt.subplots(nrows=k,
+                                ncols=2,
+                                figsize=(10, 2 * k),
+                                sharex='col')
+
+        for i in range(k):
+            values = W_df.pivot(index='y', columns='x', values=i)
+            if plot_log_scale:
+                values = np.log(values)
+            axs[i, 0].imshow(values,
+                             aspect='equal',
+                             interpolation='none')
+
+            if ('columns' not in kwargs) or (x_vals := kwargs['columns']) is None:
+                x_vals = self.get_data_columns()
+            
+            if all([x_val.replace('.', '').isnumeric() for x_val in x_vals]):
+                x_vals = np.array(x_vals).astype(float)
+            
+            elif H.shape[1] == len(x_vals):
+                axs[i, 1].stem(np.array(x_vals),
+                               H[i, :],
+                               markerfmt=' ',
+                               linefmt='blue')
+            else:
+                axs[i, 1].stem(range(H.shape[1]),
+                               H[i, :],
+                               markerfmt=' ',
+                               linefmt='blue')
+        plt.tight_layout(pad=1.1)
+
+        if not hold:
             plt.show()
+        else:
+            return fig, axs
 
-        D_light = scipy.stats.entropy(prob_light, prob)
-        D_dark = scipy.stats.entropy(prob_dark, prob)
+    def plt_kmeans(self, n_clusters, **kwargs):
+        if f'kmeans{n_clusters}' not in self.feature_table.columns:
+            self.analyzing_kmeans(n_clusters, **kwargs)
+        fig, axs = plt.subplots(nrows=2)
+        axs[0].imshow(
+            self.feature_table.pivot(
+                index='y', columns='x', values=f'kmeans{n_clusters}'),
+            interpolation='none',
+            cmap='Set1')
 
-        # calculate entropy, relative entropy
-        if self.verbose:
-            print(
-                f'Kullback-Leibler divergence for light pixels {D_light:.4f}')
-            print(
-                f'Kullback-Leibler divergence for dark pixels {D_dark:.4f}')
+        # plot corresponding centers
+        colors = ['red', 'orange', 'gray']
+        centers = self.results_kmeans[n_clusters].cluster_centers_
+        for center, color in zip(centers, colors):
+            if self._data_type == 'msi':
+                labels = self.get_data_columns().astype(float)
+            elif self._data_type == 'xrf':
+                labels = self.get_data_columns()
+            axs[1].plot(labels, center, color=color)
+        plt.show()
 
-        return D_light, D_dark
+
+class Data(Convinience, Lamination, ProcessingData):
+    """Class to manipulate and analyze MSI or XRF data."""
+    def add_graylevel_from_data_frame(self, overwrite=False) -> None:
+        """Apply grayscale conversion in feature table."""
+        # https://docs.opencv.org/3.4/de/d25/imgproc_color_conversions.html
+        if ('L' in self.sget_feature_table().columns) and (not overwrite):
+            return
+        self.feature_table['L'] = self.sget_feature_table().apply(
+            lambda row:
+            round(0.299 * row.R + 0.587 * row.G + 0.114 * row.B),
+            axis=1
+        )
+
+    @return_existing('feature_table')
+    def sget_feature_table(self):
+        # enter d-folder, locate spectra file
+        spectra = Spectra(path_d_folder=self.path_d_folder, load=True)
+        assert hasattr(spectra, 'feature_table'), 'properly save spectra object'
+        self.feature_table = spectra.feature_table
+        return self.feature_table
+
+    def pixels_get_photo_ROI_to_ROI(
+            self, data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh: tuple[int]
+        ):
+        """
+        Add x_ROI, y_ROI columns.        
+        """
+        # pixel coords of data, set by get_photo_ROI
+        (xd, yd, wd, hd) = data_ROI_xywh  # data units
+        # corner and dimensions of data ROI in original image
+        (xp, yp, wp, hp) = photo_ROI_xywh  # photo units
+        # region of ROI defined by find_sample_region in pixel coords of
+        # original image
+        (xr, yr, wr, hr) = image_ROI_xywh
+        # transform the pixel coords in the feature table to ROI pixel
+        # coordinates by
+        #   1. get values
+        x_ft = self.get_xy()['x'].to_numpy()
+        y_ft = self.get_xy()['y'].to_numpy()
+        #   2. shift to 0
+        x_ft = x_ft - xd
+        y_ft = y_ft - yd
+        #   3. scale so that coordinates are in terms of photo
+        x_ft = x_ft / wd * wp
+        y_ft = y_ft / hd * hp
+        # --> coordinates in terms of photo_ROI
+        #   4. shift accordingly in detected ROI
+        # first add the corners defined in photo_ROI, then subtract the
+        # offset of the detected ROI
+        # --> pixel coordinetes in photo-units
+        x_ft += xp
+        y_ft += yp
+        # shift relativ to origin of image ROI
+        x_ft -= xr
+        y_ft -= yr
+        # append to feature_table, so now each (x, y) has an according
+        # (x_ROI, y_ROI) corresponding to pixels in the ROI
+        self.feature_table['x_ROI'] = (x_ft + .5).astype(int)
+        self.feature_table['y_ROI'] = (y_ft + .5).astype(int)
+
+    def add_attribute_from_image(self, image, column_name, median=False, plts=False):
+        """
+        Add a column to the feature table from an image (ROI of sample)
+
+        Parameters
+        ----------
+        image : np.ndarray
+            The image to add to the feature table, must be grayscale and in the 
+            region of interest.
+        column_name : str
+            Name of the new column in the dataframe.
+        median : bool, optional
+            Whether to average out values around measurement points.
+            The default is False.
+
+        Returns
+        -------
+        None.
+
+        """
+        assert len(image.shape) == 2, 'image must be single channel'
+        if median:
+            # footprint of area to average out for classification
+            length_median = int(
+                np.median(np.diff(self.feature_table.x_ROI)) / 2)
+            if not length_median % 2:
+                length_median += 1
+            # for each point in feature table, take the median of an
+            # dpixels/2 x dpixels/2 area to classify point
+            image = cv2.medianBlur(image, length_median)
+
+        # zero pad for pixels outside of image extent
+        # number of pixels in the data ROI (in image coordinates)
+        y_ROI_max = self.feature_table.y_ROI.max()
+        x_ROI_max = self.feature_table.x_ROI.max()
+        image_zeropad = np.zeros(
+            (np.max([y_ROI_max, image.shape[0]]) + 1,
+             np.max([x_ROI_max, image.shape[1]]) + 1),
+            dtype=image.dtype)
+
+        # set values in zeropadded array
+        image_zeropad[:image.shape[0],
+                      :image.shape[1]] = image
+        # add values for each row according to pixels in image
+        # 0 + to avoid bug???
+        self.feature_table[column_name] = self.feature_table.apply(
+                lambda row: 0 + image_zeropad[int(row.y_ROI), int(row.x_ROI)],
+                axis='columns'
+        )
+            
+        if plts:
+            idxs = np.c_[self.feature_table.y_ROI, self.feature_table.x_ROI]
+            plt.figure()
+            plt.imshow(image)
+            plt.plot(idxs[:, 1], idxs[:, 0], '-')
+            plt.show()
+            
+            plt_cv2_image(
+                image_zeropad,
+                'zeropaded')
+            
+            if median:
+                plt_cv2_image(
+                    image,
+                    'classification after blurring according to data points')
+
+            plt_cv2_image(image_zeropad, 'final classification')
+
+            plt.figure()
+            plt.imshow(
+                self.feature_table.pivot(
+                    index='y_ROI', columns='x_ROI', values=column_name),
+                cmap='rainbow')
+            plt.title('classification in feature table')
+            plt.show()
+    
+    def correct_depths_by_angle(self):
+        # TODO: this
+        pass
+
+    def split_at_depth(self, depth: float):
+        """Split feature table at depth [cm] and return upper and lowersection."""
+        self.add_depth_column()
+
+        idxs_u = np.argwhere(self.feature_table.depth < depth)[:, 0]
+        idxs_l = np.argwhere(self.feature_table.depth >= depth)[:, 0]
+
+        if self._window == 'xrf':
+            from cXRF import XRF
+            Du = XRF((self._section[0], depth), self._window)
+            Dl = XRF((depth, self._section[1]), self._window)
+        else:
+            from cMSI import MSI
+            Du = MSI((self._section[0], depth), self._window)
+            Dl = MSI((depth, self._section[1]), self._window)
+
+        Du.feature_table = self.feature_table.iloc[idxs_u, :]
+        Dl.feature_table = self.feature_table.loc[idxs_l, :]
+        return Du, Dl
+
+    def get_data(self):
+        return self.feature_table.loc[:, self.get_data_columns()]
+
+    def get_xy(self):
+        return self.feature_table.loc[:, ['x', 'y']]
+
+    def get_x(self):
+        return self.feature_table.loc[:, ['x']]
+
+    def get_y(self):
+        return self.feature_table.loc[:, ['y']]
+
+    def get_nondata_columns(self):
+        # cols to check against
+        dcols = set(self.get_data_columns())
+        nondata_columns = [
+            col for col in self.feature_table.columns
+            if col not in dcols]
+        return nondata_columns
+
+    def get_nondata(self):
+        nondata = self.feature_table.loc[
+            :, self.get_nondata_columns()]
+        return nondata
+
+    def get_data_for_columns(self, columns):
+        """Return part of the feature table specified by columns."""
+        return self.feature_table.loc[:, columns]
+
+    def get_data_mean(self):
+        return self.get_data().mean(axis=0)
 
     def perform_all_initialization_steps(self):
-        # allways use original ft (not with common mzs) for this step for
-        # backwards consistency
         self.sget_feature_table()
         self.sget_photo_ROI()
         self.combine_photo_feature_table()
         self.pixels_get_photo_ROI_to_ROI()
         self.add_graylevel_from_data_frame()
-        self.add_laminae_classification()
-        self.add_seed_classification()
-        self.add_simplified_laminae_classification()
         self.save()
-
-    def calculate_lightdark_rankings(
-            self, use_intensities=True, use_successes=False, use_KL_div=False,
-            scale=False, columns=None, classification_column='classification',
-            calc_corrs=False, **kwargs):
-        if not any((use_intensities, use_successes, use_KL_div)):
-            raise KeyError('Use at least one of the methods.')
-
-        if columns is None:
-            columns = self.get_data_columns()
-
-        # initiate data_frame
-        self.rankings = pd.DataFrame(index=columns)
-
-        ft_averages = self.processing_zone_wise_average(
-            zones_key=classification_column, columns=columns).drop(columns=['x'])
-        light = ft_averages.loc[255]
-        self.rankings['av_intensity_light'] = light
-        dark = ft_averages.loc[127]
-        self.rankings['av_intensity_dark'] = dark
-
-        # calculate the average intensity in the light and dark pixels
-        # respectively and calculate the distribution of light
-        # (ratio of .5 corresponds to even distribution)
-
-        ratio_intensities = light / (light + dark) - .5
-        # even if the ratio_intensities is not used, the sign is needed for
-        # KL_div
-        if not use_intensities:
-            ratio_intensities = np.sign(ratio_intensities)
-
-        # count the successfull spectra for each compound in the specified zone
-        if use_successes:
-            ft_nonzeros = self.processing_zone_wise_average(
-                zones_key=classification_column, astype=bool, columns=columns).drop(columns=['x'])
-
-            ratio_nonzeros = np.zeros(len(columns))
-            # use density in light for predominantly light layers
-            mask_light = (ratio_intensities > 0).to_numpy()
-            ratio_nonzeros[mask_light] = ft_nonzeros.loc[255].iloc[mask_light]
-            ratio_nonzeros[~mask_light] = ft_nonzeros.loc[127].iloc[~mask_light]
-        else:
-            ratio_nonzeros = 1
-
-        if use_KL_div:
-            KL_divs = pd.DataFrame(data=np.empty(
-                (len(columns), 2)), index=columns, columns=['KL_light', 'KL_dark'])
-            p = 0
-            for idx, col in enumerate(columns):
-                if self.verbose and (p != (p := round(idx / len(columns) * 100))):
-                    print(f'{p} percent done')
-                KL_divs.loc[col, :] = self.calculate_KL_div(col)
-            KL_div = (KL_divs['KL_light'] + KL_divs['KL_dark']) / 2
-        else:
-            KL_div = 1
-            KL_divs = {'KL_light': 1, 'KL_dark': 1}
-
-        self.rankings['KL_div_light'] = KL_divs['KL_light']
-        self.rankings['KL_div_dark'] = KL_divs['KL_dark']
-
-        if scale:
-            # scale max(abs) to 1
-            ratio_intensities /= np.max(np.abs(ratio_intensities))
-            ratio_nonzeros /= np.max(ratio_nonzeros)
-            KL_div /= np.max(KL_div)
-
-        self.rankings['intensity_div'] = ratio_intensities
-        self.rankings['density_nonzero'] = ratio_nonzeros
-        self.rankings['KL_div'] = KL_div
-
-        rankings = ratio_intensities * ratio_nonzeros * KL_div
-        self.rankings['score'] = rankings
-
-        if calc_corrs:
-            mask_nonholes = self.feature_table[classification_column] != 0
-            self.rankings['corr_L'] = self.get_data().loc[mask_nonholes, :]\
-                .corrwith(self.feature_table.L[mask_nonholes])
-            self.rankings[f'corr_{classification_column}'] = \
-                self.get_data().loc[mask_nonholes, :].corrwith(
-                    self.feature_table[classification_column][mask_nonholes]
-            )
-
-        return self.rankings
-
-    def plt_PCA_rankings(
-            self,
-            columns=None,
-            sign_criteria=False,
-            add_laminae_averages=False,
-            **kwargs
-    ):
-        # create biplot
-        # https://stackoverflow.com/questions/39216897/plot-pca-loadings-and-loading-in-biplot-in-sklearn-like-rs-autoplot
-        # calculate PCA of scaled columns
-        if columns is None:
-            columns = self.rankings.columns
-        rankings = self.rankings[columns].copy()
-
-        if add_laminae_averages:
-            from cTimeSeries import TimeSeries
-            TS = TimeSeries(self._section, self._window)
-            TS.load()
-            r_av_L = TS.get_corr_with_grayscale().copy()
-            r_av_C = TS.get_corr_with_grayscale(contrast=True).copy()
-            del TS
-
-            if not sign_criteria:
-                r_av_L = np.abs(r_av_L)
-                r_av_C = np.abs(r_av_C)
-            # add median seasonality
-            rankings['corr_av_L'] = r_av_L
-            rankings['corr_av_C'] = r_av_C
-            columns = list(columns) + ['corr_av_C', 'corr_av_L']
-
-        if sign_criteria:
-            signs = np.sign(self.rankings['intensity_div'])
-            for c in ('KL_div', 'density_nonzero'):
-                if c in columns:
-                    rankings[c] *= signs
-
-        X = StandardScaler().fit_transform(rankings)
-        # do PCA:
-        pca = PCA(n_components=2)
-        # compounds in new frame of reference
-        pcs = pd.DataFrame(
-            data=pca.fit_transform(X),
-            columns=[f'PC {i + 1}' for i in range(pca.n_components)],
-            index=rankings.index
-        )
-        # get coefficients of criteria
-        coeffs = pd.DataFrame(data=pca.components_, columns=columns)
-        PCA_biplot(pcs, coeffs, var=pca.explained_variance_ratio_, **kwargs)
-
-    def plt_photo(self):
-        p = self.sget_photo()
-        # convet to numpy
-        p = Image_convert_types.convert('PIL', 'cv', p)
-        plt_cv2_image(p, 'Original photo of probe')
 
     def get_comp_as_img(
             self, comp, exclude_holes=True, 
-            classification_column='classification', flip=False):
+            classification_column: str = None, key_hole_pixels=0, flip=False):
         """Return a componenent from the feature table as an image."""
         if flip:
             idx_x, idx_y = 'y', 'x'
@@ -1271,7 +1284,7 @@ rectangular grid. You may have to use processing_fill_missing')
         data_frame = self.sget_feature_table()
         img_mz = data_frame.pivot(
             index=idx_x, columns=idx_y, values=comp).to_numpy().astype(float)
-        if exclude_holes:
+        if exclude_holes and classification_column is not None:
             mask_holes = data_frame.pivot(
                 index=idx_x, columns=idx_y, values=classification_column
             ).to_numpy() == key_hole_pixels
@@ -1279,23 +1292,43 @@ rectangular grid. You may have to use processing_fill_missing')
         return img_mz
 
     def plt_comp(
-        self, comp, data_frame=None, title=None, save_png=None, flip=False,
-        SNR_scale=True, N_labels=5, y_tick_precision=0, exclude_holes=True, 
-        hold=False, classification_column='valid', key=0
+        self, 
+        comp: str | float | int, 
+        title: str | None = None, 
+        save_png: str| None = None, 
+        flip: bool = False, 
+        clip_at: float | None = None,
+        SNR_scale: bool = True, 
+        N_labels: int = 5, 
+        y_tick_precision: int = 0, 
+        exclude_holes: bool = True, 
+        hold: bool = False, 
+        classification_column: str = 'valid', 
+        key_hole_pixels: int = 0
     ):
-        if data_frame is None:
-            data_frame = self.feature_table
-
         comp = self.get_closest_mz(comp, max_deviation=None)
 
+        if classification_column not in self.feature_table.columns:
+            print(f'did not find the column {classification_column} in the \
+feature table classifying the holes, so not excluding pixels')
+            exclude_holes = False
         img_mz = self.get_comp_as_img(
-            comp, exclude_holes, classification_column, flip
+            comp=comp,
+            exclude_holes=exclude_holes,
+            classification_column=classification_column,
+            flip=flip,
+            key_hole_pixels=key_hole_pixels
         )
 
         # clip values above vmax
-        vmax = data_frame[comp].quantile(.95)
+        if clip_at is None:
+            clip_at = .95 if str(comp) in self.get_data_columns() else None
+        if clip_at is not None:
+            vmax = np.nanquantile(img_mz, clip_at)
+        else:
+            vmax = np.max(img_mz)
 
-        fig, ax = plt.subplots(dpi=300)
+        fig, ax = plt.subplots()
         im = plt.imshow(img_mz,
                         aspect='equal',
                         interpolation='none',
@@ -1407,268 +1440,10 @@ rectangular grid. You may have to use processing_fill_missing')
                 plt.plot(bin_centers, prob, label=str(col))
             if legend:
                 plt.legend()
-        plt.show()
+        plt.show()        
 
-    def plt_PCA(self, save_img=None, N_top=10, title_appendix='', **kwargs):
-        if self.pca is None:
-            self.analyzing_PCA(**kwargs)
-        # calculate loadings
-        if ('columns' not in kwargs) or ((index_loadings := kwargs['columns']) is None):
-            index_loadings = self.get_data_columns()
-        loadings = pd.DataFrame(
-            self.pca.components_.T,
-            columns=['PC' + str(i) for i in range(np.shape(self.pcs)[1])],
-            index=index_loadings)
-
-        top_compounds = self.pca.explained_variance_ratio_.cumsum()
-        plt.figure()
-        plt.plot(top_compounds)
-        plt.grid('on')
-        plt.xlabel('modes')
-        plt.ylabel('cumulative explained variance')
-        plt.show()
-
-        fig, axs = plt.subplots(nrows=N_top,
-                                ncols=2,
-                                sharex='col',
-                                figsize=(20, 20))
-        # df with x, y like original FT
-        pc_mode = self.pca_xy.copy()
-        for i in range(N_top):
-            pc_mode[i] = self.pcs[:, i]
-            axs[i, 0].imshow(pc_mode.pivot(index='y', columns='x', values=i),
-                             aspect='equal',
-                             interpolation='none')
-            if self._data_type == 'xrf':
-                labels = list(loadings.index)
-            else:
-                labels = [float(loading) for loading in loadings.index]
-            axs[i, 1].stem(labels,
-                           loadings['PC' + str(i)],
-                           markerfmt=' ')
-        if self._data_type == 'msi':
-            title = f'PCA on {self._section}cm, {self._window} in \
-{self._mass_window} Da, th_ref={self.peak_th_ref_peak},\n' + title_appendix
-        elif self._data_type == 'xrf':
-            title = f'PCA on {self._section}cm' + title_appendix
-        elif self._data_type == 'combined':
-            title = f'PCA on {self._section}cm' + title_appendix
-        fig.suptitle(title)
-        plt.tight_layout()
-        if save_img is not None:
-            plt.savefig(os.path.join(self.dir_pics, save_img),
-                        dpi=1000)
-
-    def plt_NMF(self, k, save_img=None, colors_known_compounds=False,
-                plot_log_scale=False, dpi=300, hold=False, **kwargs):
-        if ('W' in kwargs.keys()) and ('H' in kwargs.keys()):
-            W = kwargs['W']
-            H = kwargs['H']
-        elif k in self.results_NMF.keys():
-            W, H = self.results_NMF[k]
-        else:
-            W, H = self.analyzing_NMF(k, **kwargs)
-
-        # put in df
-        W_df = pd.DataFrame(W, index=self.nmf_xy.index)
-
-        W_df[['x', 'y']] = self.nmf_xy
-
-        fig, axs = plt.subplots(nrows=k,
-                                ncols=2,
-                                figsize=(10, 2 * k),
-                                sharex='col')
-
-        for i in range(k):
-            values = W_df.pivot(index='y', columns='x', values=i)
-            if plot_log_scale:
-                values = np.log(values)
-            axs[i, 0].imshow(values,
-                             aspect='equal',
-                             interpolation='none')
-
-            if ('columns' not in kwargs) or (x_vals := kwargs['columns']) is None:
-                x_vals = self.get_data_columns()
-            if self._data_type != 'xrf':
-                x_vals = np.array(x_vals).astype(float)
-            if colors_known_compounds:
-                raise NotImplementedError()
-
-            elif H.shape[1] == len(x_vals):
-                axs[i, 1].stem(np.array(x_vals),
-                               H[i, :],
-                               markerfmt=' ',
-                               linefmt='blue')
-            else:
-                axs[i, 1].stem(range(H.shape[1]),
-                               H[i, :],
-                               markerfmt=' ',
-                               linefmt='blue')
-        plt.tight_layout(pad=1.1)
-
-        if save_img:
-            plt.savefig(save_img, dpi=dpi)
-        if not hold:
-            plt.show()
-        else:
-            return fig, axs
-
-    def plt_kmeans(self, n_clusters, **kwargs):
-        if f'kmeans{n_clusters}' not in self.feature_table.columns:
-            self.analyzing_kmeans(n_clusters, **kwargs)
-        fig, axs = plt.subplots(nrows=2)
-        axs[0].imshow(
-            self.feature_table.pivot(
-                index='y', columns='x', values=f'kmeans{n_clusters}'),
-            interpolation='none',
-            cmap='Set1')
-
-        # plot corresponding centers
-        colors = ['red', 'orange', 'gray']
-        centers = self.results_kmeans[n_clusters].cluster_centers_
-        for center, color in zip(centers, colors):
-            if self._data_type == 'msi':
-                labels = self.get_data_columns().astype(float)
-            elif self._data_type == 'xrf':
-                labels = self.get_data_columns()
-            axs[1].plot(labels, center, color=color)
-        plt.show()
-
-    def plt_overview_rankings(self, cols=None, **kwargs):
-        if cols is None:
-            cols = self.get_data_columns()
-        # calculate the light, dark and ratio
-        ft_averages = self.processing_zone_wise_average(
-            zones_key='classification').drop(columns='x')
-        light_average = ft_averages.iloc[2]
-        dark_average = ft_averages.iloc[1]
-        ratio_intensities = light_average / (light_average + dark_average) - .5
-        sign_intensities = np.sign(ratio_intensities)
-
-        # count the nonzeros in light, dark
-        ft_nonzeros = self.processing_zone_wise_average(
-            zones_key='classification', dtype=bool).drop(columns='x')
-        nonzeros_light = ft_nonzeros.iloc[2]
-        nonzeros_dark = ft_nonzeros.iloc[1]
-
-        # calculate the divergences
-        KL_divs = pd.DataFrame(data=np.empty(
-            (len(cols), 2)), index=cols, columns=['KL_light', 'KL_dark'])
-
-        for idx, col in enumerate(cols):
-            KL_divs.loc[col, :] = self.calculate_KL_div(
-                col, **kwargs)
-
-        KL_divs_av = (KL_divs['KL_light'] + KL_divs['KL_dark']) / 2
-
-        scaled_intensity = ratio_intensities / \
-            np.max(np.abs(ratio_intensities))
-        scaled_KL_div = KL_divs_av / np.max(KL_divs_av)
-        scaled_nonzeros_light = nonzeros_light / np.max(nonzeros_light)
-        scaled_nonzeros_dark = nonzeros_dark / np.max(nonzeros_dark)
-
-        scaled_score = scaled_intensity * scaled_KL_div * scaled_nonzeros_light
-        scaled_score_dark = scaled_intensity * scaled_KL_div * scaled_nonzeros_dark
-        scaled_score_light = scaled_intensity * scaled_KL_div * scaled_nonzeros_light
-        # plot the scores
-        # o = np.argsort(KL_divs_av * sign_intensities).to_numpy()
-        o = np.argsort(scaled_score).to_numpy()
-        x = np.array(cols)[o]
-        # plt.plot(x, ratio_intensities.to_numpy()[o], label='intensity div', color='blue')
-        # plt.plot(x, nonzeros_light.to_numpy()[o], label='density nonzeros light', alpha=.5)
-        # plt.plot(x, nonzeros_dark.to_numpy()[o], label='density nonzeros dark', alpha=.5)
-        # plt.plot(x, (KL_divs['KL_light'] * sign_intensities).to_numpy()[o], label='KL div light', alpha=.5)
-        # plt.plot(x, (KL_divs['KL_dark'] * sign_intensities).to_numpy()[o], label='KL div dark', alpha=.5)
-        # plt.plot(x, (KL_divs_av * sign_intensities).to_numpy()[o], label='KL div av', color='red')
-        plt.plot(x, scaled_KL_div.to_numpy()[o], label='scaled KL div')
-        plt.plot(x, scaled_intensity.to_numpy()[o], label='scaled intensity')
-        plt.plot(x, scaled_nonzeros_light.to_numpy()[
-                 o], label='scaled nonzero light density')
-        plt.plot(x, scaled_nonzeros_dark.to_numpy()[
-                 o], label='scaled nonzero dark density')
-        plt.plot(x, scaled_score_light.to_numpy()[o], label='score light')
-        plt.plot(x, scaled_score_dark.to_numpy()[o], label='score dark')
-        plt.legend()
-        plt.xticks([])
-
-    def plt_top_comps_laminated(
-            self, columns=None, light_or_dark='light', N_top=10, hold=False, **kwargs):
-        """Calculate and plot av. intensity in light, dark and hole pixels."""
-        if columns is None:
-            columns = self.get_data_columns()
-        rankings = self.calculate_lightdark_rankings(columns=columns, **kwargs)
-
-        sorting = rankings.score.sort_values()
-        print(sorting)
-        if light_or_dark == 'light':
-            cols_top = sorting.index[-N_top:].tolist()[::-1]
-            rankings_top = sorting[-N_top:].tolist()[::-1]
-        elif light_or_dark == 'dark':
-            cols_top = sorting.index[:N_top].tolist()
-            rankings_top = sorting[:N_top].tolist()
-        else:
-            raise KeyError('light_or_dark must be one of "light", "dark".')
-        print(cols_top)
-        print(rankings_top)
-        o = plt_comps(self.feature_table, cols_top,
-                      suptitle=f'top {N_top} in {light_or_dark} layers',
-                      titles=[f's.: {ranking:.3f}' for ranking in rankings_top],
-                      hold=hold,
-                      ** kwargs)
-        if not hold:
-            plt.show()
-        else:
-            return o
-
-    def plt_rankingC37_2(self):
-        plt_comps(
-            self.feature_table,
-            ['553.5328', 'L_Alkenones'],
-            titles=[f's.: {self.rankings.loc["553.5328"].score:.3f}',
-                    'grayscale'])
-
-    def plt_contrasts(self, q=.5):
-        ft_contrast = self.calculate_contrasts_simplified_laminae()
-
-        x = ft_contrast['x']
-
-        seasonalities = np.abs(ft_contrast.drop(columns='x'))
-        cols = seasonalities.columns
-        plt.stem(cols.astype(float),
-                 seasonalities.quantile(q=.90, axis=0).to_numpy(),
-                 markerfmt='',
-                 label='q 90',
-                 linefmt='C3')
-        plt.stem(cols.astype(float),
-                 seasonalities.quantile(q=.75, axis=0).to_numpy(),
-                 markerfmt='',
-                 label='q 75',
-                 linefmt='C2')
-        plt.stem(cols.astype(float),
-                 seasonalities.mean(axis=0).to_numpy(),
-                 markerfmt='',
-                 label='av',
-                 linefmt='C1')
-        plt.stem(cols.astype(float),
-                 seasonalities.median(axis=0).to_numpy(),
-                 markerfmt='',
-                 label='med',
-                 linefmt='C0', basefmt='k')
-        plt.legend()
-        plt.xlabel('mz')
-        plt.ylabel('contrast')
-        plt.title('magnitude of average, median, 75th, 90th percentile')
-        plt.show()
-
-        y = seasonalities.quantile(q=q, axis=0)
-        o = np.argsort(y.to_numpy())[::-1]
-        cols = cols[o]
-        plt_comps(
-            self.feature_table, cols=cols[:10], remove_holes=True,
-            suptitle=f'comps with highest {round(q*100)}th quantile seasonality in \
-{self._window} window'
-        )
-
+class MultiSectionData:
+    pass
 
 def combine_sections(sections: list, window: str):
     """Combine time series of multiple sections."""

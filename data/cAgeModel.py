@@ -25,11 +25,11 @@ def check_file_integrity(
 class AgeModel:
     def __init__(
         self, 
-        path_file: str = None, 
-        depth: Iterable = None, 
-        age: Iterable = None,
-        column_depth: str = None, 
-        column_age: str = None,
+        path_file: str | None = None,
+        depth: Iterable | None = None,
+        age: Iterable | None = None,
+        column_depth: str = 'depth',
+        column_age: str = 'age',
         **kwargs_read_file
    ):
         assert (path_file is not None) or ((depth is not None) and (age is not None)),\
@@ -39,20 +39,16 @@ class AgeModel:
         if (depth is not None) and (age is not None):
             assert len(depth) == len(age), \
                 'depth and age must have same number of entries'
-            if column_depth is None:
-                column_depth = 'depth'
-            if column_age is None:
-                column_age = 'age'
-            self.df = pd.DataFrame({column_depth: depth, column_age: age})
+            self.df: pd.DataFrame = pd.DataFrame({column_depth: depth, column_age: age})
         # read from file
         else:
-            self.path_file = path_file
-            self.column_depth = column_depth
-            self.column_age = column_age
+            self.path_file: str = path_file
+            self.column_depth: str = column_depth
+            self.column_age: str = column_age
             self.read_file(**kwargs_read_file)
             
-    def read_file(self, **kwargs):
-        file_types = ['txt', 'csv', 'xlsx', 'pickle']
+    def read_file(self, **kwargs) -> None:
+        file_types: list[str] = ['txt', 'csv', 'xlsx', 'pickle']
         if os.path.isdir(self.path_file) \
                 and ('AgeModel.pickle' in os.listdir(self.path_file)):
             self.load()
@@ -61,19 +57,19 @@ class AgeModel:
             f'check file name and type (must be in {file_types})'
             
         if (suffix := os.path.splitext(self.path_file)[1]) in ('.csv', '.txt'):
-            self.df = pd.read_csv(self.path_file, **kwargs)
+            self.df: pd.DataFrame = pd.read_csv(self.path_file, **kwargs)
         elif suffix == '.xlsx':
-            self.df = pd.read_excel(self.path_file, **kwargs)
+            self.df: pd.DataFrame = pd.read_excel(self.path_file, **kwargs)
         # strip whitespaces
         try:
-            self.df = self.df.map(lambda x: x.strip() if isinstance(x, str) else x)
+            self.df: pd.DataFrame = self.df.map(lambda x: x.strip() if isinstance(x, str) else x)
         except:
-            self.df = self.df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+            self.df: pd.DataFrame = self.df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
         self.df.columns = self.df.columns.str.strip()
 
         # try to infere missing columns
-        if (self.column_depth is None) or (self.column_depth not in self.df.columns):
-            try_cols = {'depth', 'd', 'mbsf'}
+        if self.column_depth not in self.df.columns:
+            try_cols = {'depth', 'd', 'mbsf', 'depths'}
             for col in self.df.columns:
                 # account for possible units e.g. "depth [m]" or "depth in cm"
                 if col.lower().split()[0] in try_cols:
@@ -83,18 +79,21 @@ class AgeModel:
             if self.column_depth not in self.df.columns:
                 raise KeyError('could not find a column for depth')
 
-        if (self.column_age is None) or (self.column_age not in self.df.columns):
-            try_cols = {'age'}
+        if self.column_age not in self.df.columns:
+            try_cols = {'age', 'ages', 'yrs'}
             for col in self.df.columns:
                 if col.lower().split()[0] in try_cols:
                     self.column_age = col
                     break
             # in case no match was found
             if self.column_age not in self.df.columns:
-                raise KeyError('could not find a column for age')
+                raise KeyError(f'could not find a column for age {self.column_age} in {list(self.df.columns)}')
                 
     def add_depth_offset(self, depth_offset: float | int):
         self.df['depth'] += depth_offset
+
+    def convert_depth_scale(self, factor: float):
+        self.df['depth'] *= factor
             
     @property
     def depth(self):
@@ -125,7 +124,7 @@ class AgeModel:
 
         """
         if not np.all(np.diff(self.depth) > 0):
-            warnings.warn('Depths not always strictly increasing!')
+            print('Depths not always strictly increasing!')
         if not np.all(np.diff(self.depth) >= 0):
             raise ValueError('Depths not always increasing!')
         # lineraly interpolate between values
