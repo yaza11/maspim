@@ -97,7 +97,6 @@ def filter_with_mask_by_rescaling_weights(
         set_mask_pixels_zero: bool = False,
         **kwargs
 ) -> np.ndarray:
-    # apply gaussian blur
     image_filtered = filter_function(image * mask_nonholes, **kwargs)
 
     weights = filter_function(mask_nonholes, **kwargs)
@@ -137,8 +136,8 @@ def adaptive_mean_with_mask_by_rescaling(
     slice_nonborder = np.index_exp[extend_by:-extend_by, extend_by:-extend_by]
 
     image_mean = filter_with_mask_by_rescaling_weights(
-        image=image_extended.astype(float),
-        mask_nonholes=mask_extended.astype(float),
+        image=image_extended.astype(np.float32),
+        mask_nonholes=mask_extended.astype(np.float32),
         filter_function=cv2.blur,
         ksize=ksize,
         **kwargs
