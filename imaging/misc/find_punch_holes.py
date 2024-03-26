@@ -3,8 +3,6 @@ from imaging.util.Image_convert_types import ensure_image_is_gray
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from skimage import data
-from scipy.signal import convolve2d
 import cv2
 
 # assumed extent of the punched holes
@@ -13,20 +11,23 @@ scale_hole = 1 / 5  # cm
 # side on which the holes are positioned
 sides = ('top', 'bottom')
 
+
 def find_holes(
-        image: np.ndarray, 
-        side: str, 
-        obj_color: str, 
-        depth_section: float = 5, 
+        image: np.ndarray,
+        side: str,
+        obj_color: str,
+        depth_section: float = 5,
         plts=False
-) -> tuple:
+) -> list[np.ndarray[int]]:
     """
     Identify punchholes in an image at the specified side
 
     Parameters
     ----------
     image : np.ndarray
-        Image in which to look for the holes.
+        Image in which to look for the holes. The algorithm works on binary
+        images, but the function converts color images to grayscale
+        and grayscale to binary, if necessary.
     side : str
         The side at which to look
     width_sector: float
@@ -46,11 +47,12 @@ def find_holes(
         The identified holes (center points).
 
     """
-    assert side in sides, f'side must be one of {sides} not {side}' 
+    assert side in sides, f'side must be one of {sides} not {side}'
     width_sector = .5
     if len(image.shape) != 2:
         image = ensure_image_is_gray(image)
-        image = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+    if len(np.unique(image)) > 2:
+        image = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     h, w = image.shape
     # search only in the bottom or top half of the image, depending on where
     # the holes are
@@ -66,16 +68,16 @@ def find_holes(
     if obj_color == 'dark':
         fill_value = 255
     else:
-        fill_value = 0    
+        fill_value = 0
     image_padded = cv2.copyMakeBorder(
-        src=image_section, 
-        top=size_k, bottom=size_k, left=size_k, right=size_k, 
-        borderType=cv2.BORDER_CONSTANT, 
+        src=image_section,
+        top=size_k, bottom=size_k, left=size_k, right=size_k,
+        borderType=cv2.BORDER_CONSTANT,
         value=fill_value
     )
     # convolve with hat-shaped filter
     # filter is build up of chunks (with size of the hole) like
-    # [[ 0 -1  0], 
+    # [[ 0 -1  0],
     #  [-1  3 -1]
     #  [ 1  1  1]]
     # and flipped vertically if holes are positioned at the top
@@ -87,18 +89,18 @@ def find_holes(
     ])
     if side == 'top':
         kernel = kernel[::-1, :]
-    
+
     # convolve with kernel
     image_square_filtered = cv2.filter2D(
         image_padded.astype(float), ddepth=-1, kernel=kernel.astype(float)
     )
-    
+
     # crop to size of initial image
     image_square_filtered = image_square_filtered[size_k:-size_k, size_k:-size_k]
 
     # pick max (for obj color dark) in upper half and lower half
-    image_left = image_square_filtered[:, :w//2].copy()
-    image_right = image_square_filtered[:, w//2:].copy()
+    image_left = image_square_filtered[:, :w // 2].copy()
+    image_right = image_square_filtered[:, w // 2:].copy()
     if obj_color == 'dark':
         hole_left = np.argmax(image_left)
         hole_right = np.argmax(image_right)
@@ -112,20 +114,20 @@ def find_holes(
     if side == 'bottom':
         hole_left += np.array([int((1 - width_sector) * h), 0])
         hole_right += np.array([int((1 - width_sector) * h), 0])
-       
+
     # some overview plots
     if plts:
         fig, axs = plt.subplots(nrows=3)
-        
+
         axs[0].imshow(image_padded)
         axs[0].set_title('padded image')
-    
+
         axs[1].imshow(kernel)
         axs[1].set_title('kernel')
-        
+
         axs[2].set_title('filtered image')
         axs[2].imshow(image_square_filtered)
-        
+
         plt.figure()
         plt.imshow(image)
         # red line at border of sector
@@ -135,16 +137,16 @@ def find_holes(
             y = h - h * width_sector
         plt.hlines(y, 0, w, colors='red')
         extent = scale_hole / depth_section * w / 2
-        
+
         # squares around found center holes
-        y1, x1 = hole_left - extent 
+        y1, x1 = hole_left - extent
         y2, x2 = hole_right - extent
         ax = plt.gca()
         ax.add_patch(
             patches.Rectangle(
-                (x1, y1), 
-                2 * extent, 
-                2 * extent, 
+                (x1, y1),
+                2 * extent,
+                2 * extent,
                 linewidth=2,
                 edgecolor='red',
                 facecolor='none'
@@ -152,9 +154,9 @@ def find_holes(
         )
         ax.add_patch(
             patches.Rectangle(
-                (x2, y2), 
-                2 * extent, 
-                2 * extent, 
+                (x2, y2),
+                2 * extent,
+                2 * extent,
                 linewidth=2,
                 edgecolor='red',
                 facecolor='none'
@@ -163,8 +165,9 @@ def find_holes(
         plt.title('identified holes')
         plt.tight_layout()
         plt.show()
-        
-    return hole_left, hole_right
+
+    return [hole_left, hole_right]
+
 
 # %%
 if __name__ == '__main__':
