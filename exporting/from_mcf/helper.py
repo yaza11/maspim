@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import platform
 from subprocess import Popen, PIPE
 
@@ -37,3 +38,15 @@ def get_r_home():
         return r_home
     else:
         raise EnvironmentError("R_HOME could not be determined. Please set it manually or ensure R is installed.")
+
+
+def get_mzs_for_limits(limits: tuple[float], delta_mz) -> np.ndarray[float]:
+    smallest_mz = int(limits[0] / delta_mz) * delta_mz
+    # round to next biggest multiple of delta_mz
+    biggest_mz = (int(limits[1] / delta_mz) + 1) * delta_mz
+    # equally spaced
+    mzs = np.arange(
+        smallest_mz, biggest_mz + delta_mz, delta_mz
+    )
+
+    return mzs

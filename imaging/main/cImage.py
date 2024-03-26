@@ -1,10 +1,11 @@
-from res.constants import window_to_type, key_light_pixels, key_dark_pixels, key_hole_pixels, windows_all
+from res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
 from util.manage_obj_saves import class_to_attributes
 from util.cClass import Convinience, verbose_function, return_existing
 from imaging.misc.fit_distorted_rectangle import find_layers, distorted_rect
-from imaging.util.coordinate_transformations import rescale_values
+from imaging.misc.find_punch_holes import find_holes
 
 import imaging.util.Image_convert_types as Image_convert_types
+from imaging.util.coordinate_transformations import rescale_values
 from imaging.util.Image_convert_types import ensure_image_is_gray
 from imaging.util.Image_plotting import plt_cv2_image, plt_contours, plt_rect_on_image
 from imaging.util.Image_processing import (adaptive_mean_with_mask,
@@ -82,11 +83,7 @@ class Image(Convinience):
     @verbose_function
     def load(self):
         name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        path_d_folder = os.path.join(
-            self.path_folder, 
-            get_d_folder(self.path_folder)
-        )
-        with open(os.path.join(path_d_folder, name), 'rb') as f:
+        with open(os.path.join(self.path_folder, name), 'rb') as f:
             obj = pickle.load(f)
         self.__dict__ |= obj.__dict__
 
@@ -365,6 +362,12 @@ class Image(Convinience):
             )
 
         return contour
+    
+    def sget_main_contour(self):
+        if (main_contour := self.__dict__.get('main_contour')) is not None:
+            return main_contour
+        self.main_contour = self.get_main_contour(self.sget_simplified_image())
+        return self.main_contour
 
     @verbose_function
     def save(self):
@@ -379,10 +382,7 @@ class Image(Convinience):
         if verbose:
             print(f'saving image object with {self.__dict__.keys()}')
         name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        path_d_folder = os.path.join(
-            self.path_folder, get_d_folder(self.path_folder)
-        )
-        with open(os.path.join(path_d_folder, name), 'wb') as f:
+        with open(os.path.join(self.path_folder, name), 'wb') as f:
             pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
         self.__dict__ = dict_backup
 
@@ -390,22 +390,35 @@ class Image(Convinience):
 class ImageSample(Image):
     """Find image on disc, find ROI."""
     def __init__(
-        self, path_folder, image = None, image_type='cv', obj_color=None
+        self, 
+        path_folder: str | None = None, 
+        image: np.ndarray[float | int] | None = None, 
+        image_type: str = 'cv', 
+        path_image_file: str | None = None, 
+        obj_color: str | None = None
     ):
         """Initiator."""
+        assert (path_folder is not None) or (image is not None) or (path_image_file is not None), \
+            'provide either a path (to the folder) or an image'
         # options mutable by user
-        self.plts = False
-        self.verbose = False
+        self.plts: bool = False
+        self.verbose: bool = False
         
-        self.path_folder = path_folder
+        if path_folder is not None:
+            self.path_folder: str = path_folder
+        else: 
+            self.path_folder: str = ''
         
         # get the image from the inputs
-        self.image_type = image_type
+        self.image_type: str = image_type
         if image is None:
-            image_file = get_image_file(self.path_folder)
-            image = cv2.imread(os.path.join(self.path_folder, image_file))
+            if path_image_file is None:
+                path_image_file = os.path.join(
+                    self.path_folder, get_image_file(self.path_folder)
+                )
+            image: np.ndarray[np.uint8] = cv2.imread(path_image_file)
         
-        self._image_original = self.ensure_image_is_cv(image)
+        self._image_original: np.ndarray[np.uint8] = self.ensure_image_is_cv(image)
         # make sure image is oriented horizontally
         h, w, *_ = self._image_original.shape 
         if h > w:
@@ -786,24 +799,29 @@ get_sample_area')
 class ImageROI(Image):
     """Create obj from xywh, classify laminae."""
     def __init__(
-        self, path_folder, image = None, image_type='cv', obj_color=None
+        self, path_folder = None, image = None, image_type='cv', obj_color=None
     ):
         """Initiator."""
         # options mutable by user
-        self.plts = False
-        self.verbose = False
+        self.plts: bool = False
+        self.verbose: bool = False
         
-        self.path_folder = path_folder
+        if path_folder is not None:
+            self.path_folder: str = path_folder
+        else:
+            self.path_folder: str = ''
         
         # get the image from the inputs
-        self.image_type = image_type
+        self.image_type: str = image_type
         if image is None:
-            IS = self.get_image_sample()
+            IS: ImageSample = self.get_image_sample()
             assert hasattr(IS, 'xywh_ROI'), \
                 'save an ImageSample object with detected sample area first'
-            image = IS.get_sample_area_from_xywh()
+            image: np.ndarray = IS.get_sample_area_from_xywh()
+        if obj_color is not None:
+            self.obj_color: str = obj_color
         
-        self._image_original = self.ensure_image_is_cv(image)
+        self._image_original: np.ndarray = self.ensure_image_is_cv(image)
             
         self.set_current_image()
     
@@ -843,7 +861,16 @@ class ImageROI(Image):
 
     def sget_obj_color(self):
         """Set and return object color."""
-        return self.sget_parent_color_and_extent()[0]
+        if hasattr(self, 'obj_color'):
+            return self.obj_color
+        try:
+            return self.sget_parent_color_and_extent()[0]
+        except KeyError as e:
+            print(f'{e}, assuming object is dark')
+            self.obj_color = 'dark'
+            return self.obj_color
+            
+            
 
     @return_existing('_image_original')
     def sget_image_original(self) -> np.ndarray:
@@ -1112,6 +1139,20 @@ class ImageROI(Image):
             image_gray=self.sget_image_grayscale()
         )
 
+    def set_punchholes(self, remove_gelatine: bool, side: str, **kwargs):
+        if not remove_gelatine:
+            img: np.ndarray[np.uint8] = self.sget_image_grayscale()
+        else:
+            img: np.ndarray[bool] = self.sget_simplified_image() \
+                * self.sget_foreground_thr_and_pixels()[1]
+            
+        self.punchholes: list[np.ndarray[int]] = find_holes(
+            img,
+            obj_color=self.obj_color,
+            side=side,
+            **kwargs
+        )
+        
 
 class ImageClassified(Image):
     """Characterise and modify the classified layers."""
