@@ -1,5 +1,6 @@
+from data.combine_feature_tables import combine_feature_tables
 from util.cClass import Convinience, return_existing, verbose_function
-from res.constants import window_to_type, elements, n_successes_required, sections_all, mC37_2, YD_transition, contrasts_scaling, transformation_target
+from res.constants import elements, mC37_2, YD_transition, contrasts_scaling
 from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
 from imaging.util.coordinate_transformations import rescale_values
 from data.file_helpers import get_d_folder
@@ -203,6 +204,17 @@ that before using this option'
         """Call the set function if attribute does not exist and return it."""
         assert hasattr(self, 'feature_table'), 'set the feature table first'
         return self.feature_table_successes
+
+
+    def get_feature_table_standard_errors(self):
+        assert hasattr(self, 'feature_table'), 'set the feature table first'
+        if hasattr(self, 'feature_table_standard_errors'):
+            return self.feature_table_standard_errors
+        # standard error: sigma / sqrt(n)
+        self.feature_table_standard_errors = self.feature_table_standard_deviations.loc[:, self.sget_data_columns()].div(
+            np.sqrt(self.feature_table_successes.loc[:, 'N_total']), axis='rows'
+        )
+        return self.feature_table_standard_errors
 
     def get_data_columns(self):
         columns = self.get_feature_table().columns
@@ -440,7 +452,8 @@ that before using this option'
             exclude_low_success=True,
             mult_N=True,
             norm_weights=False,
-            subtract_mean=False
+            subtract_mean=False,
+            n_successes_required=10
     ):
         if ft is None:
             ft = self.get_contrasts_table(subtract_mean=subtract_mean).loc[:, self.get_data_columns()]
@@ -982,6 +995,23 @@ that before using this option'
 
         return df
 
+
+class MultiSectionTimeSeries(TimeSeries):
+    def __init__(self, time_series: list[TimeSeries]):
+        self.plts = False
+        self.verbose = False
+
+        self._set_df(time_series)
+
+    def _set_df(self, time_series: list[TimeSeries]):
+        dfs = [ts.feature_table for ts in time_series]
+        self.feature_table = combine_feature_tables(dfs)
+
+        dfs = [ts.feature_table_standard_deviations for ts in time_series]
+        self.feature_table_standard_deviations = combine_feature_tables(dfs)
+
+        dfs = [ts.feature_table_successes for ts in time_series]
+        self.feature_table_successes = combine_feature_tables(dfs)
 
 def cpr_corrs():
     section = (490, 495)

@@ -1,20 +1,15 @@
-from data.cDataClass import Data
-import imaging.util.Image_convert_types
-import res.directory_paths as directory_paths
-from res.constants import elements
-from util.cClass import return_existing
+from __future__ import annotations
 
+from data.cDataClass import Data
+from data.file_helpers import find_matches
+from res.constants import elements
+from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
+
+import re
 import os
+import pickle
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-
-from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
-from mfe.from_txt import msi_from_txt, get_ref_peaks, create_feature_table, search_peak_th
-
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA, NMF
-from sklearn.preprocessing import StandardScaler, MaxAbsScaler
 
 
 def handle_video_file(folder, file_name):
@@ -29,125 +24,147 @@ def handle_video_file(folder, file_name):
     return [v_gray, v_x, v_y]
 
 
-def txt_to_vec(folder, file_name):
+def txt_to_vec(folder: str, file_name: str) -> np.ndarray[float]:
+    """Read a txt file separated by ; and return a numpy vector."""
     file_path = os.path.join(folder, file_name)
     df = pd.read_csv(file_path, sep=';', header=None)
     return df.to_numpy().ravel()
 
 
 class XRF(Data):
-    dir_saves: str = directory_paths.absolute_path_to_saves
-    dir_pics: str = os.path.join(dir_saves, 'Python Pictures')
-    dir_read_data = directory_paths.absolute_path_to_xrf_data
-    dir_data = dir_read_data
+    def __init__(
+            self, 
+            path_folder: str,
+            distance_pixels = None, 
+            measurement_name: str = None
+    ):
+        self.verbose = False
+        self.plts = False
+        
+        self.path_folder = path_folder
+        if distance_pixels is not None:
+            self.distance_pixles = distance_pixels
+        if measurement_name is not None:
+            self.measurement_name = measurement_name
+        else:
+            self._set_measurement_name()
+            
+    def _set_measurement_name(self):
+        # folder should have measurement name in it --> a captial letter, 4 digits and 
+        # a lower letter
+        folder = os.path.split(self.path_folder)[1]
+        pattern = r'^[A-Z]\d{3,4}[a-z]'
+        
+        match = re.match(pattern, folder)
+        result = match.group() if match else None
+        if result is None:
+            raise OSError(
+                f'Folder {folder} does not contain measurement name at beginning, please rename folder',
+            )
+        else:
+            self.measurement_name = result
 
-    def __init__(self, section, window=None, default_file_type='S'):
-        # window will be ignored, just so call signature is consistent with MSI
-        super().__init__(section, 'xrf')
-        self._data_type = 'xrf'
-        self._window = 'xrf'  # to be consistent with MSI format
-        self.type_to_columns = {self._window: self.get_data_columns()}
-        self.default_file_type = default_file_type
-        # set the data path, measurement name, folder
-        self.find_measurement()
+    def load(self) -> None:
+        """Actions to performe when object was loaded from disc."""
+        if __name__ == '__main__':
+            raise RuntimeError('Cannot load obj from file where it is defined.')
+        
+        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
+        with open(os.path.join(self.path_folder, name), 'rb') as f:
+            obj = pickle.load(f)
+        
+        self.__dict__ = obj.__dict__
+        
+        self.plts = False
+        self.verbose = False
 
-    def find_measurement(self):
-        # find the folder containing the interval
-        section_min = self._section[0]
-        section_max = self._section[1]
-        section_length = section_max - section_min
-        for folder in os.listdir(self.dir_read_data):
-            measurement_number, rest = folder.split('Cariaco')
-            interval = rest.split('cm')[0].strip(' _')
-            interval_min = int(interval.split('-')[0])
-            interval_max = int(interval.split('-')[1])
-            if (section_min >= interval_min) and (section_max <= interval_max):
-                self.folder = folder
-                self.measurement_number = measurement_number.strip(' _')
-                self.measurement_idx = (
-                    section_min - interval_min) // section_length
-                self.measurement_suffix = chr(ord('a') + self.measurement_idx)
-                self.measurement_name = self.measurement_number + self.measurement_suffix
-                break
+    def save(self, save_only_relevant_cols: bool = False) -> None:
+        """Actions to performe before saving to disc."""
+        if __name__ == '__main__':
+            raise RuntimeError('Cannot save object from the file in which it is defined.')
+        dict_backup = self.__dict__.copy()
+        # delete all attributes that are not flagged as relevant
+        existent_attributes = list(self.__dict__.keys())
+        keep_attributes = set(existent_attributes) & class_to_attributes(self)
+        nondata_columns_to_keep = list(Data_nondata_columns & set(self.feature_table.columns))
+        for attribute in existent_attributes:
+            if attribute not in keep_attributes:
+                self.__delattr__(attribute)
+        # drop data columns from current feature table
+        if hasattr(self, 'feature_table') and save_only_relevant_cols:
+            # make sure feature table is sorted
+            self.feature_table = self.feature_table\
+                .sort_values(by=['y', 'x']).reset_index(drop=True)
+            self.feature_table = self.feature_table.loc[
+                :, self.get_data_columns + nondata_columns_to_keep
+            ].copy()
+        
+        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
+        with open(os.path.join(self.path_folder, name), 'wb') as f:
+            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
+        self.__dict__ = dict_backup
 
-        # section 480 to 510 is nested in extra layer
-        if self._section_str in ('490-495', '495-500', '500-505', '505-510'):
-            self.folder = os.path.join(
-                self.folder, f'{self.measurement_name}_{self._section_str}cm')
-        self.path_data = os.path.join(self.dir_read_data, self.folder)
+    def get_element_txts(self, tag: str = None) -> tuple[str, dict[str, str]]:
+        """
+        Data is stored in txt files where each file has a name of the format
+        [tag]_[el].txt, so group txt files based on tag and pick the group 
+        closest to the tag.
+        
+        """
+        if tag is None:
+            tag = self.measurement_name
+        
+        files: list[str] = find_matches(
+            folder=self.path_folder,
+            file_types='txt',
+            return_mode='all'
+        )
+        
+        els = set(elements.Abbreviation) | set(['Video 1'])
+        pres = []
+        posts = []
+        els_found = []
+        for file in files:
+            # split files at last occuring _
+            *pre, post = file.split('_')
+            pre = '_'.join(pre)  # in case there are multiple _ in the name
+            el = post.split('.')[0]  # split of the .txt
+            if el not in els:
+                continue
+            pres.append(pre)
+            posts.append(post)
+            els_found.append(el)
+            
+        closest_match: str = find_matches(
+            files=list(set(pres)),
+            substrings=tag
+        )
+        
+        file_group = ['_'.join([pre, post]) for pre, post in zip(pres, posts) if pre == closest_match]
+        
+        return closest_match, dict(zip(els_found, file_group))
 
-    @return_existing('img_original')
-    def sget_photo(self):
-        if self.img_original is not None:
-            return self.img_original
-        path = self.path_data
-        for file in os.listdir(path):
-            if (self._section_str in file) and ('Mosaic.tif' in file):
-                self.img_path_original = file
-                self.img_original = PIL_Image.open(os.path.join(path, file))
-                break
-        return self.img_original
-
-    @return_existing('photo_ROI_probe')
-    def sget_photo_ROI(self):
-        file_name = f'{self.measurement_name}_Video 1.txt'
-        v_gray, v_x, v_y = handle_video_file(self.path_data, file_name)
-        df = pd.DataFrame({'graylevel': v_gray, 'x': v_x, 'y': v_y})
-        img = df.pivot(index='y', columns='x', values='graylevel').to_numpy()
-        img = Image_convert_types.convert('np', 'PIL', img)
-        self.photo_ROI_probe = img
-        return self.photo_ROI_probe
-
-    def get_name_feature_table_file(self, key=None) -> str:
-        if key is None:
-            key = self.default_file_type
-        return f'feature_table_raw_{self._section_str}_{self._window}_{key}.csv'
-
-    def get_data_frames_from_txt(self, file_types=None):
-        if file_types is None:
-            file_types = [self.default_file_type]
+    def set_feature_table_from_txts(self, **kwargs) -> None:
         # find all relevant files
-        files = os.listdir(self.path_data)
-        print(files)
+        # tuple[str, dict[str, str]]
+        self.prefix_files, files = self.get_element_txts(**kwargs)
 
-        feature_tables = {}
-        for file_type in file_types:
-            vecs = []
-            keys = []
+        vecs: list[np.ndarray[float]] = []
+        keys: list[str] = []
 
-            # file names of data are in format
-            # [S | D][measurement_number][measurement_key]_[element | Video 1].[txt]
-            # example: D0343c_Mg.txt
-            for file in files:
-                name, suffix = file.split('.')
-                # exclude files that have something added to element name
-                # (likely modified file)
-                if len(name.split('_')) == 2:
-                    measurement, element = name.split('_')
-                    prefix = measurement[0]
-                    if ((prefix == file_type) and (measurement[1:] == self.measurement_name[1:]) and ((len(element) <= 3) or ('Video' in element)) and (suffix == 'txt')):
-                        if 'Video' in element:
-                            vecs.extend(
-                                handle_video_file(self.path_data, file))
-                            keys.extend(['graylevel', 'x', 'y'])
-                        else:
-                            vecs.append(txt_to_vec(self.path_data, file))
-                            keys.append(element)
-            # combine to feature_table
-            FT = pd.DataFrame(data=np.vstack(vecs).T, columns=keys)
-
-            # create column that allows unique identification of pixels
-            FT['xy'] = list(zip(FT['x'], FT['y']))
-
-            name_feature_table = self.get_name_feature_table_file(file_type)
-            path_feature_table = os.path.join(
-                self.dir_saves, 'raw_feature_tables', self._section_str,
-                self._window, name_feature_table)
-
-            FT.to_csv(path_feature_table)
-            feature_tables[file_type] = FT
-
-        return feature_tables
+        # file names of data are in format
+        # [S | D][measurement_number][measurement_key]_[element | Video 1].[txt]
+        # example: D0343c_Mg.txt
+        for element, file in files.items():
+            if 'Video' in file:
+                vecs.extend(
+                    handle_video_file(self.path_folder, file))
+                keys.extend(['L', 'x', 'y'])
+            else:
+                vecs.append(txt_to_vec(self.path_folder, file))
+                keys.append(element)
+        # combine to feature_table
+        self.feature_table = pd.DataFrame(data=np.vstack(vecs).T, columns=keys)
     
     def get_data_columns(self):
         if ('feature_table' not in self.__dict__) or (self.feature_table is None):
@@ -161,32 +178,51 @@ class XRF(Data):
     
         data_columns = np.array(columns_valid)
         return data_columns
+    
+    def combine_with(self, other: XRF) -> XRF:
+        """Combine two objects"""
+        def both_have(attr: str, obj1 = self, obj2 = other) -> bool:
+            return hasattr(obj1, attr) & hasattr(obj2, attr)
+        
+        assert type(self) == type(other), 'objects must be of the same type'
+        assert 'depth' in self.feature_table.columns, \
+            'found no depth column in first object'
+        assert 'depth' in other.feature_table.columns, \
+            'found no depth column in second object'
+        assert self.feature_table.depth.max() <= other.feature_table.depth.min(), \
+            'first object must have smaller depths and depth intervals cannot overlap'
 
-    def plt_img_from_feature_table(self):
-        plt.figure()
-        if 'graylevel' not in self.feature_table.columns:
-            self.combine_photo_feature_table()
-        img_FT = np.array(
-            [np.array(self.feature_table.pivot(
-                columns='y', index='x', values=c))
-             for c in ('R', 'G', 'B')],
-            dtype=np.uint8).T
-        plt.imshow(img_FT, interpolation='None')
-        plt.show()
+        # determine the new folder
+        paths: list[str] = [self.path_folder, other.path_folder]
+        new_path: str = os.path.commonpath(paths)
+        print(f'found common path: {new_path}')
 
+        Data_new: XRF = XRF(
+            path_folder=new_path, 
+            distance_pixels=self.distance_pixels
+        )
+        
+        self_df: pd.DataFrame = self.feature_table.copy()
+        other_df: pd.DataFrame = other.feature_table.copy()
 
-def test_features():
-    o = XRF('490-495', 'S')
-    # o.plt_photo()
-    o.load_feature_table()
-    # o.plt_NMF(k=3)
-    # o.plt_PCA()
-    o.plt_kmeans(n_clusters=3)
-    o.plt_img_from_feature_table()
+        # set min to 0
+        other_df.loc[:, 'x'] -= other_df.x.min()
+        # shift by last value of this df
+        other_df.loc[:, 'x'] += self_df.x.max()
+        if both_have('x_ROI', self_df, other_df):
+            # set min to 0
+            other_df.loc[:, 'x_ROI'] -= other_df.x_ROI.min()
+            # shift by last value of this df
+            other_df.loc[:, 'x_ROI'] += self_df.x_ROI.max()
+        
+        new_df: pd.DataFrame = pd.concat(
+            [self_df, other_df], 
+            axis=0
+        ).reset_index(drop=True)
+        Data_new.feature_table = new_df
+
+        return Data_new
 
 
 if __name__ == '__main__':
-    # test_features()
-    p = XRF('490-495', 'S')
-    p.load()
-    p.plt_comp('L')
+    pass

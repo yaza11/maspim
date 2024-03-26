@@ -1,6 +1,5 @@
 import numpy as np
 
-
 def kartesian_to_polar(v_x, v_y=None):
     """
     Convert vectors or point of x, y to r, phi.
@@ -27,6 +26,14 @@ def kartesian_to_polar(v_x, v_y=None):
     v_r = np.sqrt(v_x ** 2 + v_y ** 2)
     v_phi = np.arctan2(v_y, v_x)
     return v_r, v_phi
+
+
+def polar_to_kartesian(
+        v_r: np.ndarray[float], v_phi: np.ndarray[float]
+) -> tuple[np.ndarray[float], np.ndarray[float]]:
+    v_x: np.ndarray[float] = v_r * np.cos(v_phi)
+    v_y: np.ndarray[float] = v_r * np.sin(v_phi)
+    return v_x, v_y
 
 
 def rescale_values(

@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import time
 import matplotlib.pyplot as plt
 from typing import Iterable
 from scipy.optimize import minimize
@@ -209,9 +210,10 @@ def find_layers(
         optimized rectangle, success of optimizer and color.
 
     """
+    N = len(seeds)
     columns_df = ['seed', 'a', 'b', 'c', 'd', 'height', 'success', 'color']
     df_out = pd.DataFrame(
-        data=np.zeros((len(seeds), len(columns_df)), dtype=object),
+        data=np.zeros((N, len(columns_df)), dtype=object),
         columns=columns_df)
     df_out['seed'] = seeds
     df_out['color'] = color
@@ -230,9 +232,12 @@ def find_layers(
     else:
         sign_l = 1
 
-    height0 = np.ones(len(seeds)) * height0
+    height0 = np.ones(N) * height0
 
-    for idx in range(0, len(seeds)):
+    time0 = time.time()
+    print_interval = 10 ** (np.around(np.log10(N), 0) - 2)
+    print(f'searching parameters for {N} {color} laminae ...')
+    for idx in range(0, N):
         out = find_layer(
             image_classification_pad, seeds[idx], height0[idx], color, plts=plts, **kwargs
         )
@@ -250,8 +255,19 @@ def find_layers(
                 vmin=-127, vmax=127 + 255,
                 interpolation='none'
             )
-            plt.title(f'{idx+1} out of {len(seeds)}')
+            plt.title(f'{idx+1} out of {N}')
             plt.show()
+
+        if idx % print_interval == 0:
+            time_now = time.time()
+            time_elapsed = time_now - time0
+            predict = time_elapsed * N / (idx + 1)  # s
+            left = predict - time_elapsed
+            left_min, left_sec = divmod(left, 60)
+            print(end='\x1b[2K')
+            print(f'estimated time left: {str(int(left_min)) + " min" if left_min != 0 else ""} {left_sec:.1f} sec',
+                  end='\r')
+    print()
 
     return df_out
 

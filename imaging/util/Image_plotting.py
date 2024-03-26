@@ -1,4 +1,5 @@
 from imaging.util.Image_convert_types import swap_RB, infere_mode
+from imaging.util.coordinate_transformations import rescale_values
 
 import matplotlib.pyplot as plt
 from matplotlib import patches
@@ -80,9 +81,11 @@ def plt_contours(
     None
     """
     canvas = image.copy()
+    canvas = rescale_values(canvas, 0, 255).astype(np.uint8)
     for contour in contours:
-        cv2.drawContours(canvas, [contour], 0, 127, np.max([
-            np.min(canvas.shape[:2]) // 20, 1]))
+        if len(contour) > 0:
+            cv2.drawContours(canvas, [contour.astype(np.int32)], 0, 127, np.max([
+                np.min(canvas.shape[:2]) // 20, 1]))
     fig = plt_cv2_image(canvas, title=title, hold=hold, **kwargs)
     if hold:
         return fig
