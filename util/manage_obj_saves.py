@@ -1,4 +1,3 @@
-
 Image_disc_attributes = {
     'path_folder',
     'age_span'
@@ -8,7 +7,7 @@ ImageSample_disc_attributes = Image_disc_attributes | {
     'obj_color', 'xywh_ROI'}
 
 ImageROI_disc_attributes = ImageSample_disc_attributes | {
-    'image_classification', 'params_classification'
+    'image_classification', 'params_classification', 'punchholes'
 }
 
 ImageClassified_disc_attributes = ImageSample_disc_attributes | {
@@ -18,7 +17,6 @@ ImageClassified_disc_attributes = ImageSample_disc_attributes | {
 ImageTransformation_disc_attributes = {'_section, _window_from', '_window_to'}
 
 Data_disc_attributes = {
-    'path_d_folder',
     'distance_pixels',
     'feature_table',
     'depth_section',
@@ -35,11 +33,15 @@ Data_nondata_columns = {
     'classification_se',
     'seed',
     'depth',
-    'age'
+    'age',
+    'x',
+    'y'
 }
 
-MSI_disc_attributes = Data_disc_attributes
-XRF_disc_attributes = Data_disc_attributes | {'default_file_type'}
+MSI_disc_attributes = Data_disc_attributes | {'path_d_folder'}
+XRF_disc_attributes = Data_disc_attributes | {
+    'default_file_type', 'path_folder', 'measurement_name', 'prefix_files'
+}
 
 TimeSeries_disc_attributes = {
     'path_folder',
@@ -58,7 +60,16 @@ MetaFeatures_disc_attributes = {
     'features_clustering'
 }
 
-SampleImageHandler_attributes = {'extent_spots', 'path_folder'}
+SampleImageHandlerMSI_attributes = {'extent_spots', 'path_folder', 'path_d_folder'}
+
+SampleImageHandlerXRF_attributes = {
+    'path_folder', 
+    'path_image_file', 
+    'path_image_roi_file',
+    'ROI_is_image',
+    'extent_spots',
+    'extent'
+}
 
 Spectra_attributes = {
     'path_d_folder', 
@@ -71,8 +82,13 @@ Spectra_attributes = {
     'peak_setting_parameters',
     'kernel_shape',
     'kernel_params',
-    'line_spectra'
+    'line_spectra',
+    'feature_table',
+    'losses',
+    'binning_by',
+    'noise_level'
 }
+MultiSectionSpectra_attributes = Spectra_attributes
 
 XRay_attributes = {
     'path_image_file',
@@ -93,12 +109,14 @@ name_to_attrs = {
     'XRF': XRF_disc_attributes,
     'TimeSeries': TimeSeries_disc_attributes,
     'MetaFeatures': MetaFeatures_disc_attributes,
-    'SampleImageHandler': SampleImageHandler_attributes,
     'Spectra': Spectra_attributes,
-    'XRay': XRay_attributes
+    'XRay': XRay_attributes,
+    'SampleImageHandlerMSI': SampleImageHandlerMSI_attributes,
+    'SampleImageHandlerXRF': SampleImageHandlerXRF_attributes,
+    'MultiSectionSpectra': MultiSectionSpectra_attributes
 }
 
 
-def class_to_attributes(class_object: object) -> list[str]:
+def class_to_attributes(class_object: object) -> set[str]:
     c: str = class_object.__class__.__name__
     return name_to_attrs[c]
