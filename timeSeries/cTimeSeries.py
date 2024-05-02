@@ -1,152 +1,59 @@
+from copy import deepcopy
+
+import pywt
+
 from data.combine_feature_tables import combine_feature_tables
 from util.cClass import Convinience, return_existing, verbose_function
-from res.constants import elements, mC37_2, YD_transition, contrasts_scaling
-from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
+from res.constants import elements, YD_transition, contrasts_scaling
+from util.manage_obj_saves import class_to_attributes
 from imaging.util.coordinate_transformations import rescale_values
-from data.file_helpers import get_d_folder
+from Project.file_helpers import get_d_folder
 
 import os
 import pickle
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import logging
 from typing import Iterable
 from sklearn.preprocessing import StandardScaler
+from scipy.signal import detrend
+from scipy.signal.windows import blackman
+from astropy.timeseries import LombScargle
+
+logger = logging.getLogger('msi_workflow.' + __name__)
 
 
 class TimeSeries(Convinience):
-    def __init__(self, path_folder: str) -> None:
+    def __init__(self, path_folder: str | None = None, n_successes_required: int = 10) -> None:
         """Initialize."""
         self.plts = False
         self.verbose = False
-        
-        self.path_folder = path_folder
 
-    @verbose_function
-    def load(self):
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        path_d_folder = os.path.join(
-            self.path_folder, 
-            get_d_folder(self.path_folder)
-        )
-        with open(os.path.join(path_d_folder, name), 'rb') as f:
-            obj = pickle.load(f)
-        self.__dict__ |= obj.__dict__
-        
-    @verbose_function
-    def save(self):
-        """Save the object to disc."""
-        dict_backup = self.__dict__.copy()
-        keep_attributes = set(self.__dict__.keys()) & class_to_attributes(self)
-        existent_attributes = list(self.__dict__.keys())
-        verbose = self.verbose
-        for attribute in existent_attributes:
-            if attribute not in keep_attributes:
-                self.__delattr__(attribute)
-        if verbose:
-            print(f'saving image object with {self.__dict__.keys()}')
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        path_d_folder = os.path.join(
-            self.path_folder, get_d_folder(self.path_folder)
-        )
-        with open(os.path.join(path_d_folder, name), 'wb') as f:
-            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
-        self.__dict__ = dict_backup
+        self.n_successes_required = n_successes_required
 
-    @verbose_function
-    def set_time_series_tables(
-            self, correct_zeros=False, Data_obj: object = None, **kwargs) -> None:
-        """Get a feature table with zone wise averages."""
-        raise NotImplementedError('Depricated, use Project and set_msi_time_series')
-        if Data_obj is None:
-            if self._data_type == 'msi':
-                from cMSI import MSI
-                Data_obj = MSI(self._section, self._window)
-            elif self._data_type == 'xrf':
-                from cXRF import XRF
-                Data_obj = XRF(self._section, self._window)
-            else:
-                raise KeyError()
-            Data_obj.verbose = self.verbose
-            Data_obj.load(**kwargs)
-        # check if all attributes are in feature table
-        for c in Data_nondata_columns:
-            assert c in Data_obj.get_nondata_columns(), f'{c} not in feature table.'
+        if path_folder is not None:
+            self.path_folder = path_folder
 
-        # append L and x_ROI to features
-        columns_feature_table = np.append(Data_obj.get_data_columns(), ['x_ROI', 'y_ROI', 'L'])
+    def _attempt_d_folder(self) -> str:
+        """
+        Attempt to find the d folder based on the path_folder. If this fails, return the path_folder.
 
-        # calculate the seedwise averages, stds and nonzeros
-        ft_seeds_avg, ft_seeds_std, ft_seeds_success = Data_obj.processing_zone_wise_average(
-            zones_key='seed',
-            columns=columns_feature_table,
-            correct_zeros=correct_zeros,
-            calc_std=True,
-            **kwargs
-        )
-        ft_seeds_avg = ft_seeds_avg.fillna(0)
-        del Data_obj
+        This is ugly but neccessary since we don't know if the measurement is XRF or MSI and the XRF measurement
+        does not have a d folder.
+        """
+        try:  # attempt to find d-folder
+            path_folder = os.path.join(
+                self.path_folder,
+                get_d_folder(self.path_folder)
+            )
+        except ValueError:  # no d-folder, use folder instead
+            path_folder = self.path_folder
+        return path_folder
 
-        # add quality criteria
-        from imaging.main.cImage import ImageClassified
-        IClassified = ImageClassified(self._section, self._window)
-        IClassified.load()
-        cols_quals = ['homogeneity', 'continuity', 'contrast', 'quality']
-        quals = IClassified.params_laminae_simplified.loc[:, ['seed', 'color'] + cols_quals].copy()
-        del IClassified
-
-        # sign the seeds in the quality dataframe
-        mask_c = quals['color'] == 'light'
-        quals.loc[mask_c, 'color'] = 1
-        quals.loc[~mask_c, 'color'] = -1
-        quals['seed'] *= quals['color']
-        quals = quals.drop(columns='color')
-        quals['seed'] = quals.seed.astype(int)
-        quals = quals.set_index('seed')
-        # join the qualities to the averages table
-        ft_seeds_avg = ft_seeds_avg.join(quals, how='left')
-        # insert infty for every column in success table that is not there yet
-        missing_cols = set(ft_seeds_avg.columns).difference(
-            set(ft_seeds_success.columns)
-        )
-        for col in missing_cols:
-            ft_seeds_success[col] = np.infty
-
-        # plot the qualities
-        if self.plts:
-            plt.figure()
-            plt.plot(quals.index, quals.quality, '+', label='qual')
-            plt.plot(ft_seeds_avg.index, ft_seeds_avg.quality, 'x', label='ft')
-            plt.legend()
-            plt.xlabel('seed')
-            plt.ylabel('quality')
-            plt.title('every x should have a +')
-            plt.show()
-
-        # need to insert the x_ROI from avg
-        ft_seeds_std['spread_x_ROI'] = ft_seeds_std.x_ROI.copy()
-        ft_seeds_success['N_total'] = ft_seeds_success.x_ROI.copy()
-        ft_seeds_std['x_ROI'] = ft_seeds_avg.x_ROI.copy()
-        ft_seeds_success['x_ROI'] = ft_seeds_avg.x_ROI.copy()
-        # sort by depth
-        ft_seeds_avg = ft_seeds_avg.sort_values(by='x_ROI')
-        ft_seeds_std = ft_seeds_std.sort_values(by='x_ROI')
-        ft_seeds_success = ft_seeds_success.sort_values(by='x_ROI')
-        # drop index (=seed) into dataframe
-        ft_seeds_avg.index.names = ['seed']
-        ft_seeds_std.index.names = ['seed']
-        ft_seeds_success.index.names = ['seed']
-        # reset index
-        ft_seeds_avg.reset_index(inplace=True)
-        ft_seeds_avg['seed'] = ft_seeds_avg.seed.astype(int)
-        ft_seeds_std.reset_index(inplace=True)
-        ft_seeds_std['seed'] = ft_seeds_std.seed.astype(int)
-        ft_seeds_success.reset_index(inplace=True)
-        ft_seeds_success['seed'] = ft_seeds_success.seed.astype(int)
-
-        self.feature_table = ft_seeds_avg
-        self.feature_table_standard_deviations = ft_seeds_std
-        self.feature_table_successes = ft_seeds_success
+    @property
+    def age(self):
+        return self.feature_table.age
 
     def combine_duplicate_seed(self, weighted=False):
         """Combining layers with same seeds, information about quality is lost."""
@@ -159,9 +66,9 @@ that before using this option'
             # take weighted average of rows that have the same xROI
             #   mult every comp in each layer by its n
             cols = self.get_data_columns() + \
-                ['L', 'x_ROI', 'quality', 'homogeneity', 'continuity',
-                 'contrast', 'quality'
-                 ]
+                   ['L', 'x_ROI', 'quality', 'homogeneity', 'continuity',
+                    'contrast', 'quality'
+                    ]
             ns = self.feature_table_successes.loc[:, cols]
             sums = ns * self.feature_table.loc[:, cols]
             #   add x_ROI col
@@ -173,16 +80,16 @@ that before using this option'
             wmean = wmean.sort_values(by='x_ROI').fillna(0).reset_index()
             ns = ns.groupby('seed').sum().sort_values(by='x_ROI').reset_index()
         else:
-            wmean = self.feature_table\
-                .groupby('seed')\
-                .mean()\
-                .fillna(0)\
-                .sort_values(by='x_ROI')\
+            wmean = self.feature_table \
+                .groupby('seed') \
+                .mean() \
+                .fillna(0) \
+                .sort_values(by='x_ROI') \
                 .reset_index()
-            ns = self.feature_table_successes\
-                .groupby('seed')\
-                .mean()\
-                .sort_values(by='x_ROI')\
+            ns = self.feature_table_successes \
+                .groupby('seed') \
+                .mean() \
+                .sort_values(by='x_ROI') \
                 .reset_index()
 
         return wmean, ns
@@ -205,13 +112,13 @@ that before using this option'
         assert hasattr(self, 'feature_table'), 'set the feature table first'
         return self.feature_table_successes
 
-
     def get_feature_table_standard_errors(self):
         assert hasattr(self, 'feature_table'), 'set the feature table first'
         if hasattr(self, 'feature_table_standard_errors'):
             return self.feature_table_standard_errors
         # standard error: sigma / sqrt(n)
-        self.feature_table_standard_errors = self.feature_table_standard_deviations.loc[:, self.sget_data_columns()].div(
+        self.feature_table_standard_errors = self.feature_table_standard_deviations.loc[:,
+                                             self.sget_data_columns()].div(
             np.sqrt(self.feature_table_successes.loc[:, 'N_total']), axis='rows'
         )
         return self.feature_table_standard_errors
@@ -425,7 +332,8 @@ that before using this option'
                 if self.verbose:
                     print('Pl-H transition in slice!')
                 # add vertical line to mark the transition
-                plt.vlines(YD_transition, -1, 1, linestyles='solid', alpha=.75, label='Pl-H boundary', color='black', linewidth=2)
+                plt.vlines(YD_transition, -1, 1, linestyles='solid', alpha=.75, label='Pl-H boundary', color='black',
+                           linewidth=2)
 
                 # add horizontal lines for averages
                 mask_pl = t > YD_transition
@@ -452,8 +360,7 @@ that before using this option'
             exclude_low_success=True,
             mult_N=True,
             norm_weights=False,
-            subtract_mean=False,
-            n_successes_required=10
+            subtract_mean=False
     ):
         if ft is None:
             ft = self.get_contrasts_table(subtract_mean=subtract_mean).loc[:, self.get_data_columns()]
@@ -474,11 +381,11 @@ that before using this option'
 
         if exclude_low_success:
             ft_succ = self.get_feature_table().loc[:, cols].copy()
-            ft[ft_succ < n_successes_required] = np.nan
+            ft[ft_succ < self.n_successes_required] = np.nan
 
         # multiply with ratio of successful layers
         if exclude_low_success and mult_N:
-            r_succs = (ft_succ > n_successes_required).sum(axis=0) / ft_succ.shape[0]
+            r_succs = (ft_succ > self.n_successes_required).sum(axis=0) / ft_succ.shape[0]
             ft = ft.multiply(r_succs, axis=1)
 
         # take median
@@ -563,8 +470,8 @@ that before using this option'
         mask_any = np.zeros_like(t, dtype=bool)
         for idx, comp in enumerate(comps):
             if exclude_layers_low_successes and (comp in self.get_feature_table_successes().columns):
-                mask_enough_successes = self.get_feature_table_successes()\
-                    .loc[:, comp] >= n_successes_required
+                mask_enough_successes = self.get_feature_table_successes() \
+                                            .loc[:, comp] >= self.n_successes_required
             else:
                 mask_enough_successes = np.ones_like(t, dtype=bool)
             v = data.loc[mask_enough_successes, comp]
@@ -573,7 +480,7 @@ that before using this option'
                 t[mask_enough_successes],
                 data_scaled.loc[mask_enough_successes, comp],
                 label=fr'{comp}',
-                color=f'C{idx+2}'
+                color=f'C{idx + 2}'
             )
             # add successful layers to mask
             mask_any |= mask_enough_successes
@@ -592,20 +499,32 @@ that before using this option'
             ax = plt.gca()
 
             for idx in range(seasons.shape[0]):
-                ax.axvspan(bounds[idx], bounds[idx + 1], facecolor=season_to_color[seasons[idx]], alpha=shades[idx], edgecolor='none', zorder=-1)
+                c_index = seasons[idx]
+                # skip nan vals
+                if c_index not in season_to_color:
+                    continue
+
+                ax.axvspan(
+                    bounds[idx],
+                    bounds[idx + 1],
+                    facecolor=season_to_color[c_index],
+                    alpha=shades[idx],
+                    edgecolor='none',
+                    zorder=-1
+                )
 
         # add vertical line to mark the transition
         if (t.min() < YD_transition) and (YD_transition < t.max()):
-            if self.verbose:
-                print('Pl-H transition in slice!')
-            plt.vlines(YD_transition, y_bounds[0], y_bounds[1], linestyles='solid', alpha=.75, label='Pl-H boundary', color='black', linewidth=2)
+            logger.info('Pl-H transition in slice!')
+            plt.vlines(YD_transition, y_bounds[0], y_bounds[1], linestyles='solid', alpha=.75, label='Pl-H boundary',
+                       color='black', linewidth=2)
 
         plt.xlim((t.min(), t.max()))
         plt.ylim(y_bounds)
         plt.xlabel('age (yr B2K)')
         plt.ylabel('scaled intensity')
         if title is None:
-            title = f'excluded layers with less than {n_successes_required}: {exclude_layers_low_successes}, scaled mode: {norm_mode}'
+            title = f'excluded layers with less than {self.n_successes_required}: {exclude_layers_low_successes}, scaled mode: {norm_mode}'
             if plt_contrasts:
                 title += ', contrasts'
         plt.title(title)
@@ -626,7 +545,7 @@ that before using this option'
             plt_contrasts: bool = False,
             annotate_correlations=True,
             hold=False,
-            ** kwargs
+            **kwargs
     ) -> None:
         """Plot a specific compound or list of compounds against grayscale."""
         t = self.age_scale()
@@ -675,8 +594,8 @@ that before using this option'
         mask_any = np.zeros_like(t, dtype=bool)
         for idx, comp in enumerate(comps):
             if exclude_layers_low_successes and (comp in self.get_feature_table_successes().columns):
-                mask_enough_successes = self.get_feature_table_successes()\
-                    .loc[:, comp] >= n_successes_required
+                mask_enough_successes = self.get_feature_table_successes() \
+                                            .loc[:, comp] >= self.n_successes_required
             else:
                 mask_enough_successes = np.ones_like(t, dtype=bool)
             v = data.loc[mask_enough_successes, comp]
@@ -701,7 +620,7 @@ that before using this option'
                 t[mask_enough_successes],
                 data_scaled.loc[mask_enough_successes, comp],
                 label=label,
-                color=f'C{idx+2}'
+                color=f'C{idx + 2}'
             )
             # add successful layers to mask
             mask_any |= mask_enough_successes
@@ -743,20 +662,22 @@ that before using this option'
             ax = plt.gca()
 
             for idx in range(seasons.shape[0]):
-                ax.axvspan(bounds[idx], bounds[idx + 1], facecolor=season_to_color[seasons[idx]], alpha=shades[idx], edgecolor='none', zorder=-1)
+                ax.axvspan(bounds[idx], bounds[idx + 1], facecolor=season_to_color[seasons[idx]], alpha=shades[idx],
+                           edgecolor='none', zorder=-1)
 
         # add vertical line to mark the transition
         if (t.min() < YD_transition) and (YD_transition < t.max()):
             if self.verbose:
                 print('Pl-H transition in slice!')
-            plt.vlines(YD_transition, y_bounds[0], y_bounds[1], linestyles='solid', alpha=.75, label='Pl-H boundary', color='black', linewidth=2)
+            plt.vlines(YD_transition, y_bounds[0], y_bounds[1], linestyles='solid', alpha=.75, label='Pl-H boundary',
+                       color='black', linewidth=2)
 
         plt.xlim((t.min(), t.max()))
         plt.ylim(y_bounds)
         plt.xlabel('age (yr B2K)')
         plt.ylabel('scaled intensity')
         if title is None:
-            title = f'excluded layers with less than {n_successes_required}: {exclude_layers_low_successes}, scaled mode: {norm_mode}'
+            title = f'excluded layers with less than {self.n_successes_required}: {exclude_layers_low_successes}, scaled mode: {norm_mode}'
             if plt_contrasts:
                 title += ', contrasts'
         plt.title(title)
@@ -771,7 +692,8 @@ that before using this option'
         # sorted lowest to highest
         series_scores = series_scores.sort_values()
         self.plt_against_grayscale(list(series_scores.index[:N_top]), title=f'Top {N_top} dark' + title, **kwargs)
-        self.plt_against_grayscale(list(series_scores.index[-N_top:][::-1]), title=f'Top {N_top} light' + title, **kwargs)
+        self.plt_against_grayscale(list(series_scores.index[-N_top:][::-1]), title=f'Top {N_top} light' + title,
+                                   **kwargs)
 
     def sign_corr(self, a: Iterable, b: Iterable) -> float:
         """
@@ -877,62 +799,59 @@ that before using this option'
         corr_with_L = ft.loc[:, comps].corrwith(L, method=method)
         return corr_with_L
 
+    def power(self, targets: list[str] | None = None, plts: bool = False) -> pd.DataFrame:
+        if targets is None:
+            targets = self.sget_data_columns()
+        t: pd.Series[float] = self.feature_table.age
+        N_points: int = len(t)
+        ys: pd.DataFrame = self.feature_table.loc[:, targets]
+        ys.fillna(0, inplace=True)
+        ys: np.ndarray[int] = detrend(ys, axis=0)
+        weights: np.ndarray[float] = blackman(N_points).reshape((N_points,))
+        ys = (ys.T * weights.T).T
+
+        res: list[tuple] = [LombScargle(t, ys[:, idx]).autopower() for idx in range(len(targets))]
+        frequencies: list[np.ndarray] = [r[0] for r in res]
+        powers: list[np.ndarray] = [r[1] for r in res]
+        # f_w, spec_w = LombScargle(t, y_w).autopower()
+        # power
+        # p = np.abs(spec) ** 2
+        # p_w = np.abs(spec_w) ** 2
+
+        if plts:
+            fig, axs = plt.subplots(nrows=2)
+            for idx, target in enumerate(targets):
+                y = ys[:, idx]
+                axs[0].plot(t, y, label=target)
+                # axs[0].plot(t, y_d, label='detrended')
+                # axs[0].plot(t, y_w, label='blackman')
+
+                f = frequencies[idx]
+                power = powers[idx]
+                axs[1].plot(f, power, label=target)
+                # axs[1].plot(f_w, p_w)
+
+            axs[0].legend()
+            axs[0].set_xlabel('Age in yrs b2k')
+            axs[0].set_ylabel('Tapered time series')
+
+            axs[1].legend()
+            axs[1].set_xlabel('Frequency in 1 / yrs')
+            axs[1].set_ylabel('Power')
+            axs[1].vlines(1, ymin=0, ymax=np.max(np.array(powers)), color='black', linestyle='--')
+            plt.show()
+
+        assert all(np.allclose(frequencies[0], f) for f in frequencies)
+
+        df = pd.DataFrame(dict(zip(targets, powers)))
+
+        df['f'] = frequencies[0]
+
+        return df
+
     def correct_distortion(self):
+        ...
         raise NotImplemented('Depricated')
-        """Correct x_ROI, y_ROI by image transformation."""
-        if self._window == transformation_target:
-            return
-
-        # set global flag to make sure transformation is not applied twice
-        if self.check_attribute_exists('applied_depth_correction') and self.applied_depth_correction:
-            if self.verbose:
-                print('depth correction has already been applied')
-            return
-
-        from imaging.main.cTransformation import apply_stretching, ImageTransformation
-        from imaging.main.cImage import ImageROI
-        IT = ImageTransformation(self._section, self._window, transformation_target)
-        IT.load_transformed()
-        # apply stretching to seed and x_ROI
-        # stretching function assumes input vec spans entire section
-        IR = ImageROI(self._section, self._window)
-        IR.load()
-        # x_ROI's to transform
-        x_ROI = self.feature_table.x_ROI.copy()
-        y_ROI = self.feature_table.y_ROI.copy()
-        # original vector
-        # x_ROI_i = np.arange(0, IR.xywh_ROI[-2], 1)
-        # x_ROI_T =
-        d, i = IT.apply_mapping_to_points(np.c_[x_ROI, y_ROI])
-        y_ROI_T, x_ROI_T = np.unravel_index(
-            i, IT.X_transformed.shape)
-
-        self.feature_table['x_ROI'] = x_ROI_T
-        self.feature_table['y_ROI'] = y_ROI_T
-
-        self.feature_table_standard_deviations['x_ROI'] = x_ROI_T
-        self.feature_table_standard_deviations['y_ROI'] = y_ROI_T
-
-        self.feature_table_successes['x_ROI'] = x_ROI_T
-        self.feature_table_successes['y_ROI'] = y_ROI_T
-
-        # set flag
-        self.applied_depth_correction = True
-
-        if self.plts:
-            plt.scatter(x_ROI, y_ROI)
-            plt.title('scatter before')
-            plt.show()
-            plt.scatter(x_ROI_T, y_ROI_T)
-            plt.title('scatter after')
-            plt.show()
-            plt.plot(x_ROI - x_ROI_T, label=r'$\Delta x_\mathrm{ROI}$')
-            plt.plot(y_ROI - y_ROI_T, label=r'$\Delta y_\mathrm{ROI}$')
-            plt.plot(np.sqrt((x_ROI - x_ROI_T) ** 2 + (y_ROI - y_ROI_T) ** 2), label='distance')
-            plt.plot(d, label=r'err')
-            plt.legend()
-            plt.title('coordinates before - after')
-            plt.show()
 
     def set_age_scale(self, ages):
         self.ages = ages
@@ -957,7 +876,9 @@ that before using this option'
         idx_T = np.argwhere(depths > depth)[0][0]
         TSu = TimeSeries((self._section[0], depth), self._window)
         TSl = TimeSeries((depth, self._section[1]), self._window)
-        for attr in ['feature_table_zone_averages', 'feature_table_zone_standard_deviations', 'feature_table_zone_successes', 'feature_table_zone_averages_clean', 'feature_table_zone_successes_clean']:
+        for attr in ['feature_table_zone_averages', 'feature_table_zone_standard_deviations',
+                     'feature_table_zone_successes', 'feature_table_zone_averages_clean',
+                     'feature_table_zone_successes_clean']:
             if hasattr(self, attr):
                 ftu = self.__getattribute__(attr).iloc[:idx_T, :]
                 TSu.__setattr__(attr, ftu)
@@ -978,20 +899,20 @@ that before using this option'
         df.loc['av', cols] = self.feature_table.loc[:, cols].mean(axis=0)
         # std of average intensities
         df.loc['v_I_std', cols] = self.feature_table.loc[
-            :, cols
-        ].std(axis=0)
+                                  :, cols
+                                  ].std(axis=0)
         # median std is horizontal spread
         df.loc['h_I_std', cols] = self.feature_table_standard_deviations.loc[
-            :, cols
-        ].median(axis=0)
+                                  :, cols
+                                  ].median(axis=0)
         # median abs contrast
         df.loc['contrast_med', cols] = self.get_contrasts_table().loc[
-            :, cols
-        ].abs().median(axis=0)
+                                       :, cols
+                                       ].abs().median(axis=0)
         # spread of contrasts --> std of contrasts
         df.loc['contrast_std', cols] = self.get_contrasts_table().loc[
-            :, cols
-        ].abs().std(axis=0)
+                                       :, cols
+                                       ].abs().std(axis=0)
 
         return df
 
@@ -1012,74 +933,6 @@ class MultiSectionTimeSeries(TimeSeries):
 
         dfs = [ts.feature_table_successes for ts in time_series]
         self.feature_table_successes = combine_feature_tables(dfs)
-
-def cpr_corrs():
-    section = (490, 495)
-    window = 'Alkenones'
-    TS = TimeSeries(section, window)
-    TS.plts = False
-    TS.verbose = True
-    # TS.sget_time_series_table()
-    TS.load()
-    TS.sget_contrasts_table()
-    # correlations with grayscale
-    L = TS.feature_table_zone_averages.L
-    corr_with_L_p = TS.get_feature_table_zone_averages().loc[:, TS.sget_data_columns()].corrwith(L, method='pearson')
-    TS.plt_top(corr_with_L_p, color_seasons=True, N_top=5, title=' corr with L (pearson)')
-
-    corr_with_L_s = TS.get_feature_table_zone_averages().loc[:, TS.sget_data_columns()].corrwith(L, method='spearman')
-    TS.plt_top(corr_with_L_s, color_seasons=True, N_top=5, title=' corr with L (spearman)')
-
-    corr_with_L_k = TS.get_feature_table_zone_averages().loc[:, TS.sget_data_columns()].corrwith(L, method='kendall')
-    TS.plt_top(corr_with_L_k, color_seasons=True, N_top=5, title=' corr with L (kendall)')
-
-    # correlations with quality
-    Q = TS.feature_table_zone_averages.quality
-    corr_with_Q = TS.get_feature_table_zone_averages().loc[:, TS.sget_data_columns()].corrwith(Q, method='pearson')
-    TS.plt_top(corr_with_Q, color_seasons=True, N_top=5, title=' corr with Q')
-
-    # correlation of contrasts with contrast
-    C = TS.feature_table_zone_averages.contrast
-    corr_C_with_C = TS.sget_contrasts_table().loc[
-        :, TS.sget_data_columns()
-    ].corrwith(C, method='pearson')
-    TS.plt_top(corr_C_with_C, color_seasons=True, N_top=5, title=' corr contrasts with contrast L')
-
-
-def combine_sections(sections: list, window: str):
-    """Combine time series of multiple sections."""
-    from imaging.main.cImage import ImageProbe
-    combined_section = (sections[0][0], sections[-1][-1])
-    TS_combined = TimeSeries(combined_section, window)
-    avs = []
-    stds = []
-    sucs = []
-    x_ROI_offset = 0
-    for section in sections:
-        # add offset to x_ROI
-        TS = TimeSeries(section, window)
-        TS.set_time_series_tables(use_common_mzs=True)
-        av = TS.get_feature_table_zone_averages().copy()
-        # add offsets to x_ROI and seed
-        av['x_ROI'] += x_ROI_offset
-        av['seed'] = (av.seed.abs() + x_ROI_offset) * np.sign(av.seed)
-        avs.append(av)
-        stds.append(TS.get_feature_table_zone_standard_deviations().copy())
-        sucs.append(TS.get_feature_table_zone_successes().copy())
-        I = ImageProbe(section, window)
-        I.load()
-        x_ROI_offset += I.xywh_ROI[2]
-
-    TS_combined.feature_table_zone_averages = pd.concat(avs, axis=0).reset_index(drop=True)
-    TS_combined.feature_table_zone_standard_deviations = pd.concat(stds, axis=0).reset_index(drop=True)
-    TS_combined.feature_table_zone_successes = pd.concat(sucs, axis=0).reset_index(drop=True)
-
-    TS_combined.feature_table_zone_standard_deviations['seed'] = TS_combined.feature_table_zone_averages.seed.copy()
-    TS_combined.feature_table_zone_successes['seed'] = TS_combined.feature_table_zone_averages.seed.copy()
-
-    TS_combined.feature_table_zone_averages
-
-    return TS_combined
 
 
 if __name__ == '__main__':
