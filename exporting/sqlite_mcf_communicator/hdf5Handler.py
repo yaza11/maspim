@@ -22,7 +22,19 @@ class hdf5Handler:
                 'provided path must either be the hdf file ending in .hdf5 or the d-folder containing the hdf file'
             )
 
+        self._check_modify_date()
         self._post_init()
+
+    def _check_modify_date(self):
+        time_hdf: float = os.path.getmtime(self.path_file)
+        time_mcf = max([
+            os.path.getmtime(os.path.join(self.path_d_folder, file))
+            for file in os.listdir(self.path_d_folder) 
+            if ('mcf' in file.split('.')[-1]) and (file != 'Storage.mcf_idx')
+        ])
+        if time_mcf > time_hdf:
+            print('mcf files were modified after the creation of the hdf5 file, you may want to create a new hdf5 file.')
+
 
     def _post_init(self):
         if not os.path.exists(self.path_file):

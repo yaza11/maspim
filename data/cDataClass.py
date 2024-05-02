@@ -1,32 +1,26 @@
 """Superclass for cMSI, cXRF, cXRay."""
-from res.constants import dict_labels, key_hole_pixels
-
+from res.constants import dict_labels
 from util.cClass import Convinience, return_existing
-
-import imaging.util.Image_convert_types as Image_convert_types
 from imaging.util.Image_plotting import plt_cv2_image
-from imaging.util.Image_helpers import exclude_missing_pixels_in_feature_table
-
 from exporting.from_mcf.cSpectrum import Spectra
-
-import pickle
-import glob
-import os
-from collections.abc import Iterable
 
 import cv2
 import scipy
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import logging
 
+from collections.abc import Iterable
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA, NMF
 from sklearn.preprocessing import StandardScaler, MaxAbsScaler
 
+logger = logging.getLogger('msi_workflow.' + __name__)
+
 
 def estimate_probability_distribution(
-        I, bin_edges: list[float] | None = None):
+        I, bin_edges: list[float] | None = None) -> tuple[np.ndarray[float], list[float], np.ndarray[float]]:
     """
     For an image I calculate the probability distribution.
 
@@ -50,6 +44,8 @@ def estimate_probability_distribution(
         The probabilty distribution.
     bin_edges : list[float]
         The bin edges used for binning the intensites.
+    bin_centers : np.ndarray[float]
+        The centers of bins
 
     """
     if bin_edges is not None:
@@ -66,7 +62,43 @@ def rankings_name_to_label(name):
     return dict_labels[name]
 
 
-def PCA_biplot(score, coeffs, labels=None, var=None, title='', hold=False, add_annotations=True):
+def PCA_biplot(
+        score: pd.DataFrame,
+        coeffs: pd.DataFrame,
+        var: None | Iterable = None,
+        title: str = '',
+        hold: bool = False,
+        add_annotations: bool = True
+) -> None | tuple[plt.Axes, plt.Figure]:
+    """
+    Creat a biplot out of PCA results.
+
+    Parameters
+    ----------
+    score : pd.DataFrame
+        A pandas DataFrame containing the scores of each compound in the PCA
+        result. Each row represents a compound, and each column represents a principal component score.
+        The scores indicate the position of each compound in the PCA coordinate system.
+    coeffs : pd.DataFrame
+        A pandas DataFrame containing the coefficients or loadings of the principal components.
+        Each row corresponds to a principal component, and each column represents a variable or feature
+        in the original data space. These coefficients indicate the contribution of each variable to the
+        principal components.
+    var : None or Iterable, optional
+        Optional iterable containing variance explained by PC1 and PC2.
+    title : str, optional
+        Optional title for the biplot.
+    hold : bool, optional
+        Whether to hold the plot for further modifications (default is False).
+    add_annotations : bool, optional
+        Whether to add annotations to the points (default is True).
+
+    Returns
+    -------
+    None or tuple[plt.Axes, plt.Figure]
+        If `hold` is False, returns None. If `hold` is True, returns a tuple
+        containing the matplotlib Figure and Axes objects.
+    """
     # coordinates in PCA coordinate system
     xs = score.iloc[:, 0]
     ys = score.iloc[:, 1]
@@ -77,6 +109,7 @@ def PCA_biplot(score, coeffs, labels=None, var=None, title='', hold=False, add_a
     xs /= range_x
     ys /= range_y
     # plot compounds in new frame of reference
+    fig, axs = plt.subplots()
     plt.scatter(xs, ys, alpha=.8)
     # add labels to point
     if add_annotations:
@@ -111,55 +144,17 @@ def PCA_biplot(score, coeffs, labels=None, var=None, title='', hold=False, add_a
     plt.title(title)
     if not hold:
         plt.show()
+    else:
+        return fig, axs
 
 
 class Lamination:
-    """Special functionality for laminated samples."""
-    def add_laminae_classification(
-            self, image_classification=None, overwrite=False):
-        """Add classification column to feature table."""
-        if 'x_ROI' not in self.feature_table.columns:
-            raise LookupError('ROI coordinates not in feature table. Call pixel_get_photo_ROI_to_ROI.')
+    """
+    Special functionality for laminated samples.
 
-        # get the classification from the image object
-        if (image_classification is None) or overwrite:
-            from cImage import ImageClassified
-            image_obj = ImageClassified(
-                self._section, self._window
-            )
-            image_obj.load()
-            image_classification = image_obj.sget_image_classification()
+    Is inherited by Data class
+    """
 
-        self.add_attribute_from_image(
-            image_classification, 'classification', median=True)
-
-    def add_simplified_laminae_classification(self):
-        """"Add column for simplified laminae clasification."""
-        from cImage import ImageClassified
-        image_obj = ImageClassified(self._section, self._window)
-        image_obj.load()
-        assert 'image_seeds' in image_obj.__dict__
-
-        image_simplified_classification = image_obj.get_image_simplified_classification()
-
-        self.add_attribute_from_image(
-            image_simplified_classification, 'classification_s', median=False)
-        mask = self.feature_table.classification_s == 0
-        self.feature_table.loc[mask, 'classification_s'] = np.nan
-        
-    def add_seed_classification(self):
-        from cImage import ImageClassified
-        image_obj = ImageClassified(self._section, self._window)
-        image_obj.load()
-
-        assert 'image_seeds' in image_obj.__dict__
-
-        image_seeds = image_obj.image_seeds
-
-        self.add_attribute_from_image(image_seeds, 'seed', median=False)
-        mask = self.feature_table.seed == 0
-        self.feature_table.loc[mask, 'seed'] = np.nan
-        
     def calculate_KL_div(
             self, col: str | int) -> tuple[float]:
         """
@@ -227,20 +222,57 @@ class Lamination:
                 f'Kullback-Leibler divergence for dark pixels {D_dark:.4f}')
 
         return D_light, D_dark
-        
-    def calculate_lightdark_rankings(
-            self, use_intensities=True, use_successes=False, use_KL_div=False,
-            scale=False, columns=None, classification_column='classification',
-            calc_corrs=False, **kwargs):
-        if not any((use_intensities, use_successes, use_KL_div)):
-            raise KeyError('Use at least one of the methods.')
 
+    def calculate_lightdark_rankings(
+            self,
+            use_intensities: bool = True,
+            use_successes: bool = False,
+            use_KL_div: bool = False,
+            scale: bool = False,
+            columns: None | list[str] = None,
+            classification_column: str = 'classification',
+            calc_corrs: bool = False,
+            **_
+    ) -> pd.DataFrame:
+        """
+        Calculate rankings based on light and dark pixel intensities.
+
+        Parameters
+        ----------
+        use_intensities : bool, optional
+            Whether to use intensities for ranking calculation (default is True).
+        use_successes : bool, optional
+            Whether to consider successful spectra for ranking calculation (default is False).
+        use_KL_div : bool, optional
+            Whether to use Kullback-Leibler divergence for ranking calculation (default is False).
+        scale : bool, optional
+            Whether to scale the rankings (default is False).
+        columns : None or list of str, optional
+            List of column names to consider for ranking calculation. If None, uses all available columns (default is None).
+        classification_column : str, optional
+            Name of the column containing classification information (default is 'classification').
+        calc_corrs : bool, optional
+            Whether to calculate correlations (default is False).
+        **_
+            Additional keyword arguments (ignored).
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame containing the calculated rankings.
+        """
+        # Check if at least one ranking method is selected
+        if not any((use_intensities, use_successes, use_KL_div)):
+            raise KeyError('Use at least one of the ranking methods.')
+
+        # Set default columns if not provided
         if columns is None:
             columns = self.get_data_columns()
 
-        # initiate data_frame
+        # Initialize DataFrame for rankings
         self.rankings = pd.DataFrame(index=columns)
 
+        # Calculate average intensities in light and dark pixels
         ft_averages = self.processing_zone_wise_average(
             zones_key=classification_column, columns=columns).drop(columns=['x'])
         light = ft_averages.loc[255]
@@ -248,68 +280,19 @@ class Lamination:
         dark = ft_averages.loc[127]
         self.rankings['av_intensity_dark'] = dark
 
-        # calculate the average intensity in the light and dark pixels
-        # respectively and calculate the distribution of light
-        # (ratio of .5 corresponds to even distribution)
-
+        # Calculate ratios, densities, and KL divergence for ranking
         ratio_intensities = light / (light + dark) - .5
-        # even if the ratio_intensities is not used, the sign is needed for
-        # KL_div
         if not use_intensities:
             ratio_intensities = np.sign(ratio_intensities)
 
-        # count the successfull spectra for each compound in the specified zone
         if use_successes:
             ft_nonzeros = self.processing_zone_wise_average(
                 zones_key=classification_column, astype=bool, columns=columns).drop(columns=['x'])
 
             ratio_nonzeros = np.zeros(len(columns))
-            # use density in light for predominantly light layers
             mask_light = (ratio_intensities > 0).to_numpy()
             ratio_nonzeros[mask_light] = ft_nonzeros.loc[255].iloc[mask_light]
-            ratio_nonzeros[~mask_light] = ft_nonzeros.loc[127].iloc[~mask_light]
-        else:
-            ratio_nonzeros = 1
-
-        if use_KL_div:
-            KL_divs = pd.DataFrame(data=np.empty(
-                (len(columns), 2)), index=columns, columns=['KL_light', 'KL_dark'])
-            p = 0
-            for idx, col in enumerate(columns):
-                if self.verbose and (p != (p := round(idx / len(columns) * 100))):
-                    print(f'{p} percent done')
-                KL_divs.loc[col, :] = self.calculate_KL_div(col)
-            KL_div = (KL_divs['KL_light'] + KL_divs['KL_dark']) / 2
-        else:
-            KL_div = 1
-            KL_divs = {'KL_light': 1, 'KL_dark': 1}
-
-        self.rankings['KL_div_light'] = KL_divs['KL_light']
-        self.rankings['KL_div_dark'] = KL_divs['KL_dark']
-
-        if scale:
-            # scale max(abs) to 1
-            ratio_intensities /= np.max(np.abs(ratio_intensities))
-            ratio_nonzeros /= np.max(ratio_nonzeros)
-            KL_div /= np.max(KL_div)
-
-        self.rankings['intensity_div'] = ratio_intensities
-        self.rankings['density_nonzero'] = ratio_nonzeros
-        self.rankings['KL_div'] = KL_div
-
-        rankings = ratio_intensities * ratio_nonzeros * KL_div
-        self.rankings['score'] = rankings
-
-        if calc_corrs:
-            mask_nonholes = self.feature_table[classification_column] != 0
-            self.rankings['corr_L'] = self.get_data().loc[mask_nonholes, :]\
-                .corrwith(self.feature_table.L[mask_nonholes])
-            self.rankings[f'corr_{classification_column}'] = \
-                self.get_data().loc[mask_nonholes, :].corrwith(
-                    self.feature_table[classification_column][mask_nonholes]
-            )
-
-        return self.rankings
+            ratio_nonzeros[~mask_light] = ft_nonzeros.loc[127]
 
     def plt_PCA_rankings(
             self,
@@ -326,7 +309,8 @@ class Lamination:
         rankings = self.rankings[columns].copy()
 
         if add_laminae_averages:
-            from cTimeSeries import TimeSeries
+            raise NotImplementedError('Depricated')
+            from timeSeries.cTimeSeries import TimeSeries
             TS = TimeSeries(self._section, self._window)
             TS.load()
             r_av_L = TS.get_corr_with_grayscale().copy()
@@ -359,7 +343,7 @@ class Lamination:
         # get coefficients of criteria
         coeffs = pd.DataFrame(data=pca.components_, columns=columns)
         PCA_biplot(pcs, coeffs, var=pca.explained_variance_ratio_, **kwargs)
-        
+
     def plt_overview_rankings(self, cols=None, **kwargs):
         if cols is None:
             cols = self.get_data_columns()
@@ -388,7 +372,7 @@ class Lamination:
         KL_divs_av = (KL_divs['KL_light'] + KL_divs['KL_dark']) / 2
 
         scaled_intensity = ratio_intensities / \
-            np.max(np.abs(ratio_intensities))
+                           np.max(np.abs(ratio_intensities))
         scaled_KL_div = KL_divs_av / np.max(KL_divs_av)
         scaled_nonzeros_light = nonzeros_light / np.max(nonzeros_light)
         scaled_nonzeros_dark = nonzeros_dark / np.max(nonzeros_dark)
@@ -409,9 +393,9 @@ class Lamination:
         plt.plot(x, scaled_KL_div.to_numpy()[o], label='scaled KL div')
         plt.plot(x, scaled_intensity.to_numpy()[o], label='scaled intensity')
         plt.plot(x, scaled_nonzeros_light.to_numpy()[
-                 o], label='scaled nonzero light density')
+            o], label='scaled nonzero light density')
         plt.plot(x, scaled_nonzeros_dark.to_numpy()[
-                 o], label='scaled nonzero dark density')
+            o], label='scaled nonzero dark density')
         plt.plot(x, scaled_score_light.to_numpy()[o], label='score light')
         plt.plot(x, scaled_score_dark.to_numpy()[o], label='score dark')
         plt.legend()
@@ -440,12 +424,12 @@ class Lamination:
                       suptitle=f'top {N_top} in {light_or_dark} layers',
                       titles=[f's.: {ranking:.3f}' for ranking in rankings_top],
                       hold=hold,
-                      ** kwargs)
+                      **kwargs)
         if not hold:
             plt.show()
         else:
             return o
-        
+
     def plt_contrasts(self, q=.5):
         ft_contrast = self.calculate_contrasts_simplified_laminae()
 
@@ -484,13 +468,14 @@ class Lamination:
         cols = cols[o]
         plt_comps(
             self.feature_table, cols=cols[:10], remove_holes=True,
-            suptitle=f'comps with highest {round(q*100)}th quantile seasonality in \
+            suptitle=f'comps with highest {round(q * 100)}th quantile seasonality in \
 {self._window} window'
         )
 
 
 class ProcessingData:
     """Functionality to clean and decompose data."""
+
     def analyzing_PCA(self, columns=None, TH_PCA=.95, exclude_holes=False):
         if columns is None:
             columns = self.get_data_columns()
@@ -584,7 +569,7 @@ class ProcessingData:
     def analyzing_kmeans(self, n_clusters, columns=None, **kwargs):
         if columns is None:
             columns = self.get_data_columns()
-        kmeans = KMeans(n_clusters=n_clusters, **kwargs)\
+        kmeans = KMeans(n_clusters=n_clusters, **kwargs) \
             .fit(self.get_data_for_columns(columns))
         self.feature_table[f'kmeans{n_clusters}'] = kmeans.labels_
         self.results_kmeans[n_clusters] = kmeans
@@ -607,7 +592,7 @@ class ProcessingData:
 
         # sparsity after:
         FT_c = sparsed_feature_table.loc[
-            :, self.get_data_columns()]
+               :, self.get_data_columns()]
         print('sparsity after:', sum((FT_c == 0).astype(int).sum()) / FT_c.size)
 
         # drop all zero columns
@@ -644,8 +629,8 @@ class ProcessingData:
             data=np.zeros((len(p_missing), Ndims), dtype=float) * np.nan,
             columns=columns)
         df_zero_pixels['p'] = p_missing
-        data_filled = pd.concat([data, df_zero_pixels])\
-            .sort_values(by=['p'])\
+        data_filled = pd.concat([data, df_zero_pixels]) \
+            .sort_values(by=['p']) \
             .reset_index(drop=True)
         # idx_inserted_pixels = [data_filled.index[data_filled.p == val][0]
         #                        for val in p_missing]
@@ -696,9 +681,9 @@ rectangular grid. You may have to use processing_fill_missing')
         return processed_feature_table
 
     def processing_perform_smoothing(
-        self, columns=None, kernel_size=3, sigma=1,
-        use_mask_for_holes=True, classification_column='classification',
-        key_holes=0
+            self, columns=None, kernel_size=3, sigma=1,
+            use_mask_for_holes=True, classification_column='classification',
+            key_holes=0
     ):
         """Iterate over features and apply smoothing function."""
         # https://answers.opencv.org/question/3031/smoothing-with-a-mask/ --> not well explained
@@ -921,7 +906,7 @@ rectangular grid. You may have to use processing_fill_missing')
             return feature_table_averages, feature_table_stds, feature_table_Ns
 
         return feature_table_averages
-    
+
     def get_data_zeros_corrected(self):
         """
         Return copy of current ft with corrected zeros.
@@ -942,6 +927,7 @@ rectangular grid. You may have to use processing_fill_missing')
         nonzero = self.feature_table.loc[:, cols] > 0
         # the lowest nonzero value for each pixel
         mins = (self.feature_table[nonzero].loc[:, cols].min(axis=1)).to_numpy()
+
         # add 1/2 of min to each nonzero
 
         def replace_zeros(col):
@@ -952,7 +938,7 @@ rectangular grid. You may have to use processing_fill_missing')
         ft = self.feature_table.copy()
         ft.loc[:, cols] = ft.loc[:, cols].apply(lambda col: replace_zeros(col), axis=0)
         return ft
-    
+
     def plt_PCA(self, N_top=10, title_appendix='', **kwargs):
         if self.pca is None:
             self.analyzing_PCA(**kwargs)
@@ -997,8 +983,8 @@ rectangular grid. You may have to use processing_fill_missing')
             title = f'PCA on {self._section}cm' + title_appendix
         elif self._data_type == 'combined':
             title = f'PCA on {self._section}cm' + title_appendix
-        fig.suptitle(title)
         plt.tight_layout()
+        fig.suptitle(title)
 
     def plt_NMF(self, k,
                 plot_log_scale=False, hold=False, **kwargs):
@@ -1030,10 +1016,10 @@ rectangular grid. You may have to use processing_fill_missing')
 
             if ('columns' not in kwargs) or (x_vals := kwargs['columns']) is None:
                 x_vals = self.get_data_columns()
-            
+
             if all([x_val.replace('.', '').isnumeric() for x_val in x_vals]):
                 x_vals = np.array(x_vals).astype(float)
-            
+
             elif H.shape[1] == len(x_vals):
                 axs[i, 1].stem(np.array(x_vals),
                                H[i, :],
@@ -1075,6 +1061,7 @@ rectangular grid. You may have to use processing_fill_missing')
 
 class Data(Convinience, Lamination, ProcessingData):
     """Class to manipulate and analyze MSI or XRF data."""
+
     def add_graylevel_from_data_frame(self, overwrite=False) -> None:
         """Apply grayscale conversion in feature table."""
         # https://docs.opencv.org/3.4/de/d25/imgproc_color_conversions.html
@@ -1095,12 +1082,12 @@ class Data(Convinience, Lamination, ProcessingData):
         return self.feature_table
 
     def pixels_get_photo_ROI_to_ROI(
-            self, data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh: tuple[int]
-        ):
+            self, data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh: tuple[int, ...]
+    ):
         """
         Add x_ROI, y_ROI columns.        
         """
-        # pixel coords of data, set by get_photo_ROI
+        # pixel coords of data, set by set_photo_ROI
         (xd, yd, wd, hd) = data_ROI_xywh  # data units
         # corner and dimensions of data ROI in original image
         (xp, yp, wp, hp) = photo_ROI_xywh  # photo units
@@ -1122,7 +1109,7 @@ class Data(Convinience, Lamination, ProcessingData):
         #   4. shift accordingly in detected ROI
         # first add the corners defined in photo_ROI, then subtract the
         # offset of the detected ROI
-        # --> pixel coordinetes in photo-units
+        # --> pixel coordinates in photo-units
         x_ft += xp
         y_ft += yp
         # shift relativ to origin of image ROI
@@ -1174,26 +1161,25 @@ class Data(Convinience, Lamination, ProcessingData):
             dtype=image.dtype)
 
         # set values in zeropadded array
-        image_zeropad[:image.shape[0],
-                      :image.shape[1]] = image
+        image_zeropad[:image.shape[0], :image.shape[1]] = image
         # add values for each row according to pixels in image
         # 0 + to avoid bug???
         self.feature_table[column_name] = self.feature_table.apply(
-                lambda row: 0 + image_zeropad[int(row.y_ROI), int(row.x_ROI)],
-                axis='columns'
+            lambda row: 0 + image_zeropad[int(row.y_ROI), int(row.x_ROI)],
+            axis='columns'
         )
-            
+
         if plts:
             idxs = np.c_[self.feature_table.y_ROI, self.feature_table.x_ROI]
             plt.figure()
             plt.imshow(image)
             plt.plot(idxs[:, 1], idxs[:, 0], '-')
             plt.show()
-            
+
             plt_cv2_image(
                 image_zeropad,
                 'zeropaded')
-            
+
             if median:
                 plt_cv2_image(
                     image,
@@ -1208,10 +1194,11 @@ class Data(Convinience, Lamination, ProcessingData):
                 cmap='rainbow')
             plt.title('classification in feature table')
             plt.show()
-    
+
     def correct_depths_by_angle(self):
         # TODO: this
-        pass
+        ...
+        raise NotImplementedError()
 
     def split_at_depth(self, depth: float):
         """Split feature table at depth [cm] and return upper and lowersection."""
@@ -1255,7 +1242,7 @@ class Data(Convinience, Lamination, ProcessingData):
 
     def get_nondata(self):
         nondata = self.feature_table.loc[
-            :, self.get_nondata_columns()]
+                  :, self.get_nondata_columns()]
         return nondata
 
     def get_data_for_columns(self, columns):
@@ -1274,7 +1261,7 @@ class Data(Convinience, Lamination, ProcessingData):
         self.save()
 
     def get_comp_as_img(
-            self, comp, exclude_holes=True, 
+            self, comp, exclude_holes=True,
             classification_column: str = None, key_hole_pixels=0, flip=False):
         """Return a componenent from the feature table as an image."""
         if flip:
@@ -1284,7 +1271,7 @@ class Data(Convinience, Lamination, ProcessingData):
         data_frame = self.sget_feature_table()
         img_mz = data_frame.pivot(
             index=idx_x, columns=idx_y, values=comp).to_numpy().astype(float)
-        if exclude_holes and classification_column is not None:
+        if exclude_holes and (classification_column is not None):
             mask_holes = data_frame.pivot(
                 index=idx_x, columns=idx_y, values=classification_column
             ).to_numpy() == key_hole_pixels
@@ -1292,19 +1279,19 @@ class Data(Convinience, Lamination, ProcessingData):
         return img_mz
 
     def plt_comp(
-        self, 
-        comp: str | float | int, 
-        title: str | None = None, 
-        save_png: str| None = None, 
-        flip: bool = False, 
-        clip_at: float | None = None,
-        SNR_scale: bool = True, 
-        N_labels: int = 5, 
-        y_tick_precision: int = 0, 
-        exclude_holes: bool = True, 
-        hold: bool = False, 
-        classification_column: str = 'valid', 
-        key_hole_pixels: int = 0
+            self,
+            comp: str | float | int,
+            title: str | None = None,
+            save_png: str | None = None,
+            flip: bool = False,
+            clip_at: float | None = None,
+            SNR_scale: bool = True,
+            N_labels: int = 5,
+            y_tick_precision: int = 0,
+            exclude_holes: bool = True,
+            hold: bool = False,
+            classification_column: str = 'valid',
+            key_hole_pixels: int = 0
     ):
         comp = self.get_closest_mz(comp, max_deviation=None)
 
@@ -1325,8 +1312,10 @@ feature table classifying the holes, so not excluding pixels')
             clip_at = .95 if str(comp) in self.get_data_columns() else None
         if clip_at is not None:
             vmax = np.nanquantile(img_mz, clip_at)
+            logger.info(f'clipping values to {int(clip_at * 100)} percentile')
         else:
-            vmax = np.max(img_mz)
+            vmax = np.nanmax(img_mz)
+            logger.info(f'not clipping values')
 
         fig, ax = plt.subplots()
         im = plt.imshow(img_mz,
@@ -1338,7 +1327,7 @@ feature table classifying the holes, so not excluding pixels')
             title = f'{comp}'
 
         y_tick_positions = np.linspace(
-            start=0, 
+            start=0,
             stop=img_mz.shape[0],
             num=N_labels,
             endpoint=True
@@ -1346,13 +1335,13 @@ feature table classifying the holes, so not excluding pixels')
         plt.ylabel(r'depth (cm)')
         if 'depth' in self.feature_table.columns:
             y_tick_labels = np.linspace(
-                start=self.feature_table.depth.min(), 
+                start=self.feature_table.depth.min(),
                 stop=self.feature_table.depth.max(),
-                num=N_labels, 
+                num=N_labels,
                 endpoint=True
             )
         elif hasattr(self, 'distance_pixels') and self.distance_pixels is not None:
-            pixel_to_depth = self.distance_pixels * 1e-4   # cm
+            pixel_to_depth = self.distance_pixels * 1e-4  # cm
             y_tick_labels = y_tick_positions * pixel_to_depth
         else:
             if flip:
@@ -1360,9 +1349,9 @@ feature table classifying the holes, so not excluding pixels')
             else:
                 col_d = 'y'
             y_tick_labels = np.linspace(
-                self.feature_table[col_d].min(), 
-                self.feature_table[col_d].max(), 
-                N_labels, 
+                self.feature_table[col_d].min(),
+                self.feature_table[col_d].max(),
+                N_labels,
                 endpoint=True
             )
             plt.ylabel(r'pixel index y')
@@ -1372,13 +1361,13 @@ feature table classifying the holes, so not excluding pixels')
         ax.set_yticks(y_tick_positions)
         ax.set_yticklabels(y_tick_labels)
         ax.tick_params(
-            axis='x',          # changes apply to the x-axis
-            which='both',      # both major and minor ticks are affected
-            bottom=False,      # ticks along the bottom edge are off
-            top=False,         # ticks along the top edge are off
+            axis='x',  # changes apply to the x-axis
+            which='both',  # both major and minor ticks are affected
+            bottom=False,  # ticks along the bottom edge are off
+            top=False,  # ticks along the top edge are off
             labelbottom=False
         )
-        
+
         plt.title(title)
 
         from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -1389,9 +1378,9 @@ feature table classifying the holes, so not excluding pixels')
             ticks = [0, vmax / 3, 2 * vmax / 3, vmax]
             ticklabels = [
                 '0',
-                f'{np.around(vmax/3,1)}',
-                f'{np.around(2*vmax/3,1)}',
-                f'>{np.around(vmax,1)}'
+                f'{np.around(vmax / 3, 1)}',
+                f'{np.around(2 * vmax / 3, 1)}',
+                f'>{np.around(vmax, 1)}'
             ]
         else:
             ticks = [0, vmax]
@@ -1440,59 +1429,7 @@ feature table classifying the holes, so not excluding pixels')
                 plt.plot(bin_centers, prob, label=str(col))
             if legend:
                 plt.legend()
-        plt.show()        
-
-class MultiSectionData:
-    pass
-
-def combine_sections(sections: list, window: str):
-    """Combine time series of multiple sections."""
-    from cImage import ImageProbe
-
-    combined_section = (sections[0][0], sections[-1][-1])
-    if window != 'xrf':
-        from cMSI import MSI
-        MSI_combined = MSI(combined_section, window)
-    else:
-        from cXRF import XRF
-        MSI_combined = XRF(combined_section, window)
-
-    def shift_depths():
-        M.feature_table['x_ROI'] += x_ROI_offset
-        M.feature_table['x'] += x_offset
-        M.feature_table['y'] -= M.feature_table.y.min()
-        M.feature_table['seed'] = \
-            (M.feature_table.seed.abs() + x_ROI_offset) * \
-            np.sign(M.feature_table.seed)
-
-    fts = []
-    x_ROI_offset = 0
-    x_offset = 0
-    for section in sections:
-        # add offset to x_ROI
-        if window == 'xrf':
-            M = XRF(section, window)
-        else:
-            M = MSI(section, window)
-        if window == 'FA':
-            M.load(use_common_mzs=True)
-        else:
-            M.load(use_common_mzs=True)
-        shift_depths()
-        fts.append(M.feature_table.copy())
-        x_offset = M.feature_table.x.max() + 1
-        M = None
-
-        I = ImageProbe(section, window)
-        I.load()
-        x_ROI_offset += I.xywh_ROI[2]
-        del I
-
-    MSI_combined.feature_table = pd.concat(
-        fts, axis=0
-    ).reset_index(drop=True)
-
-    return MSI_combined
+        plt.show()
 
 
 def plt_comps(df, cols, suptitle='', titles=None,
@@ -1525,7 +1462,7 @@ def plt_comps(df, cols, suptitle='', titles=None,
             img_full[mask_grid] = img_interpolated
             img = pd.DataFrame(
                 data=np.vstack([img_full, df.x, df.y]).T,
-                columns=['I', 'x', 'y'])\
+                columns=['I', 'x', 'y']) \
                 .pivot(index='x', columns='y', values='I')
 
         if remove_holes:

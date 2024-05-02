@@ -1,5 +1,13 @@
+from copy import deepcopy
 from typing import Iterable, Callable
 import numpy as np
+import os
+import pickle
+import logging
+
+from util.manage_obj_saves import class_to_attributes
+
+logger = logging.getLogger("msi_workflow." + __name__)
 
 
 def verbose_function(func=None):
@@ -16,129 +24,54 @@ def verbose_function(func=None):
 
 def return_existing(attr_name: str) -> Callable:
     """Return attribute if it exists, otherwise fall back to function."""
+
     def return_existing_decorator(fallback_function):
         def return_existing_wrapper(self, *args, **kwargs):
             if hasattr(self, attr_name):
                 return getattr(self, attr_name)
             else:
                 return fallback_function(self, *args, **kwargs)
+
         return return_existing_wrapper
+
     return return_existing_decorator
 
 
 class Convinience:
-    @verbose_function
-    def check_attribute_exists(self, attribute: str) -> bool:
-        """Returns true if attr exists (even if it is None)."""
-        return hasattr(self, attribute)
+    def load(self):
+        assert hasattr(self, 'path_folder'), \
+            'object does not have a path_folder attribute'
 
-    @verbose_function
-    def check_attributes_exist(self, attributes: list[str]) -> bool:
-        if isinstance(attributes, str):
-            raise AttributeError('attributes are of type str')
-        for attribute in attributes:
-            if not self.check_attribute_exists(attribute):
-                return False
-        return True
+        name: str = str(self.__class__).split('.')[-1][:-2] + '.pickle'
+        file: str = os.path.join(self.path_folder, name)
 
-    @verbose_function
-    def get_attribute(self, attribute: str) -> object | None:
-        """Return a class attribute if it exists."""
-        if attribute in self.__dict__:
-            return self.__dict__[attribute]
-        return None
+        assert os.path.exists(
+            file), f'found no saved object in folder {self.path_folder if self.path_folder != "" else "."}'
 
-    @verbose_function
-    def get_attributes(self, attributes: Iterable[str]) -> list[object | None]:
-        """Return a dict of class attributes."""
-        values = []
-        for attribute in attributes:
-            values.append(self.get_attribute(attribute))
-        return values
+        with open(file, 'rb') as f:
+            obj = pickle.load(f)
+        self.__dict__ |= obj.__dict__
+        logger.info(f'loading object with keys {obj.__dict__.keys()}')
 
-    @verbose_function
-    def sget(
-            self,
-            attributes: Iterable[str] | str,
-            set_function: Callable,
-            *args,
-            overwrite: bool = False,
-            **kwargs
-    ) -> object | list[object]:
-        """Call a set function and return it's output or return attributes."""
-        # if attribute is str, wrap it in list
-        if flag_notlist := isinstance(attributes, str):
-            attributes = [attributes]
+    def save(self):
+        assert hasattr(self, 'path_folder'), \
+            'object does not have a path_folder attribute'
+        # delete all attributes that are not flagged as relevant
+        dict_backup: dict = self.__dict__.copy()
+        keep_attributes = set(self.__dict__.keys()) & class_to_attributes(self)
+        existent_attributes = list(self.__dict__.keys())
+        for attribute in existent_attributes:
+            if attribute not in keep_attributes:
+                self.__delattr__(attribute)
 
-        if not overwrite:
-            # out may contain Nones
-            values = self.get_attributes(attributes)
-            # break if any of the values is None and call the set_function
-            for val in values:
-                if val is None:
-                    set_function(*args, overwrite=overwrite, **kwargs)
-                    break
-        if flag_notlist:
-            return self.get_attributes(attributes)[0]
-        return self.get_attributes(attributes)
+        logger.info(f'saving image object with {self.__dict__.keys()} to {self.path_folder}')
+        name: str = str(self.__class__).split('.')[-1][:-2] + '.pickle'
+        with open(os.path.join(self.path_folder, name), 'wb') as f:
+            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
+        self.__dict__ = dict_backup
 
-    @verbose_function
-    def manage_sget(
-            self,
-            attributes: Iterable[str] | str,
-            function: Callable,
-            *args,
-            is_get_function=True,
-            **kwargs
-    ) -> list[object] | object:
-        """Check for each attribute, if it exists. If at least one does not
-        exist, call function. Return vals of function are expected to be in the
-        same order as the attributes."""
-        if (flag_notlist := isinstance(attributes, str)):
-            attributes = [attributes]
-        # not all attributes exist
-        if not self.check_attributes_exist(attributes):
-            if is_get_function:
-                rets = function(*args, **kwargs)
-                if flag_notlist:
-                    rets = [rets]
-            # set function
-            else:
-                function(*args, **kwargs)
-                rets = self.get_attributes(attributes)
-        # attributes exist, so get them
-        else:
-            rets = self.get_attributes(attributes)
-
-        if is_get_function:
-            for attribute, ret in zip(attributes, rets):
-                self.__setattr__(attribute, ret)
-        assert self.check_attributes_exist(attributes), f'functions output \
-did not match input attributes. Got {len(attributes)} attribute but \
-{len(rets)} values.'
-        if flag_notlist:
-            return self.get_attribute(attributes[0])
-        return self.get_attributes(attributes)
-
-    def get_section_formatted(
-            self, section: tuple[int] | None = None
-    ) -> tuple[tuple[int], str]:
-        """Convert to tuple with (top, bottom) in cm as ints."""
-        if section is None:
-            section = self._section
-
-        if isinstance(section, str):
-            d1, d2 = section.split('-')
-            section = (d1, d2)
-        if isinstance(section, tuple):
-            d1 = int(section[0])
-            d2 = int(section[1])
-        # make sure d2 > d1
-        if d1 > d2:
-            d = d2
-            d2 = d1
-            d1 = d
-        return (d1, d2), f'{d1}-{d2}'
+    def copy(self):
+        return deepcopy(self)
 
     def get_closest_mz(
             self,
@@ -146,7 +79,7 @@ did not match input attributes. Got {len(attributes)} attribute but \
             cols: Iterable | None = None,
             max_deviation: float | None = None,
             return_deviation: bool = False
-    ) -> str | tuple[str, float]:
+    ) -> str | tuple[str, float] | None:
         """
         Return the closest mz value in the msi data.
 
@@ -173,9 +106,9 @@ did not match input attributes. Got {len(attributes)} attribute but \
             deviation is small enough, otherwise returns None.
         """
         if cols is None:
-            if self.check_attribute_exists('feature_table'):
+            if hasattr(self, 'feature_table'):
                 cols = np.array(self.feature_table.columns).astype(str)
-            elif self.check_attribute_exists('feature_table_zone_averages'):
+            elif hasattr(self, 'feature_table_zone_averages'):
                 cols = np.array(self.feature_table_zone_averages.columns).astype(str)
             else:
                 raise AttributeError('Could not find feature table. Pass cols')

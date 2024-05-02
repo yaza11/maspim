@@ -1,3 +1,10 @@
+from typing import Iterable
+
+from imaging.util.Image_convert_types import ensure_image_is_gray
+from imaging.util.Image_plotting import plt_cv2_image
+from imaging.util.Image_processing import threshold_background_as_min
+from imaging.util.coordinate_transformations import rescale_values
+
 import numpy as np
 import pandas as pd
 import cv2
@@ -6,7 +13,10 @@ import matplotlib.pyplot as plt
 import skimage
 import scipy
 from scipy.spatial import KDTree
+import logging
 
+
+logger = logging.getLogger('msi_workflow-' + __name__)
 
 def ensure_odd(x: int) -> int:
     """
@@ -119,6 +129,90 @@ def exclude_missing_pixels_in_feature_table(ft: pd.DataFrame):
     # all idxs with distances > 0 are not in the feature table
     mask_in_ft = (distances == 0).reshape(X_ft.shape)
     return mask_in_ft
+
+def get_foreground_pixels_and_threshold(image: np.ndarray, obj_color: str, method: str = 'otsu') -> tuple[np.ndarray, float | int]:
+    """
+    Binarize an image into fore- and background pixels.
+
+    Parameters
+    ----------
+    image: image to be binarized, will be converted to grayscale automatically
+    obj_color: 'light' if region of interest is lighter than rest, 'dark' otherwise
+    method: method to be used. Options are 'local-min' and 'otsu'
+
+    Returns
+    -------
+    mask, threshold
+    """
+    methods = ('otsu', 'local-min')
+    obj_colors = ('light', 'dark')
+    assert method in methods, f'Method {method} not {methods}'
+    assert obj_color in obj_colors, f'Color {obj_color} not {obj_colors}'
+
+    image_grayscale = ensure_image_is_gray(image)
+    image_grayscale = rescale_values(image_grayscale, 0, 255).astype(np.uint8)
+
+    # define the threshold type depending on the object color
+    if obj_color == 'dark':
+        thr = cv2.THRESH_BINARY_INV
+    else:
+        thr = cv2.THRESH_BINARY
+
+    # create binary image with the specified method
+    if method == 'otsu':
+        logger.info('Determining threshold for background intensity with OTSU.')
+        thr_background, mask_foreground = cv2.threshold(
+            image_grayscale, 0, 1, thr + cv2.THRESH_OTSU)
+    elif method == 'local_min':
+        logger.info('Determining threshold for background intensity with local-min.')
+        thr_background = threshold_background_as_min(image_grayscale)
+        _, mask_foreground = cv2.threshold(
+            image_grayscale, thr_background, 1, thr)
+    else:
+        raise KeyError(f'{method=} is not a valid option. Choose one of\
+    "otsu", "local_min".')
+    return mask_foreground, thr_background
+
+def get_simplified_image(
+        image, factors: Iterable[int] | None = None, plts: bool = False, obj_color: str | None = None
+) -> np.ndarray:
+    """
+    Return a simplified version of the input binary image.
+
+    If image is not binary, it will be converted to binary image.
+    Simplification is achieved by stepping up the size of a median blur
+    filter. Filter size is limited to 255
+
+    Parameters
+    ----------
+    image: image to be simplified. If image is not binary, obj_color is expected to be passed.
+    factors : factors to be used for the median filter. Values are clipped to 255.
+
+
+    Returns
+    -------
+    image_binary : np.ndarray
+        Output image.
+
+    """
+    assert (len(np.unique(image)) <= 2) or (obj_color is not None), \
+        'provide either the object color or a binary image'
+    image_binary = ensure_image_is_gray(image)
+
+    if factors is None:
+        factors = [1024, 512, 256, 128, 64, 32]
+    for factor in factors:
+        # smooth edge
+        # limit kernel size to 255 as larger kernel sizes are not supported
+        kernel_size = np.min([np.max(image_binary.shape) // factor, 255])
+        if not kernel_size % 2:
+            kernel_size += 1
+        image_binary = cv2.medianBlur(
+            image_binary, kernel_size).astype(np.uint8)
+        if plts:
+            plt_cv2_image(image_binary, f'{factor=}, {kernel_size=}')
+
+    return image_binary
 
 
 if __name__ == '__main__':

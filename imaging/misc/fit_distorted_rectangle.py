@@ -99,6 +99,7 @@ def find_layer(image_classification, seed, height0, color,
         Parameters of best distorted rectangle for seed.
 
     """
+
     def metric(x0):
         a, b, c, d, height = x0
         layer_region = distorted_rect(
@@ -109,8 +110,8 @@ def find_layer(image_classification, seed, height0, color,
         num_light_layer = np.sum(vision_layer == key_light)
         num_dark_layer = np.sum(vision_layer == key_dark)
         num_layer = num_light_layer + num_dark_layer + 1
-        advantage_layer = (num_light_layer - num_dark_layer * ratio_total) /\
-            num_layer
+        advantage_layer = (num_light_layer - num_dark_layer * ratio_total) / \
+                          num_layer
 
         density = num_light_layer / num_layer
         density = is_dark - density
@@ -179,7 +180,6 @@ converged: {params.success}, score: {params.fun:.3f} (from {score0:.3f})')
 #         plts=False,
 #         **kwargs
 # ):
-
 
 
 def find_layers(
@@ -255,7 +255,7 @@ def find_layers(
                 vmin=-127, vmax=127 + 255,
                 interpolation='none'
             )
-            plt.title(f'{idx+1} out of {N}')
+            plt.title(f'{idx + 1} out of {N}')
             plt.show()
 
         if idx % print_interval == 0:
@@ -270,6 +270,42 @@ def find_layers(
     print()
 
     return df_out
+
+
+def distorted_slice(params: np.ndarray, widths: Iterable, image_shape: tuple[int, int]) -> np.ndarray:
+    """
+
+    Parameters
+    ----------
+    params: matrix containing the parameters for each horizon.
+        Vertical entries correspond to parameters describing one horizon
+        horizontal entries correspond to the different horizons.
+        The first entry in each row corresponds to the highest potence of the polynomial
+    widths: iterable describing the width of each layer in pixels
+
+    Returns
+    -------
+
+    """
+    assert params.shape[1] == len(widths), 'The number of horizons must match the number of provided widths'
+
+    # construct image
+    # build stripes first
+    image = np.cumsum(widths)
+    ...
+
+    # apply polytransform
+
+
+def find_distorted_slice(image, n_transects=3):
+    """
+    Rather than fitting laminae by laminae, describe the laminated sediment with a backbone function
+
+    Returns
+    -------
+    image: np.ndarray
+        classified or grayscale image
+    """
 
 
 if __name__ == '__main__':

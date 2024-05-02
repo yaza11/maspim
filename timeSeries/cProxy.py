@@ -1,12 +1,12 @@
 from data.combine_feature_tables import combine_feature_tables
-from res.constants import (
-    mC37_2, mC37_3,
-    mGDGT1, mGDGT2, mGDGT3, mCren_p,
-    mC28, mC29,
-    YD_transition
+from res.compound_masses import (
+    mC37_2, mC37_3,  # alkenones
+    mGDGT0, mGDGT1, mGDGT2, mGDGT3, mCren_p,  # GDGTS
+    mC24FA, mC26FA, mC28FA, mC30FA,  # FA's
+    mC29stanol, mC29stenol, mC28, mC29  # steroids
 )
-from data.cMSI import MSI
-from data.cDataClass import combine_sections
+from res.constants import YD_transition
+
 from timeSeries.cTimeSeries import TimeSeries
 
 import re
@@ -44,13 +44,27 @@ class Proxy(ProxyBaseClass):
     ):
         self.mzs = []
         for mz in mzs:
-            mz_c = str(TS.get_closest_mz(mz))
+            mz_c, diff = TS.get_closest_mz(mz, return_deviation=True)
+            if diff > .1:
+                print(
+                    f'Found large deviation for {mz} ({mz_c}, distance: {diff}), make sure the mz is within the mass interval.'
+                )
             self.mzs.append(mz_c)
 
         self._copy_attributes(TS)
-        self._add_proxy(func, valid_spectra_mode=valid_spectra_mode, n_successes_required=n_successes_required)
+        self._add_proxy(
+            func, 
+            valid_spectra_mode=valid_spectra_mode, 
+            n_successes_required=n_successes_required
+        )
 
-    def _add_proxy(self, func, valid_spectra_mode, n_successes_required):
+    def _add_proxy(
+            self, 
+            func, 
+            valid_spectra_mode, 
+            n_successes_required, 
+            column_name: str = 'ratio'
+    ):
         assert valid_spectra_mode in (modes := {'all_spectra', 'any_above', 'all_above'}), \
             f"valid_spectra_mode must be one of {modes}, not {valid_spectra_mode}"
 
@@ -69,14 +83,13 @@ class Proxy(ProxyBaseClass):
         vecs = [self.feature_table[mz] for mz in self.mzs]
         ratio = func(*vecs)
         ratio[~mask_valid] = np.nan
-        self.feature_table['ratio'] = ratio
+        self.feature_table[column_name] = ratio
         if valid_spectra_mode in ('all_spectra', 'any_above'):
-            self.feature_table_successes['ratio'] = \
-                self.feature_table_successes.loc[
+            self.feature_table_successes[column_name] = self.feature_table_successes.loc[
                 :, self.mzs
-                ].max(axis=1)
+            ].max(axis=1)
         elif valid_spectra_mode == 'all_above':
-            self.feature_table_successes['ratio'] = \
+            self.feature_table_successes[column_name] = \
                 self.feature_table_successes.loc[
                 :, self.mzs
                 ].min(axis=1)
@@ -91,7 +104,7 @@ class RatioProxy(ProxyBaseClass):
             TS: TimeSeries,
             mz_a: float | str,
             mz_b: float | str,
-            valid_spectra_mode: str = 'both_above',
+            valid_spectra_mode: str = 'all_above',
             n_successes_required: int = 10
     ) -> None:
         """Initialize."""
@@ -107,7 +120,7 @@ class RatioProxy(ProxyBaseClass):
             self, valid_spectra_mode: str, n_successes_required: int
     ):
         """Add relative ratio proxy."""
-        assert valid_spectra_mode in (modes := {'all_spectra', 'both_above', 'any_above', 'a_above', 'b_above'}), \
+        assert valid_spectra_mode in (modes := {'all_spectra', 'all_above', 'both_above', 'any_above', 'a_above', 'b_above'}), \
             f"valid_spectra_mode must be one of {modes}, not {valid_spectra_mode}"
 
         succ_a = self.feature_table_successes[self.mz_a]
@@ -118,7 +131,7 @@ class RatioProxy(ProxyBaseClass):
             mask_valid = np.ones(self.feature_table.shape[0], dtype=bool)
         elif valid_spectra_mode == 'any_above':
             mask_valid = mask_a_valid | mask_b_valid
-        elif valid_spectra_mode == 'both_above':
+        elif valid_spectra_mode in ('both_above', 'all_above'):
             mask_valid = mask_a_valid & mask_b_valid
         elif valid_spectra_mode == 'a_above':
             mask_valid = mask_a_valid
@@ -148,34 +161,50 @@ class RatioProxy(ProxyBaseClass):
                 self.feature_table_successes.loc[
                     :, [self.mz_a, self.mz_b]
             ].min(axis=1)
+
+    @property
+    def ratio(self):
+        return self.feature_table.ratio.copy()
+
+    @property
+    def SST(self):
+        return self.feature_table.SST.copy()
     
 class UK37(RatioProxy):
     def __init__(
             self,
-            TS: TimeSeries,
-            valid_spectra_mode: str = 'both_above',
+            TS: TimeSeries | None = None,
+            path_file: str | None = None,
+            valid_spectra_mode: str = 'all_above',
             n_successes_required: int = 10
     ) -> None:
         """Initialize."""
-        super().__init__(
-            TS,
-            mz_a=mC37_2,
-            mz_b=mC37_3,
-            valid_spectra_mode=valid_spectra_mode,
-            n_successes_required=n_successes_required
-        )
+        assert (TS is not None) or (path_file is not None), 'provide either TS or path_file'
 
-        self.mC37_3 = self.mz_a
-        self.mC37_2 = self.mz_b
+        if TS is not None:
+            super().__init__(
+                TS,
+                mz_a=mC37_2,
+                mz_b=mC37_3,
+                valid_spectra_mode=valid_spectra_mode,
+                n_successes_required=n_successes_required
+            )
+
+            self.mC37_3 = self.mz_a
+            self.mC37_2 = self.mz_b
+        else:
+            self.verbose = False
+            self.plts = False
+            self.load(path_file)
 
 
     @property
     def C37_2(self):
-        return self.feature_table.loc[:, self.mC37_2]
+        return self.feature_table.loc[:, self.mC37_2].copy()
     
     @property
     def C37_3(self):
-        return self.feature_table.loc[:, self.mC37_3]
+        return self.feature_table.loc[:, self.mC37_3].copy()
 
     def combine_layers(self, table=None, diff_sign_condition=0):
         raise NotImplementedError('Depricated')
@@ -311,7 +340,7 @@ class UK37(RatioProxy):
             raise NotImplementedError()
         self.feature_table['SST'] = np.nan
         self.feature_table.loc[mask_valid, 'SST'] = SST
-            
+
     def plot(self, sigma=1):
         mask_success = self.feature_table.SST > 0
         x = self.feature_table.age[mask_success]
@@ -332,36 +361,51 @@ class UK37(RatioProxy):
 class TEX86(Proxy):
     def __init__(
             self,
-            TS: TimeSeries,
+            TS: TimeSeries | None = None,
+            path_file: str | None = None,
             valid_spectra_mode: str = 'all_above',
             n_successes_required: int = 10,
-            use_modified: bool = False
+            use_modified: bool = True
     ) -> None:
         """Initialize."""
-        def TEX86_original(*vecs):
+        assert (TS is not None) or (path_file is not None), 'provide either TS or path_file'
+
+        def TEX86H(*vecs):
             GDGT1, GDGT2, GDGT3, cren_p = vecs
-            return (GDGT2 + GDGT3 + cren_p) / (GDGT1 + GDGT2 + GDGT3 + cren_p)
+            return np.log((GDGT2 + GDGT3 + cren_p) / (GDGT1 + GDGT2 + GDGT3 + cren_p))
 
-        def TEX86_modified(*vecs):
+        def TEX86L(*vecs):
             GDGT1, GDGT2, GDGT3, *_ = vecs
-            return GDGT2 / (GDGT1 + GDGT2 + GDGT3)
+            return np.log(GDGT2 / (GDGT1 + GDGT2 + GDGT3))
 
-        super().__init__(
-            TS,
-            mzs = [mGDGT1, mGDGT2, mGDGT3, mCren_p],
-            func=TEX86_modified if use_modified else TEX86_original,
-            valid_spectra_mode=valid_spectra_mode,
-            n_successes_required=n_successes_required
-        )
+        if TS is not None:
+            super().__init__(
+                TS,
+                mzs = [mGDGT0, mGDGT1, mGDGT2, mGDGT3, mCren_p],
+                func=TEX86L if use_modified else TEX86H,
+                valid_spectra_mode=valid_spectra_mode,
+                n_successes_required=n_successes_required
+            )
+        else:
+            self.verbose = False
+            self.plts = False
+            self.load(path_file)
+
+        if not use_modified:
+            print("'Cannot differentiate isosteriomers Crenarchaeol and Cren', for MS data it is thus adviced to use the modified TEX86.")
 
         self.use_modified = use_modified
 
+        self.mGDGT0, self.mGDGT1, self.mGDGT2, self.mGDGT3, self.mCren_p = self.mzs
+
+
     def add_SST(self, method='conventional', prior_std=10, percentile_uncertainty: int = 5, **kwargs: dict):
         def SST_original(ratio):
-            return 68.4 * np.log(ratio) + 38.6
+            return 68.4 * ratio + 38.6
 
         def SST_modified(ratio):
-            return 67.5 * np.log(ratio) + 46.9
+            # https://www.sciencedirect.com/science/article/pii/S0016703710003054
+            return 67.5 * ratio + 46.9
 
         if method == 'BAYSPAR':
             try:
@@ -391,23 +435,131 @@ class TEX86(Proxy):
         self.feature_table['SST'] = np.nan
         self.feature_table.loc[mask_valid, 'SST'] = SST
 
-    def get_std_err(self):
-        raise NotImplementedError()
-        if self.use_modified:
-            pass
-        else:
-            pass
-        errs = self.get_feature_table_standard_errors()
-        # chain rule
-        tx_errs = errs.loc[:, self.mC37_2] * self.C37_3 / (self.C37_2 + self.C37_3) ** 2 + \
-                  errs.loc[:, self.mC37_3] * self.C37_2 / (self.C37_2 + self.C37_3) ** 2
-        return tx_errs
+    def add_ring_index(self):
+        # GDGT0 can be omitted since the multiplicity is 0
+        self.feature_table['RI'] = (
+            self.feature_table[self.mGDGT1] +
+            2 * self.feature_table[self.mGDGT2] +
+            3 * self.feature_table[self.mGDGT3] +
+            4 * self.feature_table[self.mCren_p]
+        ) / self.feature_table.loc[:, [self.mGDGT0, self.mGDGT1, self.mGDGT2, self.mGDGT3, self.mCren_p]].sum(axis='columns')
+
+    def add_CCaT(self):
+        # Crenarchaeol Caldarchaeol Tetraether index
+        # CCaT = GDGT-5MS / (GDGT-0 + GDGT-5MS)
+        # GDGT-5 is cren
+        self.feature_table['CCaT'] = self.feature_table[self.mCren_p] / (
+                self.feature_table[self.mGDGT0] + self.feature_table[self.mCren_p]
+        )
+
+    def add_methane_index(self):
+        # https://www.sciencedirect.com/science/article/pii/S0012821X11003141?via%3Dihub
+        u = self.feature_table[self.mGDGT1] + self.feature_table[self.mGDGT2] + self.feature_table[self.mGDGT3]
+        self.feature_table['MI'] = (u) / (
+                u + self.feature_table[self.mCren_p]
+        )
+
+    @property
+    def GDGT0(self):
+        return self.feature_table[self.mGDGT0].copy()
+
+    @property
+    def GDGT1(self):
+        return self.feature_table[self.mGDGT1].copy()
+
+    @property
+    def GDGT2(self):
+        return self.feature_table[self.mGDGT2].copy()
+
+    @property
+    def GDGT3(self):
+        return self.feature_table[self.mGDGT3].copy()
+
+    @property
+    def Cren_p(self):
+        return self.feature_table[self.mCren_p].copy()
+
+    @property
+    def RI(self):
+        return self.feature_table.RI.copy()
+
+    @property
+    def MI(self):
+        return self.feature_table.MI.copy()
+
+    @property
+    def CCaT(self):
+        return self.feature_table.CCaT.copy()
+
+    @property
+    def SST(self):
+        return self.feature_table.SST.copy()
+
+class C29StanolStenol(Proxy):
+    # ratio = stanol / stenol
+    def __init__(
+            self,
+            TS: TimeSeries,
+            valid_spectra_mode: str = 'all_above',
+            n_successes_required: int = 10,
+    ) -> None:
+        """Initialize."""
+
+        def ratio(*vecs):
+            stanol, stenol = vecs
+            return stanol / stenol
+
+        super().__init__(
+            TS,
+            mzs=[mC29stanol, mC29stenol],
+            func=ratio,
+            valid_spectra_mode=valid_spectra_mode,
+            n_successes_required=n_successes_required
+        )
+
+        self.mC29stanol, self.mC29stenol = self.mzs
 
 
-class BIT(RatioProxy):
-    # TODO: <--
-    # BIT = [I + II + III] / ([I + II + III] + [IV])
-    ...
+class FA(Proxy):
+    def __init__(
+            self,
+            TS: TimeSeries,
+            valid_spectra_mode: str = 'all_above',
+            n_successes_required: int = 10,
+    ) -> None:
+        """Initialize."""
+
+        mzs = [mC24FA, mC26FA, mC28FA]
+
+        self.mzs = []
+        for mz in mzs:
+            mz_c = str(TS.get_closest_mz(mz))
+            self.mzs.append(mz_c)
+
+        self._copy_attributes(TS)
+
+        self.mC24FA, self.mC26FA, self.mC28FA = self.mzs
+
+        funcs = [
+            lambda *vecs: vecs[0] / (vecs[1] + vecs[2]),
+            lambda *vecs: vecs[0] / (vecs[1]),
+            lambda *vecs: vecs[0] / (vecs[2]),
+            lambda *vecs: vecs[1] / (vecs[2])
+        ]
+        column_names = [
+            'ratio_24_all',
+            'ratio_24_26',
+            'ratio_24_28',
+            'ratio_26_28'
+        ]
+
+        for func, column_name in zip(funcs, column_names):
+            self._add_proxy(
+                func,
+                valid_spectra_mode=valid_spectra_mode,
+                n_successes_required=n_successes_required,
+                column_name=column_name
+            )
 
 
 class Sterane(RatioProxy):

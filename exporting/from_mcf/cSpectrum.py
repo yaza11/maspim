@@ -6,7 +6,7 @@ from exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
 from exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
 from exporting.from_mcf.helper import get_mzs_for_limits
 from util.manage_obj_saves import class_to_attributes
-from data.file_helpers import ImagingInfoXML
+from Project.file_helpers import ImagingInfoXML
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,9 +18,9 @@ import pickle
 import psutil
 
 from typing import Iterable
-from scipy.signal import find_peaks, correlate, correlation_lags
+from scipy.signal import find_peaks, correlate, correlation_lags, peak_widths
 from scipy.optimize import curve_fit
-from scipy.ndimage import minimum_filter
+from scipy.ndimage import minimum_filter, median_filter
 
 
 def gaussian(x: np.ndarray, x_c, H, sigma):
@@ -175,7 +175,8 @@ class Spectra:
 
     def add_all_spectra_aligned(self, reader):
         for it, index in enumerate(self.indices):
-            spectrum: Spectrum = reader.get_spectrum(int(index))
+            spectrum: np.ndarray[float] = \
+                reader.get_spectrum_resampled_intensities(int(index))
             if it > 0:
                 shift = self.xcorr(spectrum)
                 # shift according to number of spectra
@@ -184,8 +185,18 @@ class Spectra:
                 spectrum.mzs -= shift * (1 - weight)
             self.add_spectrum(spectrum.intensities)
 
-    def subtract_baseline(self, window_size=.05, plts=False, **ignore: dict):
-        if window_size == 0:
+    def subtract_baseline(self, window_size: float | int | None = None, plts=False, **ignore: dict):
+        def estimate_peaks_width():
+            prominence = .1 * np.median(self.intensities)
+            peaks, peak_props = find_peaks(self.intensities, prominence=prominence, width=3)
+            widths, *_ = peak_widths(self.intensities, peaks=peaks, rel_height=.8)
+            return int(np.max(widths))
+
+        if window_size is None:
+            # estimate peak width from FWHM
+            window_size = estimate_peaks_width()
+            print(f'estimated the peak width to be {self.delta_mz * window_size * 1e3:.1f} mDa')
+        elif window_size == 0:
             base_lvl: float = self.intensities.min()
             self.intensities -= base_lvl
             self.noise_level = np.full_like(self.intensities, base_lvl)
@@ -195,6 +206,8 @@ class Spectra:
             dmz = self.mzs[1] - self.mzs[0]
             window_size = int(window_size / dmz + .5)
         ys_min = minimum_filter(self.intensities, size=window_size)
+        # run median filter on that
+        ys_min = median_filter(ys_min, size=window_size)
         # store for SNR estimation
         self.noise_level = ys_min / len(self.indices)
 
@@ -883,8 +896,6 @@ class Spectra:
         RXYs = np.array([rxy(name) for name in names])
 
         # search indices of spectra object in reader
-        print(self.indices.shape, self.indices)
-        print(reader.indices.shape, reader.indices)
         if len(self.indices) != len(reader.indices):
             mask = np.array(
                 [np.argwhere(idx == reader.indices)[0][0] for idx in self.indices]
@@ -1297,6 +1308,7 @@ class MultiSectionSpectra(Spectra):
             indices.append(idxs)
             offset = idxs[-1]
         self.mzs: np.ndarray[float] = spec.mzs.copy()
+        self.delta_mz = spec.delta_mz
         self.intensities: np.ndarray[float] = np.zeros_like(self.mzs)
         self.indices = np.hstack(indices)
 
@@ -1329,7 +1341,7 @@ class MultiSectionSpectra(Spectra):
     def binned_spectra_to_df(
             self,
             readers: Iterable[ReadBrukerMCF | hdf5Handler] | None = None,
-            **kwargs
+            **_: dict
     ) -> pd.DataFrame:
         if readers is None:
             readers = [None] * len(self.specs)
@@ -1358,8 +1370,34 @@ class MultiSectionSpectra(Spectra):
         self.set_peaks(**kwargs)
         self.set_kernels(**kwargs)
         # set target compounds
-        self.set_targets(targets, plts=True)
+        self.set_targets(targets, **kwargs, plts=True)
         self.distribute_peaks_and_kernels()
         self.bin_spectra(readers=readers, **kwargs)
         self.filter_line_spectra(**kwargs)
         self.binned_spectra_to_df(readers=readers, **kwargs)
+
+    def save(self, path_file: str):
+        """Save object to d-folder."""
+        dict_backup = self.__dict__.copy()
+        # dont save feature table AND line spectra
+        if hasattr(self, 'feature_table') and hasattr(self, 'line_spectra'):
+            self.__delattr__('line_spectra')
+        keep_attributes = set(self.__dict__.keys()) & class_to_attributes(self)
+        existent_attributes = list(self.__dict__.keys())
+        for attribute in existent_attributes:
+            if attribute not in keep_attributes:
+                self.__delattr__(attribute)
+
+        with open(path_file, 'wb') as inp:
+            pickle.dump(self, inp, pickle.HIGHEST_PROTOCOL)
+        self.__dict__ = dict_backup
+
+    def load(self, path_file: str):
+        """Load object from d-folder."""
+        with open(path_file, 'rb') as inp:
+            self.__dict__ |= pickle.load(inp).__dict__
+
+        if hasattr(self, 'feature_table'):
+            self.line_spectra = self.feature_table.\
+                drop(columns=['R', 'x', 'y']).\
+                to_numpy()

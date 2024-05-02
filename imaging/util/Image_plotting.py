@@ -7,11 +7,14 @@ import numpy as np
 import cv2
 
 
-def plt_cv2_image(image: np.ndarray, title: str | None = None,
-                  cmap: str | None = None, hold: bool | str = False,
-                  save_png=None, dpi=300,
-                  no_ticks=False, **kwargs
-                  ):
+def plt_cv2_image(
+        image: np.ndarray, title: str | None = None,
+        cmap: str | None = None, hold: bool | str = False,
+        ax: plt.Axes | None = None, fig: plt.Figure | None = None,
+        save_png=None, dpi=300,
+        no_ticks=False,
+        **kwargs
+) -> tuple[plt.Figure, plt.Axes] | None:
     """
     Plot the array.
 
@@ -33,29 +36,33 @@ def plt_cv2_image(image: np.ndarray, title: str | None = None,
     -------
     fig : plt.figure()
     """
+
     # cv2 uses BGR instead of RGB so swap for image
-    fig = plt.figure()
-    ax = plt.gca()
+    if ax is not None:
+        assert fig is not None, "If axes is passed, also provide a fig"
+        hold = True
+    else:
+        fig, ax = plt.subplots(layout="constrained")
     if (cmode := infere_mode(image)) != 'L':
         image = swap_RB(image.copy())
-        plt.imshow(image, interpolation='None')
+        ax.imshow(image, interpolation='None')
     elif (cmode == 'L') and (cmap is None):
         cmap = 'gray'
-        plt.imshow(image, interpolation='None', cmap=cmap, **kwargs)
+        ax.imshow(image, interpolation='None', cmap=cmap, **kwargs)
 
     if title is not None:
-        plt.title(title)
+        ax.set_title(title)
     if no_ticks:
         ax.set_axis_off()
     else:
-        plt.xlabel(r'Pixel coordinates in $x$-direction')
-        plt.ylabel(r'Pixel coordinates in $y$-direction')
+        ax.set_xlabel(r'Pixel coordinates in $x$-direction')
+        ax.set_ylabel(r'Pixel coordinates in $y$-direction')
     if (hold == 'off') or (not hold):
         plt.show()
         if save_png is not None:
-            plt.savefig(save_png, dpi=dpi)
+            fig.savefig(save_png, dpi=dpi)
     else:
-        return fig
+        return fig, ax
 
 
 def plt_contours(
@@ -63,7 +70,7 @@ def plt_contours(
         title: str | None = None,
         hold=False,
         **kwargs
-) -> None:
+) -> tuple[plt.Figure, plt.Axes] | None:
     """
     Plot contours on an image.
 
@@ -86,14 +93,23 @@ def plt_contours(
         if len(contour) > 0:
             cv2.drawContours(canvas, [contour.astype(np.int32)], 0, 127, np.max([
                 np.min(canvas.shape[:2]) // 20, 1]))
-    fig = plt_cv2_image(canvas, title=title, hold=hold, **kwargs)
+    fig, ax = plt_cv2_image(canvas, title=title, hold=True, **kwargs)
     if hold:
-        return fig
+        return fig, ax
+    else:
+        plt.show()
 
 
-def plt_rect_on_image(image, box_params, save_png=None, dpi=300, hold: bool = False, **kwargs):
+def plt_rect_on_image(
+        image: np.ndarray,
+        box_params: dict[str, int | float],
+        save_png: str | None = None,
+        dpi: int = 300,
+        hold: bool | str = False,
+        **kwargs: dict
+) -> tuple[plt.Figure, plt.Axes] | None:
     canvas = image.copy()
-    fig = plt_cv2_image(canvas, hold=True, **kwargs)
+    fig, ax = plt_cv2_image(canvas, hold=True, **kwargs)
     rect = patches.Rectangle(
         xy=box_params['point_topleft'],  # start point
         width=box_params['w'],
@@ -103,33 +119,17 @@ def plt_rect_on_image(image, box_params, save_png=None, dpi=300, hold: bool = Fa
         # linewidth=np.min(image.shape[:2]) // 100
     )
 
-    ax = fig.gca()
     ax.add_patch(rect)
     if (hold == 'off') or (not hold):
         plt.show()
         if save_png is not None:
-            plt.savefig(save_png, dpi=dpi)
+            fig.savefig(save_png, dpi=dpi)
     else:
-        return fig
-
-
-def plt_overview(section, window):
-    from imaging.main.cImage import ImageProbe, ImageClassified
-    I = ImageProbe(section, window)
-    I.load()
-    plt_cv2_image(I.sget_image_original(), title='original image')
-    del I
-
-    I = ImageClassified(section, window)
-    I.load()
-    plt_cv2_image(I.sget_mask_foreground(), title='foreground pixels')
-    plt_cv2_image(I.sget_image_original(), title='ROI image')
-    plt_cv2_image(I.sget_image_classification(), title='light and dark pixels')
-    plt_cv2_image(I.get_image_simplified_classification(), title='simplified classification')
-    del I
+        return fig, ax
 
 
 if __name__ == '__main__':
     import skimage
+
     plt_cv2_image(swap_RB(skimage.data.astronaut()))
     plt_cv2_image(skimage.data.brick())
