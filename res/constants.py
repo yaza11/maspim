@@ -1,15 +1,13 @@
 import pandas as pd
 import os
 
-from scipy.constants import physical_constants
-
-m_e = physical_constants['electron mass in u'][0]
-
-elements = pd.read_csv(os.path.join(os.path.dirname(__file__), 'elements.txt'),
-                       sep='\t',
-                       names=['Z', 'Abbreviation'],
-                       index_col=None,
-                       usecols=[0, 1])
+elements = pd.read_csv(
+    os.path.join(os.path.dirname(__file__), 'elements.txt'),
+    sep='\t',
+    names=['Z', 'Abbreviation'],
+    index_col=None,
+    usecols=[0, 1]
+)
 
 max_deviation_mz = 3e-3  # mDa
 # thr for peak detection in feature table creation
@@ -29,7 +27,6 @@ def window_to_mass_window(window: str) -> tuple[int]:
          'gdgt': (1310, 1330),
          'xrf': (None, None)}
     return d[window.lower()]
-
 
 
 # for labeling plots and such
@@ -54,38 +51,6 @@ dict_labels = {'density_nonzero': r'$\sigma_\bar{0}$',
 key_light_pixels = 255
 key_dark_pixels = 127
 key_hole_pixels = 0
-
-# masses
-mNa_p = 22.989770 - m_e
-
-# Alkenone window
-# Na+ C37:2 mass: 553.53188756536
-# Na+ C37:3 mass: 551.51623750122
-mass_C37_2_Na_p = mC37_2 = 553.53188756536
-mass_C37_3_Na_p = mC37_3 = 551.51623750122
-
-# GDGT window
-# https://en.wikipedia.org/wiki/TEX86#/media/File:Molecular_structures_and_HPLC_detection_of_GDGTs.jpg
-mass_GDGT_0 = 1301.315390
-mass_GDGT_1 = 1299.299740
-mass_GDGT_2 = 1297.284090
-mass_GDGT_3 = 1295.268440
-mass_cren_prime = 1291.237140
-
-mGDGT1 = mass_GDGT_1 + mNa_p
-mGDGT2 = mass_GDGT_2 + mNa_p
-mGDGT3 = mass_GDGT_3 + mNa_p
-mCren_p = mass_cren_prime + mNa_p
-
-# outside mass window
-# mass_GDGT_I = 1006.986740
-# mass_GDGT_II = 1021.002390
-# mass_GDGT_III = 1035.018040
-
-# FA window
-# steranes
-mass_C28_sterane = mC28 = 386.391250 + mNa_p
-mass_C29_sterane = mC29 = 400.406900 + mNa_p
 
 YD_transition = 11_673  # yr b2k
 YD_transition_depth = 504.285  # cm
