@@ -1,3 +1,5 @@
+import logging
+
 from imaging.util.Image_convert_types import ensure_image_is_gray
 
 import numpy as np
@@ -11,14 +13,16 @@ scale_hole = 1 / 5  # cm
 # side on which the holes are positioned
 sides = ('top', 'bottom')
 
+logger = logging.getLogger("msi_workflow." + __name__)
 
-def find_holes(
+
+def find_holes_side(
         image: np.ndarray,
         side: str,
         obj_color: str,
         depth_section: float = 5,
         plts=False
-) -> list[np.ndarray[int]]:
+) -> tuple[list[np.ndarray[int]], float, float]:
     """
     Identify punchholes in an image at the specified side
 
@@ -44,7 +48,7 @@ def find_holes(
     Returns
     -------
     tuple
-        The identified holes (center points).
+        The identified holes (center points), the score and the sidelength of the holes.
 
     """
     assert side in sides, f'side must be one of {sides} not {side}'
@@ -107,6 +111,7 @@ def find_holes(
     else:
         hole_left = np.argmin(image_left)
         hole_right = np.argmin(image_right)
+    score = image_left.ravel()[hole_left] + image_right.ravel()[hole_right]
     hole_left = np.array(np.unravel_index(hole_left, image_left.shape))
     hole_right = np.array(np.unravel_index(hole_right, image_right.shape))
     hole_right += np.array([0, w // 2])
@@ -114,6 +119,8 @@ def find_holes(
     if side == 'bottom':
         hole_left += np.array([int((1 - width_sector) * h), 0])
         hole_right += np.array([int((1 - width_sector) * h), 0])
+
+    extent = scale_hole / depth_section * w / 2
 
     # some overview plots
     if plts:
@@ -136,7 +143,6 @@ def find_holes(
         else:
             y = h - h * width_sector
         plt.hlines(y, 0, w, colors='red')
-        extent = scale_hole / depth_section * w / 2
 
         # squares around found center holes
         y1, x1 = hole_left - extent
@@ -166,7 +172,53 @@ def find_holes(
         plt.tight_layout()
         plt.show()
 
-    return [hole_left, hole_right]
+    return [hole_left, hole_right], score, 2 * extent
+
+
+def find_holes(
+        image: np.ndarray,
+        obj_color: str,
+        side: str | None = None,
+        depth_section: float = 5,
+        plts=False
+) -> tuple[list[np.ndarray[int]], float]:
+    """Run find_holes_side for each side and pick the one with a higher score."""
+    if side is not None:
+        points, _, size = find_holes_side(
+            image,
+            side=side,
+            obj_color=obj_color,
+            depth_section=depth_section,
+            plts=plts
+        )
+        return points, size
+
+    points_b, score_b, size = find_holes_side(
+        image,
+        side='bottom',
+        obj_color=obj_color,
+        depth_section=depth_section,
+        plts=plts
+    )
+    points_t, score_t, size = find_holes_side(
+        image,
+        side='top',
+        obj_color=obj_color,
+        depth_section=depth_section,
+        plts=plts
+    )
+
+    print(size)
+
+    points = [points_b, points_t]
+    scores = [score_b, score_t]
+
+    if obj_color == 'dark':  # pick higher score
+        idx = np.argmax(scores)
+    else:
+        idx = np.argmin(scores)
+    logger.info(f'found holes at {"bottom" if idx == 0 else "top"}')
+    return points[idx], size
 
 
 # %%
