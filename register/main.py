@@ -11,10 +11,10 @@ from skimage.transform import (
 
 
 def find_line_contour_intersect(
-        contour: np.ndarray[int], 
-        holes: list[int], 
-        hole_side: str, 
-        image_shape: np.ndarray
+        contour: np.ndarray[int],
+        holes: list[np.ndarray[int], np.ndarray[int]],
+        hole_side: str,
+        image_shape: tuple[int, ...]
 ) -> np.ndarray[int]:
     """
     Find the intersection of the line with the sample area by projecting 
@@ -39,12 +39,12 @@ def find_line_contour_intersect(
 def find_corners_contour(contour):
     xmin = contour[:, 0, 0].min()
     xmax = contour[:, 0, 0].max()
-    ymin= contour[:, 0, 1].min()
+    ymin = contour[:, 0, 1].min()
     ymax = contour[:, 0, 1].max()
     points = [
-        np.array([ymin, xmin]), 
-        np.array([ymin, xmax]), 
-        np.array([ymax, xmin]), 
+        np.array([ymin, xmin]),
+        np.array([ymin, xmax]),
+        np.array([ymax, xmin]),
         np.array([ymax, xmax])
     ]
     return points
@@ -64,7 +64,7 @@ def sort_corners(corners: np.ndarray) -> np.ndarray:
     # make sure corners are in the right order
     x = corners[:, 0]
     y = corners[:, 1]
-    c = np.mean(corners, axis = 0)
+    c = np.mean(corners, axis=0)
     x_c = x.copy() - c[0]
     y_c = y.copy() - c[1]
 
@@ -79,23 +79,25 @@ def sort_corners(corners: np.ndarray) -> np.ndarray:
     corners[:, 1] = y + c[1]
     return corners.astype(np.float32)
 
+
 class Transformation(ImageSample):
     """Find transformation from source (image to be transformed) to 
     destination (target to be matched)."""
+
     def __init__(
-            self, 
-            source: np.ndarray[int | float] | ImageSample | ImageROI, 
+            self,
+            source: np.ndarray[int | float] | ImageSample | ImageROI,
             target: np.ndarray[int | float] | ImageSample | ImageROI,
     ) -> None:
         self.source: ImageROI = self._handle_input(source)
         self.target: ImageROI = self._handle_input(target)
-        
-        self.source_shape: tuple[int] = self.source.sget_image_original().shape
-        self.target_shape: tuple[int] = self.target.sget_image_original().shape
+
+        self.source_shape: tuple[int] = self.source.image.shape
+        self.target_shape: tuple[int] = self.target.image.shape
 
         self.trafos: list = []
         self.trafo_types: list = []
-        
+
     def _handle_input(
             self, obj: np.ndarray[int | float] | ImageSample | ImageROI
     ) -> ImageROI:
@@ -111,46 +113,62 @@ class Transformation(ImageSample):
                 obj_color=obj.obj_color
             )
         return obj
-    
+
+    def _infer_side(self, points: list[np.ndarray[int], np.ndarray[int]], is_source: bool) -> str:
+        """Infere from the points coordinates and image shape if the punch-holes are positioned on top or bottom."""
+        shape: tuple[int, ...] = self.source_shape if is_source else self.target_shape
+        height = shape[0]
+        points_y = [p[1] for p in points]
+        # points above middle
+        if np.mean(points_y) > height / 2:
+            return 'bottom'
+        return 'top'
+
     def _transform_from_punchholes(
-            self, 
-            points_source: list[int], # xray
-            points_target: list[int], # data
+            self,
+            points_source: list[np.ndarray[int], np.ndarray[int]],  # xray
+            points_target: list[np.ndarray[int], np.ndarray[int]],  # data
             is_piecewise: bool,
-            hole_side: str,
             contour_source: np.ndarray[int] = None,
             contour_target: np.ndarray[int] = None,
     ) -> np.ndarray[float] | PiecewiseAffineTransform:
         """Stretch and resize ROI to match"""
         if contour_source is None:
-            contour_source = self.source.sget_main_contour()
+            contour_source = self.source.require_main_contour()
         if contour_target is None:
-            contour_target = self.target.sget_main_contour()
-        
+            contour_target = self.target.require_main_contour()
+
+        side_source = self._infer_side(points_source, True)
+        side_target = self._infer_side(points_target, True)
+
+        assert side_source == side_target, \
+            f'punch-holes are located at {side_source} for source and at {side_target} for target,' + \
+            ' consider flipping the xray image before applying the transformation'
+
         # append points from line-contour intersection
         points_source.append(
             find_line_contour_intersect(
-                contour=contour_source, 
-                holes=points_source, 
-                hole_side=hole_side,
+                contour=contour_source,
+                holes=points_source,
+                hole_side=side_source,
                 image_shape=self.source_shape
             )
         )
         points_target.append(
             find_line_contour_intersect(
                 contour=contour_target,
-                holes=points_target, 
-                hole_side=hole_side,
+                holes=points_target,
+                hole_side=side_target,
                 image_shape=self.target_shape
             )
         )
-        
+
         if is_piecewise:
             # piecewise affine
             # add corners of contour so that entire image is transformed
             points_source += find_corners_contour(contour_source)
             points_target += find_corners_contour(contour_target)
-            
+
             pwc = PiecewiseAffineTransform()
             # swap xy of points
             src = np.array(points_source)[:, ::-1]
@@ -162,40 +180,41 @@ class Transformation(ImageSample):
         else:
             # perform affine transformation
             M: np.ndarray[float] = cv2.getAffineTransform(
-                np.array(points_source).astype(np.float32)[:, ::-1], 
+                np.array(points_source).astype(np.float32)[:, ::-1],
                 np.array(points_target).astype(np.float32)[:, ::-1]
             )  # source: xray, target: msi
             transform_type = cv2.getAffineTransform
         self.trafos.append(M)
         self.trafo_types.append(transform_type)
         return M
-    
+
     def _transform_from_bounding_box(
             self, plts: bool = False
     ) -> np.ndarray[float]:
         """Projective transform between corners of bounding boxes."""
+
         def get_points(obj: ImageROI) -> np.ndarray[int]:
-            rect: tuple[float] = cv2.minAreaRect(obj.sget_main_contour())
+            rect: tuple[float] = cv2.minAreaRect(obj.require_main_contour())
             points: np.ndarray[float] = cv2.boxPoints(rect)
             # sort point anticlockwise
             points = sort_corners(points)
             return points
-    
+
         points_source: np.ndarray[np.float32] = get_points(self.source)
         points_target: np.ndarray[np.float32] = get_points(self.target)
-        
+
         M = cv2.getPerspectiveTransform(points_source, points_target)
         transform_type = cv2.getPerspectiveTransform
-        
+
         if plts:
-            plt_contours([points_source], self.source.sget_image_original())
-            plt_contours([points_target], self.target.sget_image_original())
-        
+            plt_contours([points_source], self.source.image())
+            plt_contours([points_target], self.target.image())
+
         self.trafos.append(M)
         self.trafo_types.append(transform_type)
 
         return M
-    
+
     def _transform_from_image_flow(self):
         # TODO: <--
         ...
@@ -205,7 +224,7 @@ class Transformation(ImageSample):
         # TODO: <--
         ...
         raise NotImplementedError()
-    
+
     def estimate(self, method: str, *args, **kwargs):
         methods = ('punchholes', 'bounding_box', 'image_flow', 'laminae')
         assert method in methods, f'method must be in {methods}, not {method}'
@@ -220,7 +239,7 @@ class Transformation(ImageSample):
             self._transform_from_laminae(*args, **kwargs)
         else:
             raise NotImplementedError()
-    
+
     def fit(self, img: np.ndarray = None) -> np.ndarray:
         def apply_(img, M, transform_type):
             if transform_type == cv2.getPerspectiveTransform:
@@ -234,13 +253,13 @@ class Transformation(ImageSample):
             elif transform_type == PiecewiseAffineTransform:
                 print(img.shape, self.target_shape)
                 warped = warp(img, M, output_shape=self.target_shape[:2])
-            else: 
+            else:
                 raise NotImplementedError()
             return warped
-    
+
         if img is None:
-            img = self.source.sget_image_original()
-        
+            img = self.source.image
+
         # apply the appropriate transform
         for M, transform_type in zip(self.trafos, self.trafo_types):
             img = apply_(img, M, transform_type)
