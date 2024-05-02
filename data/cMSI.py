@@ -4,7 +4,7 @@ from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
 from exporting.from_mcf.cSpectrum import Spectra
 
 from data.cDataClass import Data
-from data.file_helpers import get_mis_file, search_keys_in_xml
+from Project.file_helpers import get_mis_file, search_keys_in_xml
 
 import os
 import pickle
@@ -92,9 +92,13 @@ class MSI(Data):
         self.distance_pixels = float(d)
     
     def set_feature_table_from_spectra(self, spectra: Spectra):
-        assert hasattr(spectra, 'feature_table') or hasattr(spectra, 'line_spectra'), \
+        has_df = hasattr(spectra, 'feature_table')
+        assert has_df or hasattr(spectra, 'line_spectra'), \
             'spectra object must have a feature table'
-        self.feature_table: pd.DataFrame = spectra.binned_spectra_to_df().copy()
+        if has_df:
+            self.feature_table = spectra.feature_table.copy()
+        else:
+            self.feature_table: pd.DataFrame = spectra.binned_spectra_to_df().copy()
     
     def get_data_columns(self):
         if ('feature_table' not in self.__dict__) or (self.feature_table is None):

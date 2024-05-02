@@ -1,9 +1,17 @@
 import os
+from typing import Self
+
 import numpy as np
 import pandas as pd
 import pickle
+import logging
 
 from collections.abc import Iterable
+
+from util import Convinience
+
+logger = logging.getLogger('msi_workflow.' + __name__)
+
 
 def check_file_integrity(
         file: str, is_file: bool = True, suffixes: list[str] = None
@@ -22,32 +30,94 @@ def check_file_integrity(
     return False
 
 
-class AgeModel:
+class AgeModel(Convinience):
+    """
+    Offer depth-age conversions for tabled data.
+
+    This object allows to read in tabulated age data, interpolate between missing depth and combine multiple objects.
+
+    Example Usage
+    -------------
+    Usually the depth-age information is stored in a separate file. The file reader is a wrapper around the pandas read
+    functions, hence, to read data in correctly, the user is referenced to the documentation of read_csv, read_excel,
+    depending on the file type. For a tab separated file with column names 'age' and 'depth' the initalization can look like this:
+    >>> from msi_workflow.data.cAgeModel import AgeModel
+    >>> age_model = AgeModel(path_file='path/to/file.txt', sep='\t', index_col=False)
+    The class expects the depth data to be in cm below seaflow and the age in years. Oftentimes this is not the case.
+    Here, the add_depth_offset and convert_depth_scale methods are handy (call order does not matter,
+    but a different depth offset is required after converting the depth-scale)
+    >>> age_model.convert_depth_scale(1 / 10)  # converts mm to cm
+    >>> age_model.add_depth_offset(500)  # age model starts add 500 cmbsf
+    Those parameters can also be provided upon initialization
+    >>> age_model = AgeModel(
+    >>>     path_file='path/to/file.txt',
+    >>>     depth_offset=5000,
+    >>>     conversion_to_cm=1 / 10,
+    >>>     sep='\t',
+    >>>     index_col=False
+    >>> )
+    In this case the depth offset is applied first.
+    By default, the age model will be saved in the same folder from which the data has been loaded
+    >>> age_model.save()  # saves the object in 'path/to'
+    This can be changed by providing a path
+    >>> age_model.save('path/to/desired/folder')
+    Age models can be combined, if the depths do not overlap
+    >>> age_model1 = AgeModel(path1, ...)
+    >>> age_model2 = AgeModel(path2, ...)
+    >>> age_model_combined = age_model1 + age_model2
+    """
+
     def __init__(
-        self, 
-        path_file: str | None = None,
-        depth: Iterable | None = None,
-        age: Iterable | None = None,
-        column_depth: str = 'depth',
-        column_age: str = 'age',
-        **kwargs_read_file
-   ):
-        assert (path_file is not None) or ((depth is not None) and (age is not None)),\
+            self,
+            path_file: str | None = None,
+            depth: Iterable | None = None,
+            age: Iterable | None = None,
+            column_depth: str = 'depth',
+            column_age: str = 'age',
+            depth_offset: float | int = 0,
+            conversion_to_cm: int | float = 1,
+            **kwargs_read_file
+    ):
+        """
+        Constructor for the AgeModel.
+
+        Always defines a df attribute (dataframe containing the age model)
+        Depending on the provided variables, sets a path_file, depth and age column.
+
+        It is assumed that the age depth column is in cm and is absolute or that the depth_offset and
+        the conversion_to_cm parameters are specified.
+
+        :param path_file: file from which to load the age model, see read_file for more information
+        :param depth: depth vector to be used and
+        :param age: age vector to be used for the age model, age and depth must have the same length
+        :param column_depth: name of the depth column in the data frame
+        :param column_age: name of the age column in the data frame
+        :param depth_offset: depth offset to be added to the depth column
+        :param conversion_to_cm: conversion factor to be applied to the depth column
+        :param kwargs_read_file: additional keyword arguments passed on to the pandas reader
+        """
+        assert (path_file is not None) or ((depth is not None) and (age is not None)), \
             'provide either a file or a depth and age vector'
 
-        # assign depth and age directly
-        if (depth is not None) and (age is not None):
+        self.column_depth: str = column_depth
+        self.column_age: str = column_age
+        if (depth is not None) and (age is not None):  # assign depth and age directly
             assert len(depth) == len(age), \
                 'depth and age must have same number of entries'
             self.df: pd.DataFrame = pd.DataFrame({column_depth: depth, column_age: age})
-        # read from file
-        else:
+        else:  # read from file
             self.path_file: str = path_file
-            self.column_depth: str = column_depth
-            self.column_age: str = column_age
-            self.read_file(**kwargs_read_file)
-            
-    def read_file(self, **kwargs) -> None:
+            self.read_file(depth_offset, conversion_to_cm, **kwargs_read_file)
+
+    def read_file(self, depth_offset: float | int, conversion_to_cm: float | int, **kwargs) -> None:
+        """
+        Read the age model from the speicified file.
+
+        The provided file can be any of txt, csv, xlsx or a saved Age Model file (pickle file).
+        It is assumed that columns are named 'age' and 'depth' (or similar) or specified.
+        This method also handles the depth offset and conversion of the depth scale to cm. The age values are
+        assumed to be in yrs b2k.
+        """
         file_types: list[str] = ['txt', 'csv', 'xlsx', 'pickle']
         if os.path.isdir(self.path_file) \
                 and ('AgeModel.pickle' in os.listdir(self.path_file)):
@@ -55,15 +125,15 @@ class AgeModel:
             return
         assert check_file_integrity(self.path_file, is_file=True, suffixes=file_types), \
             f'check file name and type (must be in {file_types})'
-            
+
         if (suffix := os.path.splitext(self.path_file)[1]) in ('.csv', '.txt'):
             self.df: pd.DataFrame = pd.read_csv(self.path_file, **kwargs)
         elif suffix == '.xlsx':
             self.df: pd.DataFrame = pd.read_excel(self.path_file, **kwargs)
         # strip whitespaces
-        try:
+        try:  # depending on pandas version
             self.df: pd.DataFrame = self.df.map(lambda x: x.strip() if isinstance(x, str) else x)
-        except:
+        except:  # if map does not exist in installed pandas version
             self.df: pd.DataFrame = self.df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
         self.df.columns = self.df.columns.str.strip()
 
@@ -88,24 +158,29 @@ class AgeModel:
             # in case no match was found
             if self.column_age not in self.df.columns:
                 raise KeyError(f'could not find a column for age {self.column_age} in {list(self.df.columns)}')
-                
-    def add_depth_offset(self, depth_offset: float | int):
-        self.df['depth'] += depth_offset
 
-    def convert_depth_scale(self, factor: float):
-        self.df['depth'] *= factor
-            
+        self.add_depth_offset(depth_offset=depth_offset)
+        self.convert_depth_scale(factor=conversion_to_cm)
+
+    def add_depth_offset(self, depth_offset: float | int):
+        """Apply a depth offset to the depth column"""
+        self.df.loc[:, self.column_depth] += depth_offset
+
+    def convert_depth_scale(self, factor: float | int):
+        """Apply a conversion factor"""
+        self.df.loc[:, self.column_depth] *= factor
+
     @property
     def depth(self):
-        return self.df.depth.to_numpy()
-    
+        return self.df.loc[:, self.column_depth].to_numpy()
+
     @property
     def age(self):
-        return self.df.age.to_numpy()
-        
+        return self.df.loc[:, self.column_age].to_numpy()
+
     def depth_to_age(self, depth: float) -> float:
         """
-        Return the corresponding core age (a b2k) for a given depth (m).
+        Return the corresponding core age (a b2k) for a given depth (cm).
 
         Parameters
         ----------
@@ -124,41 +199,36 @@ class AgeModel:
 
         """
         if not np.all(np.diff(self.depth) > 0):
-            print('Depths not always strictly increasing!')
+            logger.warning('Depths not always strictly increasing!')
         if not np.all(np.diff(self.depth) >= 0):
             raise ValueError('Depths not always increasing!')
         # lineraly interpolate between values
         return np.interp(depth, self.depth, self.age)
-    
-    
-    def __add__(self, other):
+
+    def __add__(self, other: Self) -> Self:
+        """
+        Allow the combination of age models.
+
+        This action is only defined for age models with non-overlapping age models
+
+        Parameters
+        ----------
+        other: another AgeModel instance
+
+        Returns
+        -------
+
+        """
+        # type(other) is type(self) more elegant?
         assert isinstance(other, AgeModel), 'Can only combine age models'
         assert self.depth[-1] <= other.depth[0], \
-            'last depth of first model has to be smaller than second'
+            f'last depth of first model has to be smaller than second but is {self.depth[-1]} and {other.depth[0]}'
         assert self.age[-1] <= other.age[0], \
-            'last age of first model has to be smaller than second'
+            f'last age of first model has to be smaller than second but is {self.age[-1]} and {other.age[0]}'
         new_depth = np.concatenate([self.depth, other.depth])
         new_age = np.concatenate([self.age, other.age])
         new = AgeModel(depth=new_depth, age=new_age)
         return new
-    
-    def __repr__(self):
+
+    def __repr__(self) -> str:
         return str(self.df)
-    
-    def load(self):
-        # load from path_file
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        with open(os.path.join(self.path_file, name), 'rb') as f:
-            obj = pickle.load(f)
-        self.__dict__ |= obj.__dict__
-        
-    
-    def save(self, target_folder = None):
-        if target_folder is None:
-            target_folder = self.path_file
-        assert os.path.isdir(target_folder), \
-            'specify a directory, not a file'
-        
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        with open(os.path.join(target_folder, name), 'wb') as f:
-            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
