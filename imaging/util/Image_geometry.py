@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import skimage
 import scipy
 
+from imaging.util.coordinate_transformations import kartesian_to_polar, polar_to_kartesian
+
 
 def calculate_directionality_PCA(contours):
     """
@@ -121,58 +123,6 @@ def calculate_directionality_moments(image):
     major_axis = np.sqrt(8 * (mu20_prime + mu02_prime + inner_sqrt))
     minor_axis = np.sqrt(8 * (mu20_prime + mu02_prime - inner_sqrt))
     return theta, major_axis, minor_axis
-
-
-def kartesian_to_polar(v_x, v_y=None):
-    """
-    Convert vectors or point of x, y to r, phi.
-
-    Parameters
-    ----------
-    v_x : array of floats 1D or tuple of (float: x, float: y)
-        Either x-vector or (x, y) tuple.
-    v_y : array of floats 1D or None, optional
-        If v_x is not a tuple, v_y will be expected to hold an y-vector with
-        same length as the x-vector. The default is None.
-
-    Returns
-    -------
-    v_r : 1D array of floats or float
-        The radii.
-    v_phi : 1D array of floats or float
-        The angles.
-
-    """
-    if (v_y is None) and (len(v_x) == 2):
-        v_x, v_y = v_x
-    # polar
-    v_r = np.sqrt(v_x ** 2 + v_y ** 2)
-    v_phi = np.arctan2(v_y, v_x)
-    return v_r, v_phi
-
-
-def polar_to_kartesian(v_r, v_phi):
-    """
-    Convert vector or point of polar coordinates to kartesian x, y
-
-    Parameters
-    ----------
-    v_r : array of floats or float
-        radii.
-    v_phi : array of floats or float
-        angles.
-
-    Returns
-    -------
-    v_x : array of floats or float
-        x-values.
-    v_y : array of floats or float
-        y-values.
-
-    """
-    v_x = v_r * np.cos(v_phi)
-    v_y = v_r * np.sin(v_phi)
-    return v_x, v_y
 
 
 def contour_to_xy(contour):

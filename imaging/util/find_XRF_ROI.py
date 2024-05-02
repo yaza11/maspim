@@ -10,14 +10,18 @@ from skimage.color import rgb2gray
 from scipy.optimize import minimize
 from PIL import Image as PIL_Image
 
+import logging
+
+logger = logging.getLogger('msi_workflow-' + __name__)
+
 def match_template_scale(
         image: np.ndarray[float], 
         template: np.ndarray[float], 
-        N_guesses: int = 10, 
+        N_guesses: int = 20,
         fine_tune: bool = True, 
         plts: bool = False, 
         method: str = 'Powell'
-) -> tuple[tuple[int], int]:
+) -> tuple[tuple[int, int], int]:
     """
     Find scale and location of a template within an image.
     
@@ -35,7 +39,7 @@ def match_template_scale(
         The number of guesses before the fine-tuning. Used for a coarse 
         estimation of the scale. The default is 10.
     fine_tune : bool, optional
-        Option to use a fine tuning step to nail down the scale in the vicinity
+        Option to use a fine-tuning step to nail down the scale in the vicinity
         of the coarse guess. The default is True.
     plts : bool, optional
         Option to plot the final result. The default is False.
@@ -50,26 +54,40 @@ def match_template_scale(
         template into the original image.
 
     """
-    def eval_fit_for_scale(scale, return_loc=False):
-        dim = (np.asarray(template.shape[::-1]) * scale).astype(int)
-        template_rescaled = cv2.resize(template, dim)
+    def eval_fit_for_scale(scale: float | int, return_loc: bool = False) -> float | tuple[float, tuple[int, int]]:
+        """
+        Rescale the template to a certain scale and return the highest value of the match template cv2 function.
 
-        res = cv2.matchTemplate(image, template_rescaled, cv2.TM_CCOEFF_NORMED)
+        Option to return the location as well (disabled by default).
+
+        For invalid scales, this function returns the value 100.
+        """
+        dim_new: np.ndarray[int] = (np.asarray(template.shape[::-1]) * scale).astype(int)
+        template_rescaled: np.ndarray = cv2.resize(template, dim_new)
+        # catch invalid dimensions (e.g. template bigger than image) prematurely
+        if (image.shape[0] <= template_rescaled.shape[0]) or (image.shape[1] <= template_rescaled.shape[1]):
+            r: float = 1.
+            if return_loc:
+                return r, (-1, -1)
+            return r
+        res: tuple = cv2.matchTemplate(image, template_rescaled, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
         if return_loc:
             return -max_val, max_loc
         return -max_val
     
     # guess the scale
+    # (conversion factor to bring the template to the same resolution as the image)
     # image ROI should cover 5 cm section 
     # image should cover 5 cm plus stuff at the side
-    scale_guess = image.shape[1] / template.shape[1]
+    scale_guess: float = image.shape[1] / template.shape[1]
     
     # scales to try for coarse guess
-    scales = np.linspace(scale_guess / 10, scale_guess, N_guesses)
+    scales: np.ndarray[float] = np.linspace(scale_guess / 10, scale_guess, N_guesses)
+
     # initialize holders for guesses
     min_val_best: float = np.infty
-    loc_best: tuple[int] = (0, 0)
+    loc_best: tuple[int, int] = (0, 0)
     scale_best: float = 0
     for scale in scales:
         min_val, loc = eval_fit_for_scale(scale, True)
@@ -78,14 +96,14 @@ def match_template_scale(
             min_val_best = min_val
             loc_best = loc
             scale_best = scale
-    
+
     # fine tune step with optimizer
     if fine_tune:
-        idx_best = np.argwhere(scales == scale_best)[0][0]
-        bound_lower = scales[idx_best - 1] if idx_best > 0 else scales[idx_best]
-        bound_upper = scales[idx_best + 1] if idx_best < len(scales) - 1 else scales[idx_best]
+        idx_best: int = np.argwhere(scales == scale_best)[0][0]
+        bound_lower: float = scales[idx_best - 1] if idx_best > 0 else scales[idx_best]
+        bound_upper: float = scales[idx_best + 1] if idx_best < len(scales) - 1 else scales[idx_best]
         # use optimizer to search 
-        res = minimize(
+        res: object = minimize(
             eval_fit_for_scale,
             x0=scale_best,
             args=(False),
@@ -93,52 +111,80 @@ def match_template_scale(
             bounds=[(bound_lower, bound_upper)]
         )
         if res.success:
-            scale_best = res.x[0]
-            loc_best = eval_fit_for_scale(scale_best, True)[1]
+            scale_best: float = res.x[0]
+            loc_best: tuple[int, int] = eval_fit_for_scale(scale_best, True)[1]
         else:
-            print('optimizer did not succeed')
-            print(res.message)
-            print('using coarse scale match')
+            logger.warning('optimizer did not succeed')
+            logger.warning(res.message)
+            logger.warning('using coarse scale match')
 
     if plts:
-        dim = (np.asarray(template.shape[::-1]) * scale_best + .5).astype(int)
-        template_best = cv2.resize(template, dim)
-    
-        xs_corner = [loc_best[0], loc_best[0] + dim[0]]
-        ys_corner = [loc_best[1], loc_best[1] + dim[1]]
-    
-        canvas = image.copy()
-        canvas[
-               loc_best[1]:loc_best[1] + dim[1], 
-               loc_best[0]:loc_best[0] + dim[0]
-               ] = template_best
-        
-        plt.figure()
-        plt.imshow(image)
-        plt.show()
-        
-        plt.figure()
-        plt.imshow(canvas)
-        plt.show()
-        
-        fig, axs = plt.subplots(nrows=2, sharex=True)
-        axs[0].imshow(image)
-        axs[0].set_title('original image')
-        
-        axs[1].imshow(canvas)
-        axs[1].scatter(xs_corner, ys_corner, c='r', marker='+', label='corners')
-        axs[1].set_title('image with inserted template')
-        plt.legend()
-        plt.show()
+        plt_match_template_scale(image, template, scale_best, loc_best)
+
     return loc_best, scale_best
+
+def plt_match_template_scale(image: np.ndarray, template: np.ndarray, scale: float, loc: tuple[int, int]) -> None:
+    """
+    Plot the result of a match_template_scale call.
+
+    Parameters
+    ----------
+    image: original image
+    template: region to search
+    scale: scale with which to convert the template
+    loc: location (upper left corner) of the template within image
+
+    Returns
+    -------
+    None
+    """
+    dim: np.ndarray[int] = (np.asarray(template.shape[::-1]) * scale + .5).astype(int)
+    template_best: np.ndarray[int] = cv2.resize(template, dim)
+
+    xs_corner: tuple[int, int] = [loc[0], loc[0] + dim[0]]
+    ys_corner: tuple[int, int] = [loc[1], loc[1] + dim[1]]
+
+    canvas: np.ndarray = image.copy()
+    canvas[
+        loc[1]:loc[1] + dim[1],
+        loc[0]:loc[0] + dim[0]
+    ] = template_best
+
+    fig, axs = plt.subplots(nrows=2, sharex=True)
+    axs[0].imshow(image)
+    axs[0].set_title('original image')
+
+    axs[1].imshow(canvas)
+    axs[1].scatter(xs_corner, ys_corner, c='r', marker='+', label='corners')
+    axs[1].set_title('image with inserted template')
+    plt.legend()
+    plt.show()
+
+
 
 def find_ROI_in_image(
         file_image: str = None, 
         file_image_roi: str = None,
         image: np.ndarray = None,
         image_roi: np.ndarray = None,
-        **kwargs
-):
+        **kwargs: dict
+) -> tuple[tuple[int, int], int]:
+    """
+    This function is a wrapper around the match_template_scale to locate the position and scale of a ROI in an image.
+
+    Parameters
+    ----------
+    :param file_image: image file to be used as the source image in case image is not provided.
+    :param file_image_roi: image file to be used as the template in case image_roi is not provided.
+    :param image: the image to be used as source image.
+    :param image_roi: the template to be searched in the source image.
+    :param kwargs: optional keyword arguments to be passed to match_template_scale
+
+    Returns
+    -------
+    loc_best, scale_best
+        The location and scale of the template inside the source image.
+    """
     assert (file_image is not None) or (image is not None), \
         'either specify the file path or pass the image directly'
     assert (file_image_roi is not None) or (image_roi is not None), \

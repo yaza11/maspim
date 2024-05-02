@@ -74,10 +74,8 @@ def adaptive_mean_with_mask(
         borderType=cv2.BORDER_REPLICATE | cv2.BORDER_ISOLATED)
 
     footprint = np.ones((blockSize, blockSize))
-    print('starting mean')
     mean_pixel_values = skimage.filters.rank.mean(
         image=src_extended, footprint=footprint, mask=mask_extended)
-    print('ending mean')
     mean_pixel_values = mean_pixel_values[
         extend_by:-extend_by, extend_by:-extend_by]
 
@@ -355,17 +353,19 @@ value in the interval (1, infty).')
 
 
 def auto_downscaled_image(
-        image: np.ndarray, minpixels=1000
-) -> tuple[np.ndarray | float]:
-    """Downsample image such that the shorter side has the desired amount of pixels."""
-    n_pixels = np.min(image.shape[:2])
+        image: np.ndarray, minpixels: int = 1000
+) -> tuple[np.ndarray, float]:
+    """
+    Downsample image such that the shorter side has the desired amount of pixels.
+    """
+    n_pixels: int = np.min(image.shape[:2])
     # if image is smaller than specified minpixles, return image with
     # scalefactor 1
     if n_pixels <= minpixels:
         return image, 1
     # scale down to minpixels
-    scale_factor = minpixels / n_pixels
-    image = downscale_image(image, scale_factor)
+    scale_factor: float = minpixels / n_pixels
+    image: np.ndarray = downscale_image(image, scale_factor)
     return image, scale_factor
 
 

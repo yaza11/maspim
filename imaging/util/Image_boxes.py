@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 import skimage
 import cv2
 import numpy as np
+import logging
+
+logger = logging.getLogger('msi_workflow' + __name__)
 
 
 def region_in_box(
@@ -57,9 +60,9 @@ def region_in_box(
     # points in format (x_idx, y_idx)
     if len(image.shape) != 2:
         image = ensure_image_is_gray(image)
-        print('region_in_box expects grayscale image, converted input to \
+        logger.warning('region_in_box expects grayscale image, converted input to \
 grayscale')
-        print(image.shape)
+        logger.warning(image.shape)
 
     height, width = image.shape
 
@@ -68,11 +71,11 @@ grayscale')
             (center_box, box_ratio_x, box_ratio_y)]):
         center_box = (np.array(center_box) + .5).astype(int)
         x, y = center_box - \
-            np.array([round(width * box_ratio_x / 2),
-                      round(height * box_ratio_y / 2)], dtype=int)
+               np.array([round(width * box_ratio_x / 2),
+                         round(height * box_ratio_y / 2)], dtype=int)
         x_max, y_max = center_box + \
-            np.array([round(width * box_ratio_x / 2),
-                      round(height * box_ratio_y / 2)], dtype=int)
+                       np.array([round(width * box_ratio_x / 2),
+                                 round(height * box_ratio_y / 2)], dtype=int)
 
         # clip values
         y = np.max([y, 0])
@@ -120,12 +123,8 @@ grayscale')
         raise KeyError('Specify at least some of the parameters.')
 
     # get mask for pixels in box
-    # get indexes of pixels inside box
-    box_idx_x, box_idx_y = np.meshgrid(
-        np.arange(x, x_max), np.arange(y, y_max))
-    # create the mask
     mask_box = np.zeros(image.shape, dtype=np.uint8)
-    mask_box[box_idx_y, box_idx_x] = 255
+    mask_box[y:y_max, x:x_max] = 255
 
     image_box = image[y:y_max, x:x_max].copy()
 
@@ -143,7 +142,7 @@ grayscale')
         cv2.rectangle(canvas, point_topleft,
                       point_bottomright, 127, height // 20)
         cv2.circle(canvas, (center_box), radius=height //
-                   20, color=127, thickness=-1)
+                                                20, color=127, thickness=-1)
         plt_cv2_image(canvas)
 
     return dict(zip(out_keys, out_vals))
@@ -172,11 +171,11 @@ def get_mask_box_from_ratios(image_shape, center_box, box_ratio_x, box_ratio_y):
     """
     height, width = image_shape
     x, y = center_box - \
-        np.array([round(width * box_ratio_x / 2),
-                  round(height * box_ratio_y / 2)], dtype=int)
+           np.array([round(width * box_ratio_x / 2),
+                     round(height * box_ratio_y / 2)])
     x_max, y_max = center_box + \
-        np.array([round(width * box_ratio_x / 2),
-                  round(height * box_ratio_y / 2)], dtype=int)
+                   np.array([round(width * box_ratio_x / 2),
+                             round(height * box_ratio_y / 2)])
 
     # clip values
     y = np.max([y, 0])
@@ -193,7 +192,7 @@ def get_mask_box_from_ratios(image_shape, center_box, box_ratio_x, box_ratio_y):
     return mask_box
 
 
-def get_mean_intensity_box(image, center_box=None, box_ratio_x=.5, box_ratio_y=.5):
+def get_mean_intensity_box(image, center_box=None, box_ratio_x=.5, box_ratio_y=.5) -> tuple[float, float]:
     """
     For given ratios and center calculate the difference between the
     average pixel values of the inside and outside of the box.
@@ -227,14 +226,12 @@ def get_mean_intensity_box(image, center_box=None, box_ratio_x=.5, box_ratio_y=.
         center_box = np.array(
             [round(width / 2), round(height / 2)], dtype=int)
 
-    # create the mask
-    image_shape = image.shape
-    mask = get_mask_box_from_ratios(
-        image_shape, center_box, box_ratio_x, box_ratio_y)
+    mask_box = get_mask_box_from_ratios(
+        image.shape, center_box, box_ratio_x, box_ratio_y
+    ).astype(bool)
 
-    # calcualte means
-    mean_box = cv2.mean(image, mask)
-    mean_rest = cv2.mean(image, 255 - mask)
+    mean_box = image[mask_box].mean()
+    mean_rest = image[~mask_box].mean()
 
     return mean_box, mean_rest
 
@@ -248,44 +245,44 @@ def get_ROI_in_image(image: np.ndarray, xywh_ROI: tuple[int]) -> np.ndarray:
 def test_region_in_box():
     from skimage.data import brick
     import matplotlib.patches as patches  # for drawing box
-    image = brick() # grayscale image with 512 x 512 pixels
+    image = brick()  # grayscale image with 512 x 512 pixels
     # define box from center point and extent
     params_center_extent = region_in_box(
-        image, 
-        center_box=(image.shape[0] // 2, image.shape[1] // 2), 
-        box_ratio_x=.5, 
+        image,
+        center_box=(image.shape[0] // 2, image.shape[1] // 2),
+        box_ratio_x=.5,
         box_ratio_y=.5
     )
     # define box from point in top-left and bottom-right
     params_corners = region_in_box(
-        image, 
-        point_bottomright=(384, 384), 
+        image,
+        point_bottomright=(384, 384),
         point_topleft=(128, 128)
     )
     # define box from top-left corner, width and height
     params_xywh = region_in_box(
-        image, 
+        image,
         x=128,
         y=128,
         w=256,
         h=256
     )
     # stack images, result should be grayscale (if parameters are the same)
-    image_res=np.stack(
-        [params['image_box'] 
+    image_res = np.stack(
+        [params['image_box']
          for params in (params_center_extent, params_corners, params_xywh)],
         axis=-1
     )
-    
+
     fig, axs = plt.subplots(ncols=2)
     axs[0].imshow(image)
     # draw boxes
     for params, c in zip((params_center_extent, params_corners, params_xywh), ('r', 'g', 'b')):
         box = patches.Rectangle(xy=(params['x'], params['y']),
-                            width=params['w'], height=params['h'],
-                            linewidth=2, edgecolor=c, facecolor='none', alpha=.3)
+                                width=params['w'], height=params['h'],
+                                linewidth=2, edgecolor=c, facecolor='none', alpha=.3)
         axs[0].add_patch(box)
-        
+
     axs[1].imshow(image_res)
     plt.show()
 
@@ -294,25 +291,38 @@ def test_mask_box_from_ratios():
     from skimage.data import brick
     image = brick()
     mask = get_mask_box_from_ratios(image.shape, center_box=(128, 256), box_ratio_x=.25, box_ratio_y=.75)
-    
+
     plt.figure()
     plt.imshow(mask)
     plt.show()
-    
+
+
 def test_get_mean_intensity_box():
     from skimage.data import brick
-    image = brick()
-    box, rest = get_mean_intensity_box(image, center_box=(128, 128), box_ratio_x=.1, box_ratio_y=.1)
+    # image = brick()
+    image = np.zeros((256, 256))
+    params_box = dict(center_box=(128, 128), box_ratio_x=.1, box_ratio_y=.1)
+    mask = get_mask_box_from_ratios(image.shape, **params_box).astype(bool)
+    image[mask] = 1
+    box, rest = get_mean_intensity_box(image, **params_box)
+
+    plt.figure()
+    plt.imshow(image)
+    plt.show()
+
     print(f'{box=}, {rest=}')
-    
+    print('should be box=1, rest=0')
+
+
 def test_get_ROI_in_image():
     from skimage.data import brick
     image = brick()
     image_section = get_ROI_in_image(image, xywh_ROI=(128, 128, 32, 32))
-    
+
     plt.figure()
     plt.imshow(image_section)
     plt.show()
+
 
 def test_all_fcts():
     test_region_in_box()
@@ -320,10 +330,7 @@ def test_all_fcts():
     test_get_mean_intensity_box()
     test_get_ROI_in_image()
 
+
 if __name__ == '__main__':
-    
-    pass
-    
-    
-    
-    
+    # test_mask_box_from_ratios()
+    test_get_mean_intensity_box()
