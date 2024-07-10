@@ -1,0 +1,31 @@
+Compound	Molecular formula	m/z	observation
+Alkenone C37:2	C37H70O1	553.5319
+Alkenone C37:3	C37H68O1	551.5162
+Alkenone C38:2	C38H72O1	567.5475
+Carotene	C40H56	559.4274
+Echinenone	C40H54O1	573.4067
+Canthaxanthin	C40H52O2	587.3860
+Diatoxanthin	C40H54O2	589.4016
+Lutein, zeaxanthin	C40H56O2	591.4173
+Diploptene, squalene …	C30H50	433.3805	Unspecific, use as calibrant
+Bacteriohopanetetrol (BHT)	C35H62O4	569.4540
+AnhydroBHT	C35H60O3	551.4435
+Bishomohopanoic acid	C32H54O2	493.4016
+Cholesterol	C27H46O1	409.3441
+Cholestanol	C27H48O1	411.3597
+Brassicasterol	C28H46O1	421.3441
+Stigmasterol	C29H48O1	435.3597
+Sitosterol	C29H50O1	437.3754
+Stigmastanol	C29H52O1	439.3910
+Dinosterol	C30H52O1	451.3910
+GDGT-0, Caldarchaeol (0 dbe)	C86H172O6	1324.3046
+GDGT-5, Crenarchaeol (5dbe)	C86H162O6	1314.2264	Use as calibrant
+Long chain keto-ol C30	C30H60O2	475.4486
+Long chain diol C30	C30H62O2	477.4642	Use as calibrant
+Long chain keto-ol C32	C32H64O2	503.4799
+Long chain diol C32	C32H66O2	505.4955
+n-Alcohol C28	C28H58O1	433.4380
+Tocopherol	C29H50O2	453.3703
+Pyropheophorbide a	C33H34N4O3	557.2523	Use as calibrant
+Chlorophyllone a	C33H32N4O3	555.2367
+Diisonyl phtalate	C26H42O4	441.2975	Possible contamination, use as calibrant
