@@ -1,14 +1,15 @@
+""""""
 import pandas as pd
 import numpy as np
-import time
 import matplotlib.pyplot as plt
 from typing import Iterable
 from scipy.optimize import minimize
+from tqdm import tqdm
 
 
 def distorted_rect(
         width: int, height: float, coeffs: Iterable[float], plts: bool = False
-) -> np.array:
+) -> np.ndarray[bool]:
     """
     Mask for distorted rectangle in square region.
 
@@ -32,17 +33,17 @@ def distorted_rect(
         The region of the distorted rectangle where pixels inside region are True.
 
     """
-    x = np.linspace(-1, 1, width, dtype=float)
+    x: np.ndarray[float] = np.linspace(-1, 1, width, dtype=float)
 
-    Y = np.repeat(x, width).reshape((width, width))
-    y = np.poly1d(coeffs)(x)
+    Y: np.ndarray[float] = x[:, None] * np.ones(width)[None, :]
+    y: np.ndarray[float] = np.poly1d(coeffs)(x)
     y += coeffs[-1] - y.mean()
-    y_shift = height / width / 2
-    y_upper = y + y_shift
-    y_lower = y - y_shift
+    y_shift: float = height / width / 2
+    y_upper: np.ndarray[float] = y + y_shift
+    y_lower: np.ndarray[float] = y - y_shift
 
-    region = (Y > y_lower) & (Y <= y_upper)
-    region = region.T
+    region: np.ndarray[bool] = (Y > y_lower) & (Y <= y_upper)
+    region: np.ndarray[bool] = region.T
 
     if plts:
         plt.imshow(region)
@@ -53,9 +54,21 @@ def distorted_rect(
     return region
 
 
-def find_layer(image_classification, seed, height0, color,
-               key_light=255, key_dark=127, max_slope=.1, x0=None, bounds=None,
-               plts=False, plts_region=False, **kwargs):
+def find_layer(
+        image_classification: np.ndarray[int | float],
+        seed: int | float,
+        height0: float,
+        color: str,
+        key_light: int = 255,
+        key_dark: int = 127,
+        max_slope: float = .1,
+        x0: np.ndarray[float] | None = None,
+        degree: int | None = None,
+        bounds: tuple[tuple[float, float], ...] | None = None,
+        plts: bool = False,
+        plts_region: bool = False,
+        **_
+) -> list[float | bool]:
     """
     Find parameters for distorted rectangle around seed in classified image.
 
@@ -85,38 +98,42 @@ def find_layer(image_classification, seed, height0, color,
     plts_region : bool, optional
         Whether to plot distorted rects during optimization. The default is False.
         Setting this to true will take much longer.
-    **kwargs : dict
-        Additional keyword arguments. Will be ignored.
-
-    Raises
-    ------
-    ValueError
-        DESCRIPTION.
 
     Returns
     -------
-    parms : list
+    params : list
         Parameters of best distorted rectangle for seed.
 
     """
+    def metric(x0: np.ndarray) -> float:
+        """Evaluation function for parameters of rectangle."""
+        *coeffs, height = x0
+        layer_region: np.ndarray[bool] = distorted_rect(
+            width, height, coeffs, plts=plts_region)
+        image_region: np.ndarray = image_classification[:, seed:seed + width]
 
-    def metric(x0):
-        a, b, c, d, height = x0
-        layer_region = distorted_rect(
-            width, height, (a, b, c, d), plts=plts_region)
-        image_region = image_classification[:, seed:seed + width]
-
-        vision_layer = image_region * layer_region
-        num_light_layer = np.sum(vision_layer == key_light)
-        num_dark_layer = np.sum(vision_layer == key_dark)
-        num_layer = num_light_layer + num_dark_layer + 1
-        advantage_layer = (num_light_layer - num_dark_layer * ratio_total) / \
-                          num_layer
-
-        density = num_light_layer / num_layer
-        density = is_dark - density
-        score_layer = advantage_layer * density * height / width
+        vision_layer: np.ndarray = image_region * layer_region
+        num_light_layer: int = np.sum(vision_layer == key_light)
+        num_dark_layer: int = np.sum(vision_layer == key_dark)
+        num_layer: int = num_light_layer + num_dark_layer + 1
+        advantage_layer: float = (
+                (num_light_layer - num_dark_layer * ratio_total) / num_layer
+        )
+        density: float = num_light_layer / num_layer
+        density: float = is_dark - density
+        score_layer: float = advantage_layer * density * height / width
         return score_layer
+
+    assert (degree is not None) or (x0 is not None)
+    if degree is None:
+        # subtract 1 because need n+1 parameters to define polynomial of degree
+        # n
+        # and another one because one of the parameters in x0 is the height
+        degree: int = len(x0) - 2
+    elif x0 is None:
+        x0: list[float] = [0.] * (degree + 1) + [height0]
+    else:
+        raise ValueError('internal error')
 
     if (key_light not in image_classification) or (key_dark not in image_classification):
         raise ValueError(f'Specify keys (values) for light and dark \
@@ -126,25 +143,24 @@ classification. Either {key_light=} or {key_dark=} is not in image.')
         raise KeyError(
             f'color has to be either "light" or "dark", not {color}.')
 
-    is_dark = (color == 'dark')
+    is_dark: float = float(color == 'dark')
 
-    width = image_classification.shape[0]
+    width: int = image_classification.shape[0]
 
-    num_light_total = np.sum(image_classification == key_light)
-    num_dark_total = np.sum(image_classification == key_dark)
-    ratio_total = num_light_total / num_dark_total
-
-    if x0 is None:
-        x0 = [0, 0, 0, 0, height0]
+    # independent of layer shape
+    num_light_total: int = np.sum(image_classification == key_light)
+    num_dark_total: int = np.sum(image_classification == key_dark)
+    ratio_total: float = num_light_total / num_dark_total
 
     if bounds is None:
-        bounds = ((-max_slope / 9, max_slope / 9),  # a * x**3
-                  (-max_slope / 6, max_slope / 6),  # b * x**2
-                  (-max_slope / 3, max_slope / 3),  # c * x
-                  (-height0 / 2 / width, height0 / 2 / width),  # d
-                  (height0 / 2, height0 * 2))  # thickness layer
+        bounds: tuple[tuple[float, float], ...] = tuple(
+            (-max_slope / deg / 3, max_slope / deg / 3) for deg in range(degree, 0, -1)
+        ) + (
+            (-height0 / 2 / width, height0 / 2 / width),  # d
+            (height0 / 2, height0 * 2)  # thickness layer
+        )
 
-    score0 = metric(x0)
+    score0: float = metric(x0)
 
     params = minimize(
         metric,  # function to minimize
@@ -154,11 +170,16 @@ classification. Either {key_light=} or {key_dark=} is not in image.')
     )
 
     # get values
-    a, b, c, d, height = params.x
+    *coeffs, height = params.x
+    coeffs4: list[float] = [0.] * 4
+    n_missing: int = 4 - len(coeffs)
+    for i, coeff in enumerate(coeffs):
+        coeffs4[i + n_missing] = coeff
+    a, b, c, d = coeffs4
 
     if plts:
-        region = distorted_rect(width, height, (a, b, c, d))
-        image_region = image_classification[:, seed:seed + width]
+        region: np.ndarray[bool] = distorted_rect(width, height, (a, b, c, d))
+        image_region: np.ndarray = image_classification[:, seed:seed + width]
         plt.imshow(image_region + (1 - is_dark * 2) * 255 * region)
         plt.plot(width / 2, width / 2, 'ro')
         plt.plot(width / 2 + d, width / 2, 'bo')
@@ -166,25 +187,18 @@ classification. Either {key_light=} or {key_dark=} is not in image.')
 converged: {params.success}, score: {params.fun:.3f} (from {score0:.3f})')
         plt.show()
 
-    return list(params.x) + [params.success]
-
-
-# depricated
-# def find_middle_layer(
-#         image_classification: np.ndarray,
-#         seed: int,
-#         row_upper: pd.Series,
-#         row_lower: pd.Series,
-#         height0: float,
-#         color: str,
-#         plts=False,
-#         **kwargs
-# ):
+    return [a, b, c, d, height] + [params.success]
 
 
 def find_layers(
-        image_classification, seeds, height0, color,
-        plts=False, **kwargs):
+        image_classification: np.ndarray,
+        seeds: np.ndarray[float | int],
+        height0: np.ndarray[float] | float,
+        color: str,
+        degree: int = 3,
+        plts: bool = False,
+        **kwargs
+) -> pd.DataFrame:
     """
     Find distorted rectangles for all seeds.
 
@@ -196,8 +210,11 @@ def find_layers(
         depths of layers to be searched.
     height0 : Iterable[float]
         Initial guesses for thicknesses of layers.
-    color : Iterable[str]
-        Colors of layers.
+    color : str
+        Color of layers.
+    degree: int, optional
+        Degree of the distortion polynomial. Default is 3. Higher degrees are
+        theoretically possible but not supported.
     plts : bool, optional
         Whether to create result plot. The default is False.
     **kwargs : dict
@@ -210,36 +227,44 @@ def find_layers(
         optimized rectangle, success of optimizer and color.
 
     """
-    N = len(seeds)
-    columns_df = ['seed', 'a', 'b', 'c', 'd', 'height', 'success', 'color']
-    df_out = pd.DataFrame(
+    assert 0 <= degree <= 3, f'degree must be between 0 and 3, not {degree}'
+
+    N: int = len(seeds)
+    columns_df: list[str] = [
+        'seed', 'a', 'b', 'c', 'd', 'height', 'success', 'color'
+    ]
+    df_out: pd.DataFrame = pd.DataFrame(
         data=np.zeros((N, len(columns_df)), dtype=object),
         columns=columns_df)
     df_out['seed'] = seeds
     df_out['color'] = color
 
-    width = image_classification.shape[0]
-    half_width = (width + 1) // 2
+    width: int = image_classification.shape[0]
+    half_width: int = (width + 1) // 2
 
-    image_classification_pad = np.pad(
+    image_classification_pad: np.ndarray[int] = np.pad(
         image_classification,
         ((0, 0), (half_width, half_width))
     )
-    image_result = image_classification_pad.copy().astype(np.int32)
+    image_result: np.ndarray[int] = image_classification_pad.copy().astype(np.int32)
 
     if color in ('black', 'dark'):
-        sign_l = -1
+        sign_l: int = -1
     else:
-        sign_l = 1
+        sign_l: int = 1
 
-    height0 = np.ones(N) * height0
+    if not hasattr(height0, '__iter__'):
+        height0: np.ndarray[float] = np.ones(N) * height0
 
-    time0 = time.time()
-    print_interval = 10 ** (np.around(np.log10(N), 0) - 2)
-    print(f'searching parameters for {N} {color} laminae ...')
-    for idx in range(0, N):
-        out = find_layer(
-            image_classification_pad, seeds[idx], height0[idx], color, plts=plts, **kwargs
+    for idx in tqdm(range(0, N), desc='searching parameters for laminae'):
+        out: list[float | bool] = find_layer(
+            image_classification_pad,
+            seeds[idx],
+            height0[idx],
+            color,
+            plts=plts,
+            degree=degree,
+            **kwargs
         )
 
         df_out.iloc[idx, 1:-1] = out
@@ -258,107 +283,8 @@ def find_layers(
             plt.title(f'{idx + 1} out of {N}')
             plt.show()
 
-        if idx % print_interval == 0:
-            time_now = time.time()
-            time_elapsed = time_now - time0
-            predict = time_elapsed * N / (idx + 1)  # s
-            left = predict - time_elapsed
-            left_min, left_sec = divmod(left, 60)
-            print(end='\x1b[2K')
-            print(f'estimated time left: {str(int(left_min)) + " min" if left_min != 0 else ""} {left_sec:.1f} sec',
-                  end='\r')
-    print()
-
     return df_out
 
 
-def distorted_slice(params: np.ndarray, widths: Iterable, image_shape: tuple[int, int]) -> np.ndarray:
-    """
-
-    Parameters
-    ----------
-    params: matrix containing the parameters for each horizon.
-        Vertical entries correspond to parameters describing one horizon
-        horizontal entries correspond to the different horizons.
-        The first entry in each row corresponds to the highest potence of the polynomial
-    widths: iterable describing the width of each layer in pixels
-
-    Returns
-    -------
-
-    """
-    assert params.shape[1] == len(widths), 'The number of horizons must match the number of provided widths'
-
-    # construct image
-    # build stripes first
-    image = np.cumsum(widths)
-    ...
-
-    # apply polytransform
-
-
-def find_distorted_slice(image, n_transects=3):
-    """
-    Rather than fitting laminae by laminae, describe the laminated sediment with a backbone function
-
-    Returns
-    -------
-    image: np.ndarray
-        classified or grayscale image
-    """
-
-
 if __name__ == '__main__':
-    # import manage_class_imports
-    # # get the classification image
-    # image_object = manage_class_imports.get_obj((490, 495), 'Alkenones', 'Image')
-
-    # i_c, seeds = image_object.laminae_seeds()
-
-    # image_object.plts = True
-    # yearly_thickness = image_object.average_width_yearly_cycle()
-    # width = i_c.shape[0]
-    # half_width = (width + 1) // 2
-
-    # height0 = yearly_thickness / 2  # --> expected thickness
-
-    # c_new = np.pad(i_c, ((0, 0), (half_width, half_width)))
-    # c_layered = c_new.copy().astype(np.uint32)
-
-    # df_out = pd.DataFrame(
-    #     data=np.zeros((len(seeds), 7), dtype=object),
-    #     columns=['seed', 'a', 'b', 'c', 'd', 'height', 'success'])
-    # for idx in range(0, len(seeds)):
-    #     out = find_layer(c_new, seeds[idx], height0,
-    #                      plts=True, max_slope=.1)
-    #     df_out.iloc[idx, :] = [seeds[idx], out['coeffs'][0], out['coeffs'][1],
-    #                            out['coeffs'][2], out['coeffs'][3], out['height'], out['params'].success]
-    #     # df_out.to_csv('distorted_rect_params.csv')
-
-    #     region = distorted_rect(width, out['height'], out['coeffs'])
-
-    #     c_layered[:, seeds[idx]: seeds[idx]
-    #               + width] += 127 * region.astype(np.uint32)
-
-    #     plt.imshow(c_layered[:, half_width:-half_width], vmax=127 + 255)
-    #     plt.title(f'{idx+1} out of {len(seeds)}')
-    #     plt.show()
-
     pass
-
-# plt.imshow(c_new)
-# plt.plot(half_width + seeds[idx], half_width, 'ro')
-# plt.show()
-
-
-# vision_layer = image_region * region
-# plt.imshow(vision_layer)
-# plt.show()
-
-# plt.figure()
-# for idx in range(len(seeds)):
-#     c_new[:, half_width + (seeds[idx] - half_width):half_width +
-#           (seeds[idx] + half_width)] += 127 * r
-# plt.imshow(c_new, vmax=255 + 127)
-# plt.plot(half_width + seeds, half_width * np.ones_like(seeds), 'ro')
-# plt.show()
