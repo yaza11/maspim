@@ -1,26 +1,44 @@
+"""This module implements the XRF class."""
 from __future__ import annotations
 
 from data.cDataClass import Data
 from Project.file_helpers import find_matches
 from res.constants import elements
-from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
 
 import re
 import os
-import pickle
 import numpy as np
 import pandas as pd
 
 
-def handle_video_file(folder, file_name):
-    file_path = os.path.join(folder, file_name)
-    gray = pd.read_csv(file_path, sep=';', header=None)
+def handle_video_file(folder: str, file_name: str) -> list[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Reads a csv file with image data and returns values as vectors.
+
+    This function reads a csv file with grayscale values of the photo,
+    constructs the x and y pixel coordinates and returns the flattened photo and coordinates.
+
+    Parameters
+    ----------
+    folder : str
+        Absolute path to the folder with the csv file
+    file_name: str
+        Name of the file.
+
+    Returns
+    -------
+    out: list[np.ndarray, np.ndarray, np.ndarray]
+        List containing the grayscale vector, the x coordinate vector and the y coordinate vector.
+
+    """
+    file_path: str = os.path.join(folder, file_name)
+    gray: pd.DataFrame = pd.read_csv(file_path, sep=';', header=None)
     N_y, N_x = gray.shape
     X, Y = np.meshgrid(range(N_x), range(N_y))
 
-    v_x = X.ravel()
-    v_y = Y.ravel()
-    v_gray = gray.to_numpy().ravel()
+    v_x: np.ndarray = X.ravel()
+    v_y: np.ndarray = Y.ravel()
+    v_gray: np.ndarray = gray.to_numpy().ravel()
     return [v_gray, v_x, v_y]
 
 
@@ -32,26 +50,58 @@ def txt_to_vec(folder: str, file_name: str) -> np.ndarray[float]:
 
 
 class XRF(Data):
+    """
+    Class to wrap and process mass spectrometry imaging data.
+
+    This object compiles a feature table from txt files in a folder (txt files were exported,
+    example: folder name 'S0343a_480-485cm', file name 'S0343a_Al.txt'). It is recommended to leave
+    the folder name consistent with the file names. Further, the original image should be exported and
+    contian the keyword 'Mosaic'. This will be necessary for the image classes.
+
+    The feature table also contains information about the x and y coordiantes of the data pixels.
+    Each row corresponds to a data pixel.
+
+    Example Usage
+    -------------
+    Import
+    >>> from data.cXRF import XRF
+    Initialize
+    >>> xrf = XRF(path_folder='path/to/your/folder')
+    By default the measurement name will be infered from the folder name and the distance_pixels
+    read from the bcf file. If multiple exports are located in the folder, the measurement name
+    should be changed to the desired export:
+    >>> xrf = XRF(path_folder='path/to/your/folder', measurement_name='D0343a')
+    Set the feature table.
+    >>> xrf.set_feature_table_from_txts()
+
+    Now we are ready to do some analysis, e.g. nonnegative matrix factorization
+    >>> xrf.plt_NMF(k=5)
+    """
     def __init__(
             self, 
             path_folder: str,
-            distance_pixels = None, 
+            distance_pixels: int | None = None,
             measurement_name: str = None
-    ):
-        self.verbose = False
-        self.plts = False
-        
+    ) -> None:
+        """
+        Initialize with a folder.
+
+        """
         self.path_folder = path_folder
         if distance_pixels is not None:
-            self.distance_pixles = distance_pixels
+            self.distance_pixels = distance_pixels
         if measurement_name is not None:
             self.measurement_name = measurement_name
         else:
             self._set_measurement_name()
             
     def _set_measurement_name(self):
-        # folder should have measurement name in it --> a captial letter, 4 digits and 
-        # a lower letter
+        """
+        Infer the measurement name from the folder name.
+
+        Folder should have measurement name in it --> a capital letter, 4 digits and
+        a lower letter. Example: S0343a
+        """
         folder = os.path.split(self.path_folder)[1]
         pattern = r'^[A-Z]\d{3,4}[a-z]'
         
@@ -59,57 +109,30 @@ class XRF(Data):
         result = match.group() if match else None
         if result is None:
             raise OSError(
-                f'Folder {folder} does not contain measurement name at beginning, please rename folder',
+                f'Folder {folder} does not contain measurement name at ' +
+                f'beginning, please rename folder ' +
+                'or provide the measurement name upon initialization.',
             )
         else:
             self.measurement_name = result
 
-    def load(self) -> None:
-        """Actions to performe when object was loaded from disc."""
-        if __name__ == '__main__':
-            raise RuntimeError('Cannot load obj from file where it is defined.')
-        
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        with open(os.path.join(self.path_folder, name), 'rb') as f:
-            obj = pickle.load(f)
-        
-        self.__dict__ = obj.__dict__
-        
-        self.plts = False
-        self.verbose = False
-
-    def save(self, save_only_relevant_cols: bool = False) -> None:
-        """Actions to performe before saving to disc."""
-        if __name__ == '__main__':
-            raise RuntimeError('Cannot save object from the file in which it is defined.')
-        dict_backup = self.__dict__.copy()
-        # delete all attributes that are not flagged as relevant
-        existent_attributes = list(self.__dict__.keys())
-        keep_attributes = set(existent_attributes) & class_to_attributes(self)
-        nondata_columns_to_keep = list(Data_nondata_columns & set(self.feature_table.columns))
-        for attribute in existent_attributes:
-            if attribute not in keep_attributes:
-                self.__delattr__(attribute)
-        # drop data columns from current feature table
-        if hasattr(self, 'feature_table') and save_only_relevant_cols:
-            # make sure feature table is sorted
-            self.feature_table = self.feature_table\
-                .sort_values(by=['y', 'x']).reset_index(drop=True)
-            self.feature_table = self.feature_table.loc[
-                :, self.get_data_columns + nondata_columns_to_keep
-            ].copy()
-        
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        with open(os.path.join(self.path_folder, name), 'wb') as f:
-            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
-        self.__dict__ = dict_backup
-
-    def get_element_txts(self, tag: str = None) -> tuple[str, dict[str, str]]:
+    def _get_element_txts(self, tag: str | None = None) -> tuple[str, dict[str, str]]:
         """
         Data is stored in txt files where each file has a name of the format
         [tag]_[el].txt, so group txt files based on tag and pick the group 
         closest to the tag.
-        
+
+        Parameters
+        ----------
+        tag: str, optional
+            A substring that must be present in the file name. This defaults to the measurement name.
+
+        Returns
+        -------
+        closest_match: str
+            The file with the closest match to the tag.
+        res_dict: dict[str, str]
+            A dictionary mapping elements to file names.
         """
         if tag is None:
             tag = self.measurement_name
@@ -120,12 +143,12 @@ class XRF(Data):
             return_mode='all'
         )
         
-        els = set(elements.Abbreviation) | set(['Video 1'])
+        els = set(elements.Abbreviation) | {'Video 1'}
         pres = []
         posts = []
         els_found = []
         for file in files:
-            # split files at last occuring _
+            # split files at last occurring _
             *pre, post = file.split('_')
             pre = '_'.join(pre)  # in case there are multiple _ in the name
             el = post.split('.')[0]  # split of the .txt
@@ -140,14 +163,25 @@ class XRF(Data):
             substrings=tag
         )
         
-        file_group = ['_'.join([pre, post]) for pre, post in zip(pres, posts) if pre == closest_match]
+        file_group = [
+            '_'.join([pre, post])
+            for pre, post in zip(pres, posts) if pre == closest_match
+        ]
         
         return closest_match, dict(zip(els_found, file_group))
 
     def set_feature_table_from_txts(self, **kwargs) -> None:
+        """
+        Set the feature table with element images from txt files present in the folder.
+
+        Parameters
+        ----------
+        kwargs: dict,
+            Optional keyword arguments to be passed to _get_elements_txts.
+        """
         # find all relevant files
         # tuple[str, dict[str, str]]
-        self.prefix_files, files = self.get_element_txts(**kwargs)
+        self.prefix_files, files = self._get_element_txts(**kwargs)
 
         vecs: list[np.ndarray[float]] = []
         keys: list[str] = []
@@ -165,63 +199,6 @@ class XRF(Data):
                 keys.append(element)
         # combine to feature_table
         self.feature_table = pd.DataFrame(data=np.vstack(vecs).T, columns=keys)
-    
-    def get_data_columns(self):
-        if ('feature_table' not in self.__dict__) or (self.feature_table is None):
-            return None
-        columns = self.feature_table.columns
-        
-        
-        # data columns are elements
-        columns_valid = [col for col in columns if
-                         col in list(elements.Abbreviation)]
-    
-        data_columns = np.array(columns_valid)
-        return data_columns
-    
-    def combine_with(self, other: XRF) -> XRF:
-        """Combine two objects"""
-        def both_have(attr: str, obj1 = self, obj2 = other) -> bool:
-            return hasattr(obj1, attr) & hasattr(obj2, attr)
-        
-        assert type(self) == type(other), 'objects must be of the same type'
-        assert 'depth' in self.feature_table.columns, \
-            'found no depth column in first object'
-        assert 'depth' in other.feature_table.columns, \
-            'found no depth column in second object'
-        assert self.feature_table.depth.max() <= other.feature_table.depth.min(), \
-            'first object must have smaller depths and depth intervals cannot overlap'
-
-        # determine the new folder
-        paths: list[str] = [self.path_folder, other.path_folder]
-        new_path: str = os.path.commonpath(paths)
-        print(f'found common path: {new_path}')
-
-        Data_new: XRF = XRF(
-            path_folder=new_path, 
-            distance_pixels=self.distance_pixels
-        )
-        
-        self_df: pd.DataFrame = self.feature_table.copy()
-        other_df: pd.DataFrame = other.feature_table.copy()
-
-        # set min to 0
-        other_df.loc[:, 'x'] -= other_df.x.min()
-        # shift by last value of this df
-        other_df.loc[:, 'x'] += self_df.x.max()
-        if both_have('x_ROI', self_df, other_df):
-            # set min to 0
-            other_df.loc[:, 'x_ROI'] -= other_df.x_ROI.min()
-            # shift by last value of this df
-            other_df.loc[:, 'x_ROI'] += self_df.x_ROI.max()
-        
-        new_df: pd.DataFrame = pd.concat(
-            [self_df, other_df], 
-            axis=0
-        ).reset_index(drop=True)
-        Data_new.feature_table = new_df
-
-        return Data_new
 
 
 if __name__ == '__main__':
