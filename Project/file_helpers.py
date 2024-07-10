@@ -1,5 +1,7 @@
 import os
 import re
+from typing import Iterable
+
 import numpy as np
 import pandas as pd
 
@@ -12,7 +14,7 @@ def find_matches(
         file_types: str | list[str] | None = None,
         must_include_substrings: bool = False,
         return_mode: str = 'best'
-) -> str:
+) -> str | list[str]:
     assert (files is not None) or (folder is not None), \
         'Provide either the folder or a list of files.'
     assert return_mode in ('best', 'valid', 'all'), \
@@ -127,9 +129,39 @@ def get_image_file(path_folder):
     return search_keys_in_xml(path_mis_file, ['ImageFile'])['ImageFile']
 
 
+def get_rxy(spot_names: Iterable[str]) -> np.ndarray[int]:
+    # add R, x, y columns
+    str_prefix: str = r'R(\d+)X'
+    str_x: str = r'R\d+X(.*?)Y'
+    str_y: str = r'Y(.*?)$'
+
+    def rxy(name: str) -> list[int]:
+        """Obtain x, y, and r value from name."""
+        r: int = int(re.findall(str_prefix, name)[0])
+        x: int = int(re.findall(str_x, name)[0])
+        y: int = int(re.findall(str_y, name)[0])
+        return [r, x, y]
+
+    rxys: np.ndarray[int] = np.array([rxy(name) for name in spot_names])
+
+    return rxys
+
+
 class ImagingInfoXML:
-    def __init__(self, path_folder: str = None, path_d_folder: str = None, path_file: str = None):
-        assert (path_folder is not None) or (path_d_folder is not None) or (path_file is not None), \
+
+    _feature_table = None
+
+    def __init__(
+            self,
+            path_folder: str | None = None,
+            path_d_folder: str | None = None,
+            path_file: str | None = None
+    ):
+        assert (
+                (path_folder is not None)
+                or (path_d_folder is not None)
+                or (path_file is not None)
+        ), \
             'specify one of the parameters'
 
         if path_file is not None:
@@ -139,7 +171,8 @@ class ImagingInfoXML:
         if path_file is None:
             self.path_file = os.path.join(path_d_folder, 'ImagingInfo.xml')
 
-        assert os.path.exists(self.path_file), f'make sure the file is named correctly, could not find {self.path_file}'
+        assert os.path.exists(self.path_file), \
+            f'make sure the file is named correctly, could not find {self.path_file}'
 
     def _re_all(self, key: str) -> np.ndarray[str]:
         with open(self.path_file, 'r') as f:
@@ -172,13 +205,23 @@ class ImagingInfoXML:
         return self._re_all('maxpeak').astype(float)
     
     def set_feature_table(self) -> None:
-        self.feature_table = pd.DataFrame({
+        RXYs: np.ndarray = get_rxy(self.spotName)
+        self._feature_table = pd.DataFrame({
             'count': self.count, 
-            'spotName': self.spotName, 
+            'spotName': self.spotName,
+            'R': RXYs[:, 0],
+            'x': RXYs[:, 1],
+            'y': RXYs[:, 2],
             'minutes': self.minutes,
             'tic': self.tic,
             'maxpeak': self.maxpeak
         })
+
+    @property
+    def feature_table(self):
+        if self._feature_table is None:
+            self.set_feature_table()
+        return self._feature_table
 
 
 if __name__ == '__main__':

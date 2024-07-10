@@ -1,14 +1,19 @@
 import os
 
-from Project.cProject import Project, ProjectMSI
+from Project.cProject import get_project, ProjectMSI
+from data.cAgeModel import AgeModel
 from exporting.from_mcf.cSpectrum import MultiSectionSpectra
 from timeSeries.cTimeSeries import MultiSectionTimeSeries
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_long_time_series(
         folders: list[str],
         depth_spans: list[tuple[int, int]],
-        params_age_models: list[dict[str, str | float | int]],
+        age_model: AgeModel,
         targets: list[float],
         integrate_peaks: bool = False,
         SNR_threshold: float | int = 0,
@@ -17,7 +22,6 @@ def get_long_time_series(
         tolerances: float | None = None,
         path_spectra_object: str | None = None
 ) -> tuple[MultiSectionTimeSeries, list[ProjectMSI], MultiSectionSpectra]:
-
     if d_folders is None:
         d_folders = [None] * len(folders)
 
@@ -27,17 +31,15 @@ def get_long_time_series(
     # setup projects
     # this includes all steps up to setting the data_obj, since the bins are
     # estimated on the MultiSectionSpectra
-    for folder, depth_span, params_age_model, d_folder in zip(folders, depth_spans, params_age_models, d_folders):
+    for folder, depth_span, d_folder in zip(folders, depth_spans, d_folders):
         # create hdf5
-        p = Project(is_MSI=True, path_folder=folder, d_folder=d_folder)
-        reader = p.create_hdf_file()
+        p = get_project(is_MSI=True, path_folder=folder, d_folder=d_folder)
+        reader = p.get_reader()
         # set Spectra
-        p.set_spectra(reader, full=False)
+        p.set_spectra(full=False)
         readers.append(reader)
         # set age model
-        p.set_age_model(params_age_model['path_age_model'], sep='\t', index_col=False, load=False)
-        p.age_model.add_depth_offset(params_age_model['depth_offset_age_model'])
-        p.age_model.convert_depth_scale(params_age_model['conversion_to_cm_age_model'])  # convert mm to cm
+        p.age_model = age_model
         p.set_depth_span(depth_span)
         p.set_age_span()
 
@@ -62,8 +64,11 @@ def get_long_time_series(
         if path_spectra_object is not None:
             specs.save(path_spectra_object)
     else:
-        print('Loading long spectra object ...')
+        logger.info('Loading long spectra object ...')
         specs.load(path_spectra_object)
+        specs.set_peaks()
+        specs.set_kernels()
+        specs.set_targets(targets=targets, tolerances=tolerances)
         specs.distribute_peaks_and_kernels()
         specs.bin_spectra(readers=readers, integrate_peaks=integrate_peaks)
         specs.filter_line_spectra(SNR_threshold=SNR_threshold)
@@ -97,6 +102,10 @@ def get_long_time_series(
         )
         ts.append(p.time_series)
 
-    t: MultiSectionTimeSeries = MultiSectionTimeSeries(ts)
+    path_folder_ts = None
+    if path_spectra_object is not None:
+        path_folder_ts = os.path.dirname(path_spectra_object)
+
+    t: MultiSectionTimeSeries = MultiSectionTimeSeries(ts, path_folder=path_folder_ts)
 
     return t, ps, specs
