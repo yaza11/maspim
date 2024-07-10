@@ -5,11 +5,7 @@ from imaging.main.cImage import ImageSample, ImageROI
 from imaging.util.Image_convert_types import ensure_image_is_gray
 from imaging.util.Image_plotting import plt_cv2_image
 
-from util.manage_obj_saves import class_to_attributes
-
 import os
-import cv2
-import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
@@ -93,6 +89,7 @@ class XRay(ImageSample):
         )
 
         self.depth_section = depth_section
+        self._bars_removed: bool = False
 
     def _section_args_to_tuple(
             self,
@@ -204,6 +201,7 @@ class XRay(ImageSample):
             **kwargs: dict
     ) -> ImageROI:
         """
+        Get an ImageROI object from a specific section.
 
         Parameters
         ----------
@@ -237,13 +235,16 @@ class XRay(ImageSample):
         """
         Remove liner bars at top and bottom of the image.
 
-        This function determines inflection points in n_sections depth-wise average brightnesses to determine the
-        positioning of the liner along those transects. A line is then fitted through the top and bottom
-        boundary respectively and values outside the area between those lines nullified. The roi is then updated.
+        This function determines inflection points in n_sections depth-wise
+        average brightnesses to determine the positioning of the liner along
+        those transects. A line is then fitted through the top and bottom
+        boundary respectively and values outside the area between those lines
+        nullified. The roi is then updated.
 
         This function assumes that the background is white.
 
-        The transects ideally look something like this (inflection points marked with x):
+        The transects ideally look something like this (inflection points
+        marked with x):
               ___                ___
             |    |             |    |
            |      x            x     |
@@ -262,7 +263,6 @@ class XRay(ImageSample):
         -------
         None
         """
-
         def find_bounds(image_section_: np.ndarray) -> tuple[int, int]:
             """Determine the inflection points in a given section."""
             # average out in the depth-wise direction
@@ -284,6 +284,10 @@ class XRay(ImageSample):
             upper_infl += upper_crop_idx
             lower_infl += n // 2
             return upper_infl, lower_infl
+
+        if self._bars_removed:
+            logger.warning('bars already removed, exiting method')
+            return
 
         # determine upper and lower bounds for all sections
         section_length: float = (self.depth_section[1] - self.depth_section[0]) / n_sections
@@ -343,6 +347,7 @@ class XRay(ImageSample):
         # update extent of ROI
         self._xywh_ROI = (x, y_new, w, h_new)
         self._image[y:y + h, x:x + w] = temp_roi
+        self._bars_removed: bool = True
 
         if plts:
             # plot resulting new image ROI
