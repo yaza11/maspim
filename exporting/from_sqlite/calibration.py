@@ -1,4 +1,6 @@
-"""A fit transformer function for mass calibration."""
+"""
+a fit transformer function for mass calibration
+"""
 
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -30,7 +32,7 @@ class Calibration(BaseEstimator, TransformerMixin):
     .. code-block:: python
         cal = Calibration(target_mz=1000, A, B, tol=0.01, min_int=10000, min_snr=0)
         cal.fit(mzs, weights=intensities, snrs=snrs)
-        mzs = cal.fit(mzs)
+        mzs = cal.transform(mzs)
 
     """
 
