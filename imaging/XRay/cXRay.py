@@ -195,7 +195,7 @@ class XRay(ImageSample):
 
     def get_ImageROI_from_section(
             self,
-            section_start: int | float | tuple[int | float],
+            section_start: int | float | tuple[int | float, int | float],
             section_end: int | float | None = None,
             section_length: int | float = 5,
             **kwargs: dict

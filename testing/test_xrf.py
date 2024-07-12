@@ -27,14 +27,14 @@ pxrf.set_depth_span((490, 495))
 
 pxrf.set_image_handler()
 
-pxrf.set_age_model(path_file=r'C:\Users\Yannick Zander\Promotion\Cariaco 2024\Age Model')
+pxrf.require_age_model(path_file=r'C:\Users\Yannick Zander\Promotion\Cariaco 2024\Age Model')
 pxrf.set_age_span()
 
 pxrf.set_image_sample()
 pxrf.set_image_roi()
 pxrf.set_image_classified()
 
-pxrf.set_object()
+pxrf.set_data_object()
 pxrf.add_pixels_ROI()
 pxrf.add_laminae_classification()
 pxrf.add_depth_column()

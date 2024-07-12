@@ -96,7 +96,7 @@ class Convinience:
             # instance attributes with saved once, if they both exist
             self.__dict__ |= obj_new
             
-        logger.info(f'loaded object with keys {load_attr}')
+        logger.info(f'loaded {self.__class__.__name__} with keys {load_attr}')
 
     def save(self):
         """Save class __dict__ instance to file."""

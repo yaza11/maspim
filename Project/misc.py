@@ -78,7 +78,7 @@ def get_long_time_series(
     ts = []
     for p, spec in zip(ps, specs.specs):
         p.spectra = spec
-        p.set_object()
+        p.set_data_object()
 
         p.add_pixels_ROI()
         p.add_photo()

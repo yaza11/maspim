@@ -1,5 +1,8 @@
+from scipy.spatial import ConvexHull
 from tqdm import tqdm
 
+from imaging.util.Image_convert_types import ensure_image_is_gray
+from imaging.util.coordinate_transformations import rescale_values
 from res.constants import elements
 
 import scipy
@@ -9,7 +12,7 @@ import logging
 import matplotlib.pyplot as plt
 
 from skimage.transform import warp
-from scipy.interpolate import LinearNDInterpolator
+from scipy.interpolate import LinearNDInterpolator, griddata
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from typing import Iterable
 
@@ -25,7 +28,7 @@ def get_comp_as_img(
         flip: bool = False,
         idx_x: str = 'x_ROI',
         idx_y: str = 'y_ROI'
-) -> np.ndarray:
+) -> [np.ndarray, str, str]:
     """
     Return a component from the feature table as an image by pivoting.
 
@@ -47,27 +50,125 @@ def get_comp_as_img(
     img_mz: np.ndarray
         The feature image (without holes, depending on the inputs).
     """
-    assert idx_x in data_frame.columns
-    assert idx_y in data_frame.columns
+    if (idx_x not in data_frame.columns) and (idx_x != 'x'):
+        logger.warning(
+            f'did not find {idx_x} in {data_frame.columns}, ' +
+            f'attempting to find "x" and "y"'
+        )
+        idx_x: str = 'x'
+        idx_y: str = 'y'
+
+    assert idx_x in data_frame.columns, f'did not find {idx_x} in {data_frame.columns}'
+    assert idx_y in data_frame.columns, f'did not find {idx_y} in {data_frame.columns}'
 
     if flip:
         idx_x, idx_y = idx_y, idx_x
 
-    if classification_column not in data_frame.columns:
+    if (
+            (classification_column is not None) and
+            (classification_column not in data_frame.columns)
+    ):
         logger.warning(
             f'did not find the column {classification_column} in '
             f'the feature table classifying the holes, so not excluding pixels'
         )
-        exclude_holes = False
+        exclude_holes: bool = False
 
-    img_mz = data_frame.pivot(
+    img_mz: np.ndarray[float] = data_frame.pivot(
         index=idx_x, columns=idx_y, values=comp).to_numpy().astype(float)
     if exclude_holes and (classification_column is not None):
-        mask_holes = data_frame.pivot(
+        mask_holes: np.ndarray[bool] = data_frame.pivot(
             index=idx_x, columns=idx_y, values=classification_column
         ).to_numpy() == key_hole_pixels
         img_mz[mask_holes] = np.nan
-    return img_mz
+    return img_mz, idx_x, idx_y
+
+
+def plot_comp_on_image(
+        comp: str | float | int,
+        background_image: np.ndarray,
+        data_frame: pd.DataFrame,
+        *,
+        title: str | None = None,
+        clip_at: float = .95,
+        fig: plt.Figure | None = None,
+        ax: plt.Axes | None = None,
+        hold: bool = False,
+        **kwargs
+):
+    assert 'x_ROI' in data_frame.columns
+    assert 'y_ROI' in data_frame.columns
+
+    # get ion image
+    img_mz, *_ = get_comp_as_img(data_frame, comp, **kwargs)
+
+    if clip_at is None:
+        comp_is_numeric = str(comp).replace(".", "").isnumeric()
+        comp_is_element = str(comp) in elements.Abbreviation
+        comp_is_data = comp_is_element or comp_is_numeric
+        clip_at = .95 if comp_is_data else None
+    if clip_at is not None:
+        vmax = np.nanquantile(img_mz, clip_at)
+        logger.info(f'clipping values to {int(clip_at * 100)} percentile')
+    else:
+        vmax = np.nanmax(img_mz)
+        logger.info(f'not clipping values')
+
+    img_mz[img_mz > vmax] = vmax
+    # img_mz[img_mz < np.nanquantile(img_mz, .25)] = 0
+
+    # pad to fill out entire image
+    x_ROI, *_ = get_comp_as_img(data_frame, 'x_ROI', **kwargs)
+    y_ROI, *_ = get_comp_as_img(data_frame, 'y_ROI', **kwargs)
+    values = img_mz.ravel()
+    x = x_ROI.ravel()
+    y = y_ROI.ravel()
+    valid = (~np.isnan(values)) & (~np.isnan(x)) & (~np.isnan(y))
+    values = values[valid]
+    x = x[valid]
+    y = y[valid]
+
+    points = np.c_[x, y]
+    h_ROI, w_ROI = background_image.shape[:2]
+    grid_x, grid_y = np.meshgrid(
+        np.arange(w_ROI),
+        np.arange(h_ROI)
+    )
+    # rescale to match resolution of background image
+    img_mz = griddata(
+        points, values, (grid_x, grid_y), method='linear', fill_value=0
+    )
+    img_mz = rescale_values(img_mz, 0, 1)
+    background_image = rescale_values(background_image, 0, .5)
+
+    if fig is None:
+        fig, ax = plt.subplots()
+    # plot background image
+    ax.imshow(background_image)
+    im = ax.imshow(img_mz, alpha=np.sqrt(img_mz), cmap='inferno')
+    ax.set_axis_off()
+    if title is not None:
+        ax.set_title(title)
+
+    # divider = make_axes_locatable(ax)
+    # cax_pos = ('right' if (portait_mode := (img_mz.shape[0] > img_mz.shape[1]))
+    #            else 'bottom')
+    # cax = divider.append_axes(cax_pos, size="20%", pad=0.05)
+    #
+    # ticks = [0, vmax]
+    # ticklabels = ['0', '{:.0e}'.format(vmax)]
+    # print(ticks, ticklabels)
+    # cbar = plt.colorbar(im, cax=cax, ticks=ticks, location=cax_pos)
+    # if portait_mode:
+    #     cbar.ax.set_yticklabels(ticklabels)
+    #     cbar.ax.set_ylabel('Intensity', rotation=270)
+    # else:
+    #     cbar.ax.set_xticklabels(ticklabels)
+    #     cbar.ax.set_xlabel('Intensity', rotation=0)
+
+    if not hold:
+        plt.show()
+    return fig, ax
 
 
 def plot_comp(
@@ -79,7 +180,7 @@ def plot_comp(
         save_png: str | None = None,
         flip: bool = False,
         clip_at: float | None = None,
-        SNR_scale: bool = True,
+        SNR_scale: bool = False,
         N_labels: int = 5,
         y_tick_precision: int = 0,
         distance_pixels = None,
@@ -98,17 +199,19 @@ def plot_comp(
     title: str | None, optional
         The title of the figure. If not provided, the compound name will be used.
     save_png: str | None, optional
-        path and file name to save the plot. If not provided, the image will not be saved.
+        path and file name to save the plot. If not provided, the image will
+        not be saved.
     flip: bool, optional
         Whether to flip the image over its main diagonal.
     clip_at: float | None, optional
         By default values are clipped to the 95th percentile for data features.
-        Nondata features are by default not clipped. Providing a value will clip the data at
-        the given quantile (valid values are (0, 1]).
+        Nondata features are by default not clipped. Providing a value will
+        clip the data at the given quantile (valid values are (0, 1]).
     SNR_scale: bool, optional
-        This changes the ticks behavior of the intensity scale. If this value is set to True,
-        4 ticks will be used with the lowest one always being 0. If False, only 2 ticks will
-        be used (with the lower one being the minimum value of the ion image).
+        This changes the ticks behavior of the intensity scale. If this value
+        is set to True, 4 ticks will be used with the lowest one always being 0.
+        If False, only 2 ticks will be used (with the lower one being the
+        minimum value of the ion image).
     N_labels: int, optional
         The number of ticks on the depth scale. The default is 5.
     y_tick_precision: int, optional,
@@ -119,7 +222,9 @@ def plot_comp(
     if img_mz is None:
         assert data_frame is not None
         assert comp in data_frame.columns
-    img_mz = get_comp_as_img(data_frame=data_frame, comp=comp, flip=flip, **kwargs)
+    img_mz, idx_x, idx_y = get_comp_as_img(
+        data_frame=data_frame, comp=comp, flip=flip, **kwargs
+    )
 
     # clip values above vmax
     if clip_at is None:
@@ -167,9 +272,9 @@ def plot_comp(
         y_tick_labels = y_tick_positions * pixel_to_depth
     else:
         if flip:
-            col_d = 'x_ROI'
+            col_d = idx_x
         else:
-            col_d = 'y_ROI'
+            col_d = idx_y
         y_tick_labels = np.linspace(
             data_frame[col_d].min(),
             data_frame[col_d].max(),
@@ -193,7 +298,9 @@ def plot_comp(
     ax.set_title(title)
 
     divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="20%", pad=0.05)
+    cax_pos = ('right' if (portait_mode := (img_mz.shape[0] > img_mz.shape[1]))
+               else 'bottom')
+    cax = divider.append_axes(cax_pos, size="20%", pad=0.05)
     # SNR ratios
     if SNR_scale:
         ticks = [0, vmax / 3, 2 * vmax / 3, vmax]
@@ -208,7 +315,7 @@ def plot_comp(
         ticklabels = ['0', '{:.0e}'.format(vmax)]
     cbar = plt.colorbar(im, cax=cax, ticks=ticks)
     cbar.ax.set_yticklabels(ticklabels)
-    cbar.ax.set_ylabel('Intensity', rotation=270)
+    cbar.ax.set_ylabel('Intensity', rotation=270 if portait_mode else 0)
     if save_png is not None:
         plt.savefig(save_png, dpi=300)
     if hold:

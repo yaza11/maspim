@@ -897,11 +897,12 @@ class ImageSample(Image):
             self, **kwargs
     ) -> tuple[np.ndarray[np.uint8], tuple[int, ...]]:
         """Set and return area of the sample in the image."""
-        if (not hasattr(self, '_xywh_ROI')) and (not hasattr(self, '_image_roi')):
-            self.set_sample_area(**kwargs)
-        elif not hasattr(self, '_image_roi'):
+        # does has _xywh_ROI and _image_ROI
+        if hasattr(self, '_xywh_ROI') and hasattr(self, '_image_roi'):
+            pass
+        elif hasattr(self, '_xywh_ROI'):  # only has _xywh_ROI
             self._image_roi: np.ndarray = self.get_sample_area_from_xywh()
-        else:
+        else:  # only has _image_ROI
             self.set_sample_area(**kwargs)
         return self._image_roi, self._xywh_ROI
 
@@ -1048,7 +1049,7 @@ class ImageROI(Image):
         """
         new: Self = cls(
             path_folder=parent.path_folder,
-            image=parent.image_sample_area,
+            image=parent.image_sample_area.copy(),
             path_image_file=None,
             obj_color=parent.obj_color
         )

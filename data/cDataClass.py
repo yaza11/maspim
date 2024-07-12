@@ -838,8 +838,8 @@ rectangular grid. You may have to use processing_fill_missing')
             exclude_zeros: bool = False,
             correct_zeros: bool = False,
             calc_std: bool = False,
-            **kwargs
-    ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+            **_
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | pd.DataFrame:
         """
         Return dataframe of zone-wise averages.
 

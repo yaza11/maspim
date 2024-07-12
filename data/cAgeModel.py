@@ -224,7 +224,7 @@ class AgeModel(Convinience):
     def age(self):
         return self.df.loc[:, self.column_age].to_numpy()
 
-    def depth_to_age(self, depth: float | Iterable[float]) -> float | Iterable[float]:
+    def depth_to_age(self, depth: float | Iterable[float]) -> float | np.ndarray[float]:
         """
         Return the corresponding core age (a b2k) for a given depth (cm).
 

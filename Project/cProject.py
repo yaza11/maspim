@@ -1,51 +1,51 @@
 """
 This module contains the Project class which is used to manage various objects for XRF and MSI measurements.
 """
+import os
+import re
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import logging
+
 from matplotlib import patches
 from scipy.interpolate import griddata
 from tqdm import tqdm
+from typing import Iterable, Self
+from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 
-from data.helpers import plot_comp, transform_feature_table
-from exporting.from_mcf.helper import Spectrum
-from imaging.register.helpers import Mapper
-from imaging.util.Image_boxes import region_in_box
-from imaging.util.Image_plotting import plt_rect_on_image
+from data.helpers import plot_comp, transform_feature_table, plot_comp_on_image
+from exporting.data_analysis_export.ion_image import (get_da_export_ion_image,
+                                                      get_da_export_data)
+
 from util import Convinience
-from util.manage_obj_saves import class_to_attributes
 
 from exporting.from_mcf.rtms_communicator import ReadBrukerMCF
-from exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
+from exporting.from_mcf.helper import Spectrum
 from exporting.from_mcf.cSpectrum import Spectra, MultiSectionSpectra
+from exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
+
 from data.cMSI import MSI
 from data.cXRF import XRF
-from Project.file_helpers import (
-    get_folder_structure, find_files, get_mis_file,
-    get_d_folder, search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy
-)
 from data.cAgeModel import AgeModel
+
+from Project.file_helpers import (
+    get_folder_structure, find_files, get_mis_file, get_d_folder,
+    search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy
+)
+
 from imaging.main.cImage import ImageSample, ImageROI, ImageClassified
 from imaging.util.Image_convert_types import (
-    ensure_image_is_gray, PIL_to_np
+    ensure_image_is_gray, PIL_to_np, convert
 )
 from imaging.util.coordinate_transformations import rescale_values
 from imaging.util.find_XRF_ROI import find_ROI_in_image, plt_match_template_scale
 from imaging.XRay.cXRay import XRay
 from imaging.register.transformation import Transformation
-
-import os
-import re
-import numpy as np
-import pandas as pd
-import pickle
-import matplotlib.pyplot as plt
-import logging
+from imaging.register.helpers import Mapper
 
 from timeSeries.cTimeSeries import TimeSeries
-from timeSeries.cProxy import RatioProxy, UK37
-
-from typing import Iterable, Self
-
-from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
+from timeSeries.cProxy import UK37
 
 PIL_Image.MAX_IMAGE_PIXELS = None
 
@@ -288,6 +288,7 @@ class SampleImageHandlerMSI(Convinience):
         self.image_roi: np.ndarray[int] = img_resized
 
     def plot_overview(self):
+        """Plot the image with identified region of measurement."""
         img = PIL_to_np(self.image)
 
         # x, y, w, h = self.data_ROI_xywh
@@ -305,18 +306,21 @@ class SampleImageHandlerMSI(Convinience):
 
 class SampleImageHandlerXRF(Convinience):
     """
-    Image handler for XRF measurements. Finds the image region corresponding to the measurement area.
+    Image handler for XRF measurements. Finds the image region corresponding
+    to the measurement area.
 
-    If path_image_roi_file is not specified, it is assumed that the image file ROI is the same as the measurement area.
+    If path_image_roi_file is not specified, it is assumed that the image file
+    ROI is the same as the measurement area.
     path_folder is only used for loading and saving the object.
-    Since the object is saved with a non-unique name, multiple measurements should be located in separate folders.
+    Since the object is saved with a non-unique name, multiple measurements
+    should be located in separate folders.
 
     The path_image_roi_file should be a txt file ending in _Video.txt
 
     Example usage:
     # initialize
-    # make sure to pass both the image_file and image_roi_file if the measurement does not cover the entire
-    # sediment sample!
+    # make sure to pass both the image_file and image_roi_file if the
+    # measurement does not cover the entire sediment sample!
     i_handler = SampleImageHandlerXRF(
         path_folder='path/to/your/xrf/measurement',
         path_image_file='path/to/your/photo',
@@ -330,9 +334,9 @@ class SampleImageHandlerXRF(Convinience):
     # read the extent of the data
     i_handler.set_extent_data()
 
-    # only after photo and data extent have been set, the set_photo_ROI function becomes available
-    # with match_pixels set to True, this will return the photo in the data ROI where each pixel
-    # in the image corresponds to a data point
+    # only after photo and data extent have been set, the set_photo_ROI function
+    # becomes available with match_pixels set to True, this will return the
+    # photo in the data ROI where each pixel in the image corresponds to a data point
     roi = i_handler.set_photo_ROI()
     # save the handler inside the d folder for faster future usage
     i_handler.save()
@@ -392,6 +396,7 @@ class SampleImageHandlerXRF(Convinience):
         """Set the image and ROI from the files."""
 
         def txt2uint8(path_file: str) -> np.ndarray[np.uint8]:
+            """Convert a txt file containing values seperated by ; into an array."""
             arr: np.ndarray = pd.read_csv(path_file, sep=';').to_numpy()
             # convert int64 to uint8
             arr: np.ndarray[np.uint8] = (arr / 2 ** 8).astype(np.uint8)
@@ -414,8 +419,9 @@ class SampleImageHandlerXRF(Convinience):
         Set the extent of the spots. This function has to be called after set_photo
 
         If the image is the same as the ROI, this will simply be the full extent.
-        Otherwise, cv2's template matching function will be evoced with varying scaling factors to obtain the
-        precise position and scale of the ROI inside the of the image.
+        Otherwise, cv2's template matching function will be evoked with varying
+        scaling factors to obtain the precise position and scale of the ROI
+        inside the of the image.
 
         Parameters
         ----------
@@ -430,7 +436,9 @@ class SampleImageHandlerXRF(Convinience):
 
         if self.ROI_is_image:
             # xmin, xmax, ymin, ymax
-            self.extent_spots = (0, self.image._size[1], 0, self.image._size[0])
+            self.extent_spots: tuple[int, ...] = (
+                0, self.image._size[1], 0, self.image._size[0]
+            )
         else:
             # function expects arrays, not PIL_Images
             loc, scale = find_ROI_in_image(
@@ -449,9 +457,11 @@ class SampleImageHandlerXRF(Convinience):
                 loc[1] + round(scale * self.image_roi.size[1])
             )
             self.extent_spots = tuple(round(p / scale) for p in self.extent)
-        logger.info(f'found the extent of the data to be {self.extent} (pixel coordinates)')
+        logger.info(
+            f'found the extent of the data to be {self.extent} (pixel coordinates)'
+        )
 
-    def plt_extent_data(self):
+    def plot_extent_data(self):
         """
         Using the scale conversion factor and top left corner of the ROI,
         plot an image where the section corresponding to the ROI is replaced.
@@ -477,7 +487,8 @@ class SampleImageHandlerXRF(Convinience):
         Parameters
         ----------
         match_pxls: bool, the default is True.
-            If this is set to True, the returned image ROI will have the same resolution as the data pixels.
+            If this is set to True, the returned image ROI will have the same
+            resolution as the data pixels.
 
         Returns
         -------
@@ -532,50 +543,42 @@ class ProjectBaseClass:
     Abstract base class for ProjectMSI and ProjectXRF.
     """
     # placeholders for objects
-    age_model: AgeModel | None = None
+    _age_model: AgeModel | None = None
     depth_span: tuple[float, float] | None = None
     age_span: tuple[float, float] | None = None
     holes_data = None
-    image_handler: SampleImageHandlerMSI | SampleImageHandlerXRF | None = None
-    image_sample: ImageSample = None
-    image_roi: ImageROI = None
-    image_classified: ImageClassified = None
+    _image_handler: SampleImageHandlerMSI | SampleImageHandlerXRF | None = None
+    _image_sample: ImageSample = None
+    _image_roi: ImageROI = None
+    _image_classified: ImageClassified = None
     path_folder: str | None = None
     path_d_folder: str | None = None
-    spectra: Spectra = None
-    data_obj: MSI | XRF = None
-    xray: XRay = None
-    time_series: TimeSeries = None
+    _spectra: Spectra = None
+    _data_obj: MSI | XRF = None
+    _xray: XRay = None
+    _time_series: TimeSeries = None
     # flags
     _is_laminated = None
     _is_MSI = None
     _corrected_tilt: bool = False
 
     def _update_files(self):
-        pass
+        """Placeholder for children"""
+        raise NotImplementedError()
 
-    def load_age_model(self, path_file: str) -> None:
-        """
-        Load an AgeModel object from the specified file path and save it to the
-        d folder for easier access later on.
+    def set_age_model(self, path_file: str | None = None, **kwargs_read) -> None:
+        self._age_model: AgeModel = AgeModel(path_file, **kwargs_read)
+        self._age_model.path_file = self.path_d_folder
+        self._age_model.save()
 
-        Parameters
-        ----------
-        path_file : str
-            File of the age model object.
+        self._update_files()
 
-        Returns
-        -------
-        None.
-        """
-        self.age_model: AgeModel = AgeModel(path_file=path_file)
-
-    def set_age_model(
+    def require_age_model(
             self,
             path_file: str | None = None,
             load: bool = True,
             **kwargs_read: dict
-    ) -> None:
+    ) -> AgeModel:
         """
         Load an age model from the d folder if it exists, from another file if
         specified in path_file or create a new object by reading data from 
@@ -601,22 +604,23 @@ class ProjectBaseClass:
         """
         # if an age model save is located in the folder, load it
         if hasattr(self, 'AgeModel_file') and load:
-            self.age_model: AgeModel = AgeModel(self.path_d_folder)
+            self._age_model: AgeModel = AgeModel(self.path_d_folder)
         # if a file is provided, load it from the file provided
         elif load and (path_file is not None):
-            self.load_age_model(path_file)
+            self._age_model: AgeModel = AgeModel(path_file=path_file, **kwargs_read)
         # otherwise create new age model
         else:
-            self.age_model: AgeModel = AgeModel(path_file, **kwargs_read)
-            self.age_model.path_file = self.path_d_folder
-            self.age_model.save()
+            self.set_age_model(path_file, **kwargs_read)
+        return self._age_model
 
-        self._update_files()
+    @property
+    def age_model(self) -> AgeModel:
+        return self.require_age_model()
 
     def set_depth_span(self, depth_span: tuple[float, float]) -> None:
         """
-        Set the depth span as a tuple where the first element is the upper depth and the second element the lower depth
-        in cm.
+        Set the depth span as a tuple where the first element is the upper
+        depth and the second element the lower depth in cm.
 
         Example usage
         -------------
@@ -636,10 +640,13 @@ class ProjectBaseClass:
         self.depth_span: tuple[float, float] = depth_span
 
     def set_age_span(
-            self, depth_span: tuple[float, float] | None = None, age_span: tuple[float, float] | None = None
+            self,
+            depth_span: tuple[float, float] | None = None,
+            age_span: tuple[float, float] | None = None
     ) -> None:
         """
-        Set the age span of the measurement either from the age model or the provided tuple.
+        Set the age span of the measurement either from the age model or the
+        provided tuple.
 
         Age is expected to be in years before the year 2000 (b2k).
 
@@ -650,7 +657,8 @@ class ProjectBaseClass:
         >>>p.set_age_span(depth_span=(490, 495))
         sets the age span using the age model.
         >>>p.set_age_span()
-        sets the age span using the age model and the previously specified depth span.
+        sets the age span using the age model and the previously specified
+        depth span.
 
         Returns
         -------
@@ -668,15 +676,25 @@ class ProjectBaseClass:
         if age_span is not None:
             self.age_span: tuple[float, float] = age_span
         else:
-            self.age_span: tuple[float, float] = tuple(self.age_model.depth_to_age(depth_span))
+            self.age_span: tuple[float, float] = tuple(
+                self.age_model.depth_to_age(depth_span)
+            )
 
-    def set_image_handler(self, **_):
-        pass
+    def set_image_handler(self, *args, **kwargs):
+        """Placeholder for children"""
+        raise NotImplementedError()
+
+    def require_image_handler(self, *args, **kwargs):
+        """Placeholder for children"""
+        raise NotImplementedError()
+
+    @property
+    def image_handler(self):
+        return self.require_image_handler()
 
     def set_image_sample(
             self,
             obj_color: str | None = None,
-            overwrite: bool = False,
             **kwargs_area: dict
     ) -> None:
         """
@@ -700,82 +718,118 @@ class ProjectBaseClass:
         assert self.image_handler is not None, \
             'call set_image_handler first'
 
-        self.image_sample: ImageSample = ImageSample(
+        self._image_sample: ImageSample = ImageSample(
             path_folder=self.path_folder,
             image=self.image_handler.image,
             image_type='pil',
             obj_color=obj_color
         )
-        if hasattr(self, 'ImageSample_file') and not overwrite:
-            logger.info('loading ImageSample')
-            self.image_sample.load()
-        if not hasattr(self.image_sample, '_xywh_ROI'):
+        if not hasattr(self._image_sample, '_xywh_ROI'):
             try:
                 self.image_handler.set_photo_ROI()
             except Exception as e:
                 logger.error(e)
                 logger.info('Could not set photo ROI, continuing with fitting box')
             if hasattr(self.image_handler, 'photo_ROI_xywh'):
-                extent_x: tuple[int, int] = (
-                    self.image_handler.photo_ROI_xywh[0], self.image_handler.photo_ROI_xywh[2]
-                )
+                x_start: int = self.image_handler.photo_ROI_xywh[0]
+                x_end: int = x_start + self.image_handler.photo_ROI_xywh[2]
+                extent_x: tuple[int, int] = (x_start, x_end)
             else:
                 extent_x: None = None
-            self.image_sample.set_sample_area(extent_x=extent_x, **kwargs_area)
-            self.image_sample.save()
+            self._image_sample.set_sample_area(extent_x=extent_x, **kwargs_area)
+            self._image_sample.save()
 
         self._update_files()
 
-    def set_image_roi(self, overwrite: bool = False) -> None:
+    def require_image_sample(
+            self,
+            obj_color: str | None = None,
+            overwrite: bool = False,
+            **kwargs_area: dict
+    ):
+        self._image_sample: ImageSample = ImageSample(
+            path_folder=self.path_folder,
+            image=self.image_handler.image,
+            image_type='pil',
+            obj_color=obj_color
+        )
+        call_set = True
+        if hasattr(self, 'ImageSample_file') and not overwrite:
+            logger.info('loading ImageSample')
+            self._image_sample.load()
+            call_set = False
+            if not hasattr(self._image_sample, '_xywh_ROI'):
+                logger.warning(
+                    'loaded partially initialized ImageSample, overwriting '
+                    'loaded ImageSample with fully initialized object'
+                )
+                call_set = True
+        if call_set:  # either overwrite or loaded partially processed obj
+            self.set_image_sample(
+                obj_color=self._image_sample.obj_color,  # use eventually stored obj_color
+                **kwargs_area
+            )
+
+        return self._image_sample
+
+    @property
+    def image_sample(self):
+        return self.require_image_sample()
+
+    def set_image_roi(self) -> None:
         """
         Set an ImageROI instance.
 
         This function can only be called after set_image_sample has been called.
-
-        Parameters
-        ----------
-        overwrite : bool, optional
-            If True, initialize new ImageROI instance, even if there is one found on disk.
-
-        Returns
-        -------
-        None
-
         """
         assert self.image_sample is not None, 'call set_image_sample first'
 
         # create image_roi using image from image_sample
-        self.image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
-        if hasattr(self, 'ImageROI_file') and not overwrite:
-            logger.info('loading ImageROI')
-            self.image_roi.load()
-            return
+        self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
 
         # attempt to classify laminated sample
         if self.age_span is None:
             logger.info(
-                'age_span has not been defined. If you want to analyze a laminated sediment, '
-                'set the age_span and call this function again.'
+                'age_span has not been defined. If you want to analyze a '
+                'laminated sediment, set the age_span and call this function '
+                'again.'
             )
             return
 
-        self.image_roi.age_span = self.age_span
-        if not hasattr(self.image_roi, 'image_classification'):
-            self.image_roi._require_classification()
-        self.image_roi.save()
+        self._image_roi.age_span = self.age_span
+        self._image_roi.save()
 
         self._update_files()
+
+    def require_image_roi(self, overwrite: bool = False) -> ImageROI:
+        if hasattr(self, 'ImageROI_file') and not overwrite:
+            logger.info('loading ImageROI')
+            self._image_roi = ImageROI(
+                obj_color='light',  # dummy, will be overwritten by load
+                path_folder=self.path_folder
+            )
+            self._image_roi.load()
+            if self.age_span is not None:
+                self._image_roi.age_span = self.age_span
+        else:
+            self.set_image_roi()
+
+        return self._image_roi
+
+    @property
+    def image_roi(self) -> ImageROI:
+        return self.require_image_roi()
 
     def set_image_classified(
             self,
             peak_prominence: float = .1,
             max_slope: float = .1,
             downscale_factor: float = 1 / 16,
-            overwrite: bool = False,
             **kwargs
     ) -> None:
         """
-        Set an ImageClassified instance, assuming an ImageROI instance has been saved before.
+        Set an ImageClassified instance, assuming an ImageROI instance has been
+        saved before.
 
         Parameters
         ----------
@@ -797,34 +851,67 @@ class ProjectBaseClass:
         assert self.image_roi is not None, 'call set_image_roi before'
 
         # initialize ImageClassified
-        self.image_classified: ImageClassified = ImageClassified.from_parent(
+        self._image_classified: ImageClassified = ImageClassified.from_parent(
             self.image_roi, **kwargs
         )
-        if hasattr(self, 'ImageClassified_file') and (not overwrite):
-            logger.info('loading ImageClassified ...')
-            self.image_classified.load()
-        self.image_classified.age_span = self.age_span
-        if not hasattr(self.image_classified, 'params_laminae_simplified'):
-            logger.info('setting laminae in ImageClassified ...')
-            self.image_classified.set_laminae_params_table(
-                peak_prominence=peak_prominence,
-                max_slope=max_slope,
-                downscale_factor=downscale_factor,
-                **kwargs
-            )
-            self.image_classified.save()
+        self._image_classified.age_span = self.age_span
 
+        logger.info('setting laminae in ImageClassified ...')
+        self._image_classified.set_laminae_params_table(
+            peak_prominence=peak_prominence,
+            max_slope=max_slope,
+            downscale_factor=downscale_factor,
+            **kwargs
+        )
+        self._image_classified.save()
         self._update_files()
 
-    def set_images(self, overwrite: bool = False, **kwargs):
-        self.set_image_handler(overwrite=overwrite)
-        self.set_image_sample(overwrite=overwrite, **kwargs)
-        self.set_image_roi(overwrite=overwrite)
+    def require_image_classified(
+            self, overwrite: bool = False, **kwargs
+    ) -> ImageClassified:
+        if hasattr(self, 'ImageClassified_file') and (not overwrite):
+            logger.info('loading ImageClassified ...')
+            self._image_classified.load()
+            self._image_classified.age_span = self.age_span
+
+        if not hasattr(self._image_classified, 'params_laminae_simplified'):
+            self.set_image_classified(**kwargs)
+
+        return self._image_classified
+
+    @property
+    def image_classified(self) -> ImageClassified:
+        return self.require_image_classified()
+
+    def require_images(self, overwrite: bool = False, **kwargs):
+        """Set the image handler, sample and roi, and if the sediment is
+        laminated classified.
+
+        Parameters
+        ----------
+        overwrite: bool
+            If False, will attempt to load objects from disk. If True, will
+            overwrite saved states.
+        kwargs: Any
+            keywords for the setters.
+        """
+        self.require_image_handler(overwrite=overwrite)
+        self.require_image_sample(overwrite=overwrite, **kwargs)
+        self.require_image_roi(overwrite=overwrite)
         if self._is_laminated:
-            self.set_image_classified(overwrite=overwrite, **kwargs)
+            self.require_image_classified(overwrite=overwrite, **kwargs)
+
+    def require_data_object(self, *args, **kwargs):
+        """Overwritten by children"""
+        raise NotImplementedError()
+
+    @property
+    def data_obj(self):
+        return self.require_data_object()
 
     def add_tic(self, imaging_info_xml: ImagingInfoXML | None = None):
-        """Add the TIC for each pixel to the feature table of the data obj."""
+        """Add the total ion count (TIC) for each pixel to the feature table
+        of the data obj."""
         assert self.data_obj is not None, "No data object"
 
         if imaging_info_xml is None:
@@ -843,22 +930,18 @@ class ProjectBaseClass:
         Add image pixels to data points in the feature table of the data_obj.
 
         This requires that the image handler and sample have been set.
-        Creates new columns x_ROI and y_ROI for the pixel coordinates in the feature table.
-
-        Returns
-        -------
-
+        Creates new columns x_ROI and y_ROI for the pixel coordinates in the
+        feature table.
         """
         assert self.image_sample is not None, 'call set_image_sample first'
         assert self.image_handler is not None, 'call set_image_handler'
 
-        attrs = ('image_roi', 'photo_ROI_xywh', 'data_ROI_xywh')
+        attrs: tuple[str, ...] = ('image_roi', 'photo_ROI_xywh', 'data_ROI_xywh')
         if not all([hasattr(self.image_handler, attr) for attr in attrs]):
             self.image_handler.set_photo_ROI()
-
-        image_ROI_xywh = self.image_sample._require_image_sample_area()[1]
-        data_ROI_xywh = self.image_handler.data_ROI_xywh
-        photo_ROI_xywh = self.image_handler.photo_ROI_xywh
+        image_ROI_xywh: tuple[int, ...] = self.image_sample._require_image_sample_area()[1]
+        data_ROI_xywh: tuple[int, ...] = self.image_handler.data_ROI_xywh
+        photo_ROI_xywh: tuple[int, ...] = self.image_handler.photo_ROI_xywh
 
         self.data_obj._pixels_get_photo_ROI_to_ROI(
             data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh
@@ -953,13 +1036,15 @@ class ProjectBaseClass:
         Linearly map xs (from the data_obj.feature_table) to depths
         (based on depth_span).
 
-        If exclude_gaps is True, depth intervals where no sediment is present, will be excluded from the depth
-        calculation (they will be assigned the same depth as the last valid depth).
+        If exclude_gaps is True, depth intervals where no sediment is present,
+        will be excluded from the depth calculation (they will be assigned the
+        same depth as the last valid depth).
         """
         assert self.data_obj is not None, 'set the data_obj first'
         assert self.depth_span is not None, 'set the depth_span first'
         if exclude_gaps:
-            assert 'valid' in self.data_obj.feature_table.columns, 'set holes in data_obj first'
+            assert 'valid' in self.data_obj.feature_table.columns,\
+                'set holes in data_obj first'
 
         min_depth, max_depth = self.depth_span
         # convert seed pixel coordinate to depth and depth to age
@@ -1024,7 +1109,8 @@ class ProjectBaseClass:
         else:
             depth_col = 'depth'
         assert depth_col in self.data_obj.feature_table.columns, \
-            'data object must have {depth_col} column, call add_depth_column and set the exclude_gaps accordingly'
+            ('data object must have {depth_col} column, call add_depth_column '
+             'and set the exclude_gaps accordingly')
 
         self.data_obj.feature_table['age'] = self.age_model.depth_to_age(
             self.data_obj.feature_table[depth_col]
@@ -1075,6 +1161,7 @@ class ProjectBaseClass:
         self._update_files()
 
     def data_obj_apply_tilt_correction(self) -> None:
+
         assert not self._corrected_tilt, 'tilt has already been corrected'
         assert self.data_obj is not None, 'set data_obj.'
         mapper = Mapper(
@@ -1155,7 +1242,9 @@ class ProjectBaseClass:
         if 'side' in kwargs:
             raise ValueError('please provide "side_xray" and "side_data" seperately')
 
-        img_xray: ImageROI = self.xray.get_ImageROI_from_section(section_start=self.depth_span)
+        img_xray: ImageROI = self.xray.get_ImageROI_from_section(
+            section_start=self.depth_span
+        )
         img_xray.set_punchholes(remove_gelatine=False, side=side_xray, plts=plts, **kwargs)
         if not hasattr(self.image_roi, 'punchholes'):
             self.image_roi.set_punchholes(
@@ -1183,7 +1272,9 @@ class ProjectBaseClass:
         -------
         None
         """
-        def idx_to_depth(idx: int, img_shape: tuple[int, ...]) -> float:
+        def idx_to_depth(
+                idx: np.ndarray[int], img_shape: tuple[int, ...]
+        ) -> np.ndarray[float]:
             """Convert the index into the relative depth."""
             return idx / img_shape[1] * depth_section + self.depth_span[0]
 
@@ -1195,7 +1286,6 @@ class ProjectBaseClass:
             arr = np.append(arr, img_shape[1])
             return arr
 
-        # TODO: rewrite this to use mapper
         # methods to choose from
         methods: tuple[str, ...] = ('linear', 'cubic', 'piece-wise linear', 'l', 'c', 'pwl')
         assert method in methods, \
@@ -1247,8 +1337,8 @@ class ProjectBaseClass:
             depths_new = np.zeros_like(depths)
             for i in range(len(idxs_xray) - 1):
                 # get index pairs
-                idxs_xray_pair = idxs_xray[i:i + 2]
-                idxs_data_pair = idxs_data[i:i + 2]
+                idxs_xray_pair: np.ndarray[int] = idxs_xray[i:i + 2]
+                idxs_data_pair: np.ndarray[int] = idxs_data[i:i + 2]
                 coeffs = np.polyfit(
                     idx_to_depth(idxs_data_pair, img_data_shape),
                     idx_to_depth(idxs_xray_pair, img_xray_shape),
@@ -1261,7 +1351,7 @@ class ProjectBaseClass:
                        (depths <= depth_interval[1])
                 depths_new[mask] = pol(depths[mask])
         else:
-            raise NotImplementedError()
+            raise NotImplementedError('internal error')
 
         self.data_obj.feature_table['depth_corrected'] = depths_new
 
@@ -1493,23 +1583,17 @@ class ProjectBaseClass:
     def set_time_series(
             self,
             average_by_col: str = 'classification_se',
-            overwrite: bool = False,
             plts: bool = False,
             **kwargs
     ) -> None:
-        self.time_series = TimeSeries(self.path_d_folder)
-        if hasattr(self, 'TimeSeries_file') and (not overwrite):
-            self.time_series.load()
-            if hasattr(self.time_series, 'feature_table'):
-                return
-
-        assert self.data_obj is not None, 'call set_object'
+        assert self.data_obj is not None, 'call set_data_object'
         assert 'L' in self.data_obj.feature_table.columns, \
             'call add_photo'
         assert 'x_ROI' in self.data_obj.feature_table.columns, \
             'call add_pixels_ROI'
         assert average_by_col in self.data_obj.feature_table.columns, \
-            'call add_laminae_classification or use a different column name to average by'
+            ('call add_laminae_classification or use a different column name to'
+             ' average by')
         assert 'depth' in self.data_obj.feature_table.columns, \
             'add the depths to data_obj with add_depth_column first'
         assert 'age' in self.data_obj.feature_table.columns, \
@@ -1517,7 +1601,8 @@ class ProjectBaseClass:
 
         assert self.image_classified is not None, 'call set_image_classified'
         assert hasattr(self.image_classified, 'params_laminae_simplified'), \
-            'could not find params table in classified image object, call set_image_classified'
+            ('could not find params table in classified image object, call '
+             'set_image_classified')
 
         # x column always included in processing_zone_wise_average
         columns_feature_table = np.append(
@@ -1543,8 +1628,6 @@ class ProjectBaseClass:
         )
 
         row_mask = [seed in ft_seeds_avg.index for seed in seeds]
-        # print(row_mask)
-        # print('row mask (hits, length): ', sum(row_mask), len(row_mask))
 
         quals = self.image_classified.params_laminae_simplified.loc[
                 row_mask, cols_quals + ['height']
@@ -1613,13 +1696,27 @@ class ProjectBaseClass:
         # add age column
         ft_seeds_avg['age'] = self.age_model.depth_to_age(ft_seeds_avg.depth)
 
-        self.time_series.feature_table = ft_seeds_avg
-        self.time_series.feature_table_standard_deviations = ft_seeds_std
-        self.time_series.feature_table_successes = ft_seeds_success
+        self._time_series = TimeSeries(self.path_d_folder)
+        self._time_series.feature_table = ft_seeds_avg
+        self._time_series.feature_table_standard_deviations = ft_seeds_std
+        self._time_series.feature_table_successes = ft_seeds_success
 
-        self.time_series.save()
+        self._time_series.save()
 
         self._update_files()
+
+    def require_time_series(self, overwrite: bool = False, **kwargs) -> TimeSeries:
+        self._time_series = TimeSeries(self.path_d_folder)
+        if hasattr(self, 'TimeSeries_file') and (not overwrite):
+            self._time_series.load()
+        if not hasattr(self._time_series, 'feature_table') or overwrite:
+            self.set_time_series(**kwargs)
+
+        return self._time_series
+
+    @property
+    def time_series(self) -> TimeSeries:
+        return self.require_time_series()
 
     def plot_comp(
             self,
@@ -1627,11 +1724,15 @@ class ProjectBaseClass:
             source: str,
             tolerance: float = 3e-3,
             title: str | None = None,
+            da_export_file: str | None = None,
+            plot_on_background: bool = False,
             **kwargs
     ):
         def pixel_table_from_xml() -> pd.DataFrame:
             """Construct a feature table from the xml file."""
-            imaging_info: ImagingInfoXML = ImagingInfoXML(path_d_folder=self.path_d_folder)
+            imaging_info: ImagingInfoXML = ImagingInfoXML(
+                path_d_folder=self.path_d_folder
+            )
             names: np.ndarray[str] = imaging_info.spotName
             rxys: np.ndarray[int] = get_rxy(names)
             cols: list = [comp, 'R', 'x', 'y']
@@ -1707,21 +1808,79 @@ class ProjectBaseClass:
                 )
             return comp_
 
-        assert source in ('reader', 'spectra', 'data_obj', 'time_series')
+        sources = ('reader', 'spectra', 'data_obj', 'time_series', 'da_export')
+        assert source in sources, f'No source named {source}, must be one of {sources}'
+
+        if source in ('reader', 'spectra', 'da_export') and (not self._is_MSI):
+            raise KeyError(f'{source} is not a valid source for XRF')
 
         if source in ('reader', 'spectra'):
-            if not self._is_MSI:
-                raise KeyError(f'{source} is not a valid source for XRF')
             reader, df = reader_setup()
             obj = self.spectra if source == 'spectra' else reader
             df: pd.DataFrame = spectra_iterator(obj, reader, df)
-            plot_comp(data_frame=df, title=title, comp=comp, **kwargs)
+
+            if plot_on_background:
+                plot_comp_on_image(
+                    comp=comp,
+                    background_image=convert('cv', 'np', self.image_roi.image),
+                    data_frame=df, **kwargs
+                )
+            else:
+                plot_comp(data_frame=df, title=title, comp=comp, **kwargs)
+        elif source == 'da_export':
+            assert da_export_file is not None, \
+                'if method da_export is used, the da_export_file must be specified'
+            pixel_names, spectra_mzs, spectra_intensities, _ = get_da_export_data(
+                da_export_file
+            )
+            df: pd.DataFrame = get_da_export_ion_image(
+                mz=comp,
+                pixel_names=pixel_names,
+                spectra_mzs=spectra_mzs,
+                data=spectra_intensities,
+                tolerance=tolerance
+            )
+            self.data_obj = MSI(self.path_d_folder)
+            self.data_obj.feature_table = df
+            self.add_pixels_ROI()
+            self.add_holes()
+
+            if (
+                    ('distance_pixels' not in kwargs) and
+                    (self.data_obj is not None) and
+                    hasattr(self.data_obj, 'distance_pixels')
+            ):
+                kwargs['distance_pixels'] = self.data_obj.distance_pixels
+            if plot_on_background:
+                plot_comp_on_image(
+                    comp=comp,
+                    background_image=self.image_roi.image,
+                    data_frame=self.data_obj.feature_table,
+                    title=title,
+                    **kwargs
+                )
+            else:
+                plot_comp(
+                    data_frame=self.data_obj.feature_table,
+                    title=title,
+                    comp=comp,
+                    **kwargs
+                )
         elif source in ('data_obj', 'time_series'):
             assert self.__getattribute__(source) is not None,\
                 f'make sure to set the {source} before selecting it as source'
             obj = self.data_obj if source == 'data_obj' else self.time_series
             comp: str = find_compound(obj, comp)
-            obj.plot_comp(title=title, comp=comp, **kwargs)
+            if plot_on_background:
+                plot_comp_on_image(
+                    comp=comp,
+                    background_image=self.image_roi.image,
+                    data_frame=self.data_obj.feature_table,
+                    title=title,
+                    **kwargs
+                )
+            else:
+                obj.plot_comp(title=title, comp=comp, **kwargs)
 
 
 class ProjectXRF(ProjectBaseClass):
@@ -1851,7 +2010,7 @@ class ProjectXRF(ProjectBaseClass):
             path_image_roi_file=self.path_image_roi_file
         )
 
-    def set_image_handler(self, overwrite=False):
+    def set_image_handler(self):
         """
         Initialize and SampleImageHandlerXRF object and set the photo.
 
@@ -1862,37 +2021,75 @@ class ProjectXRF(ProjectBaseClass):
         """
         assert (self.image_file is not None) and hasattr(self, 'image_roi_file'), \
             'ensure the image files have good names (matching measurement name)'
-        self.image_handler: SampleImageHandlerXRF = SampleImageHandlerXRF(
+        self._image_handler: SampleImageHandlerXRF = SampleImageHandlerXRF(
             path_folder=self.path_folder,
             path_image_file=self.path_image_file,
             path_image_roi_file=self.path_image_roi_file
         )
-        if hasattr(self, 'SampleImageHandlerXRF_file') and (not overwrite):
-            self.image_handler.load()
-            self.image_handler.set_photo()
         if not hasattr(self.image_handler, 'extent_spots'):
-            self.image_handler.set_photo()
-            self.image_handler.set_extent_data()
-            self.image_handler.save()
-        if (not hasattr(self.image_handler, 'image_roi')) or (not hasattr(self.image_handler, 'data_ROI_xywh')):
-            self.image_handler.set_photo_ROI()
-            self.image_handler.save()
+            self._image_handler.set_photo()
+            self._image_handler.set_extent_data()
+            self._image_handler.save()
+        if (
+                (not hasattr(self._image_handler, 'image_roi'))
+                or (not hasattr(self._image_handler, 'data_ROI_xywh'))
+        ):
+            self._image_handler.set_photo_ROI()
+            self._image_handler.save()
 
         self._update_files()
 
-    def set_object(self, **kwargs):
-        self.data_obj = XRF(
+    def require_image_handler(self, overwrite=False) -> SampleImageHandlerXRF:
+        self._image_handler: SampleImageHandlerXRF = SampleImageHandlerXRF(
+            path_folder=self.path_folder,
+            path_image_file=self.path_image_file,
+            path_image_roi_file=self.path_image_roi_file
+        )
+        call_set = True
+        if hasattr(self, 'SampleImageHandlerXRF_file') and (not overwrite):
+            self._image_handler.load()
+            self._image_handler.set_photo()
+            call_set = False
+            if not all([
+                hasattr(self._image_handler, attr)
+                for attr in ('extent_spots', 'image_roi', 'data_ROI_xywh')
+            ]):
+                logger.warning(
+                    'found partially initialized SampleImageHandler, calling '
+                    'setter'
+                )
+                call_set = True
+        if call_set:
+            self.set_image_handler()
+
+        return self._image_handler
+
+    def set_data_object(self, **kwargs):
+        self._data_obj = XRF(
             path_folder=self.path_folder,
             measurement_name=self.measurement_name,
             **kwargs
         )
-        if hasattr(self, 'XRF_file'):
-            self.data_obj.load()
-            if hasattr(self.data_obj, 'feature_table'):
-                logger.info('loaded data object')
-                return
-        self.data_obj.set_feature_table_from_txts()
-        self.data_obj.feature_table['R'] = 0
+        self._data_obj.set_feature_table_from_txts()
+        self._data_obj.feature_table['R'] = 0
+
+    def require_data_object(self, overwrite: bool = False, **kwargs):
+        self._data_obj = XRF(
+            path_folder=self.path_folder,
+            measurement_name=self.measurement_name,
+            **kwargs
+        )
+        call_set = True
+        if hasattr(self, 'XRF_file') and not overwrite:
+            self._data_obj.load()
+            call_set = False
+            if not hasattr(self._data_obj, 'feature_table'):
+                logger.info('loaded object does not have feature table, setting new one')
+                call_set = True
+        if call_set:
+            self.set_data_object(**kwargs)
+
+        return self._data_obj
 
 
 class ProjectMSI(ProjectBaseClass):
@@ -1901,7 +2098,7 @@ class ProjectMSI(ProjectBaseClass):
     def __init__(
             self,
             path_folder,
-            depth_span: tuple[int | float] = None,
+            depth_span: tuple[int | float, int | float] = None,
             d_folder: str | None = None,
             mis_file: str | None = None,
             is_laminated: bool = True
@@ -2038,19 +2235,32 @@ class ProjectMSI(ProjectBaseClass):
         None.
 
         """
-        self.image_handler = SampleImageHandlerMSI(
+        self._image_handler = SampleImageHandlerMSI(
+            path_folder=self.path_folder,
+            path_d_folder=self.path_d_folder,
+            path_mis_file=self.path_mis_file
+        )
+
+        self._image_handler.set_extent_data()
+        self._image_handler.set_photo_ROI()
+        self._image_handler.save()
+        self._update_files()
+        self._image_handler.set_photo()
+
+    def require_image_handler(self, overwrite=False) -> SampleImageHandlerMSI:
+        self._image_handler = SampleImageHandlerMSI(
             path_folder=self.path_folder,
             path_d_folder=self.path_d_folder,
             path_mis_file=self.path_mis_file
         )
         if hasattr(self, 'SampleImageHandlerMSI_file') and (not overwrite):
             logger.info(f'loading SampleHandler from {self.path_folder}')
-            self.image_handler.load()
-        if not hasattr(self.image_handler, 'extent_spots') or overwrite:
-            self.image_handler.set_extent_data()
-            self.image_handler.set_photo_ROI()
-            self.image_handler.save()
-        self.image_handler.set_photo()
+            self._image_handler.load()
+            self._image_handler.set_photo()
+        if not hasattr(self._image_handler, 'extent_spots') or overwrite:
+            self.set_image_handler()
+
+        return self._image_handler
 
     def get_mcf_reader(self) -> ReadBrukerMCF:
         reader = ReadBrukerMCF(self.path_d_folder)
@@ -2084,13 +2294,6 @@ class ProjectMSI(ProjectBaseClass):
         reader = hdf5Handler(self.path_d_folder)
         return reader
 
-    def get_reader(self, prefer_hdf: bool = True) -> ReadBrukerMCF | hdf5Handler:
-        if hasattr(self, 'Spectra_file') and prefer_hdf:
-            reader = self.get_hdf_reader()
-        else:
-            reader = self.get_mcf_reader()
-        return reader
-
     def require_hdf_reader(self) -> hdf5Handler:
         if not hasattr(self, 'Spectra_file'):
             reader: ReadBrukerMCF = self.get_mcf_reader()
@@ -2099,87 +2302,121 @@ class ProjectMSI(ProjectBaseClass):
             reader: hdf5Handler = self.get_hdf_reader()
         return reader
 
+    def get_reader(self, prefer_hdf: bool = True) -> ReadBrukerMCF | hdf5Handler:
+        if hasattr(self, 'Spectra_file') and prefer_hdf:
+            reader = self.get_hdf_reader()
+        else:
+            reader = self.get_mcf_reader()
+        return reader
+
     def set_spectra(
             self,
             reader: ReadBrukerMCF | hdf5Handler = None,
             full: bool = True,
-            overwrite: bool = False,
+            spectra: Spectra | None = None,
             SNR_threshold: float = 2,
             plts: bool = False
-
     ):
         # create spectra object
-        if (
-                (
-                    hasattr(self, 'spectra_object_file')
-                    or hasattr(self, 'Spectra_file')
-                ) and not overwrite
-        ):
-            self.spectra = Spectra(
-                path_d_folder=self.path_d_folder, initiate=False
-            )
-            self.spectra.load()
-            if hasattr(self.spectra, 'feature_table'):
-                logger.info('loaded fully initialized spectra object')
-                return
-            elif hasattr(self.spectra, 'line_spectra'):
-                logger.info('loaded fully initialized spectra object')
-                self.spectra.binned_spectra_to_df()
-                self.spectra.save()
-                return
-            elif reader is None:
-                reader = self.require_hdf_reader()
+        if spectra is None:
+            self._spectra: Spectra = Spectra(reader=reader)
         else:
-            if reader is None:
-                reader = self.require_hdf_reader()
-            self.spectra: Spectra = Spectra(reader=reader)
+            self._spectra = spectra
+
+        if reader is None:
+            reader = self.require_hdf_reader()
         if not full:
             logger.info('Setting partially initialized spectra object')
             return
 
-        if not np.any(self.spectra.intensities.astype(bool)):
+        if not np.any(self._spectra.intensities.astype(bool)):
             logger.info('spectra object does not have a summed intensity')
-            self.spectra.add_all_spectra(reader)
-            self.spectra.subtract_baseline(plts=plts)
-            self.spectra.set_calibrate_functions(reader=reader)
-            self.spectra.plot_calibration_functions(reader, n=3)
-            self.spectra.add_all_spectra(reader)
-            self.spectra.subtract_baseline(overwrite=True)
+            self._spectra.add_all_spectra(reader)
+            self._spectra.subtract_baseline(plts=plts)
+            self._spectra.set_calibrate_functions(reader=reader)
+            self._spectra.plot_calibration_functions(reader, n=3)
+            self._spectra.add_all_spectra(reader)
+            self._spectra.subtract_baseline(overwrite=True)
         if not hasattr(self.spectra, 'peaks'):
             logger.info('spectra object does not have peaks')
-            self.spectra.set_peaks()
+            self._spectra.set_peaks()
         if not hasattr(self.spectra, 'kernel_params'):
             logger.info('spectra object does not have kernels')
-            self.spectra.set_kernels()
+            self._spectra.set_kernels()
         if not hasattr(self.spectra, 'line_spectra'):
             logger.info('spectra object does not have binned spectra')
-            self.spectra.bin_spectra(reader)
-            self.filter_line_spectra(SNR_threshold=SNR_threshold)
+            self._spectra.bin_spectra(reader)
+            self._spectra.filter_line_spectra(SNR_threshold=SNR_threshold)
         if not hasattr(self.spectra, 'feature_table'):
-            self.spectra.binned_spectra_to_df()
+            self._spectra.binned_spectra_to_df()
 
         if plts:
-            self.spectra.plt_summed()
+            self._spectra.plt_summed()
 
-        self.spectra.save()
+        self._spectra.save()
         self._update_files()
 
-    def set_object(self, overwrite: bool = False):
-        self.data_obj: MSI = MSI(self.path_d_folder, path_mis_file=self.path_mis_file)
-        if hasattr(self, 'MSI_file') and not overwrite:
-            self.data_obj.load()
-            if hasattr(self.data_obj, 'feature_table'):
-                return
+    def require_spectra(self, overwrite: bool = False, **kwargs) -> Spectra:
+        call_set = True
+        if (
+            (
+                hasattr(self, 'spectra_object_file')
+                or hasattr(self, 'Spectra_file')
+            ) and not overwrite
+        ):
+            self._spectra = Spectra(
+                path_d_folder=self.path_d_folder, initiate=False
+            )
+            self._spectra.load()
+            call_set = False
+            if hasattr(self._spectra, 'feature_table'):
+                logger.info('loaded fully initialized spectra object')
+            elif hasattr(self._spectra, 'line_spectra'):
+                logger.info('loaded fully initialized spectra object')
+                self._spectra.binned_spectra_to_df()
+                call_set = True
+        if call_set:
+            self.set_spectra(
+                spectra=self._spectra,  # continue from loaded spectra or None
+                **kwargs
+            )
 
+        return self._spectra
+
+    @property
+    def spectra(self) -> Spectra:
+        return self.require_spectra()
+
+    def set_data_object(self, source='spectra'):
         assert (
             (self.spectra is not None) and (
                 hasattr(self.spectra, 'feature_table')
                 or hasattr(self.spectra, 'line_spectra')
             )
         ), 'set spectra object first'
+        self._data_object: MSI = MSI(
+            self.path_d_folder, path_mis_file=self.path_mis_file
+        )
+        self._data_obj.set_distance_pixels()
+        if source == 'spectra':
+            self._data_obj.set_feature_table_from_spectra(self.spectra)
+        elif source == 'da_export':
+            raise NotImplementedError()
+        else:
+            raise NotImplementedError()
 
-        self.data_obj.set_distance_pixels()
-        self.data_obj.set_feature_table_from_spectra(self.spectra)
+    def require_data_object(self, overwrite=False):
+        self._data_obj: MSI = MSI(self.path_d_folder, path_mis_file=self.path_mis_file)
+        call_set = True
+        if hasattr(self, 'MSI_file') and not overwrite:
+            self.data_obj.load()
+            call_set = False
+            if hasattr(self.data_obj, 'feature_table'):
+                call_set = True
+        if call_set:
+            self.set_data_object()
+
+        return self._data_obj
 
     def add_xrf(self, project_xrf: ProjectXRF, **kwargs) -> None:
         self.combine_with_project(project_xrf, tag='xrf', **kwargs)
@@ -2206,7 +2443,8 @@ def get_project(is_MSI: bool, *args, **kwargs) -> ProjectMSI | ProjectXRF:
 
 class MultiMassWindowProject(ProjectBaseClass):
     """
-    Project with multiple measurement windows (e.g. XRF and MSI or MSI with multiple mass windows).
+    Project with multiple measurement windows (e.g. XRF and MSI or MSI with
+    multiple mass windows).
     """
 
     def __init__(self, *projects: Iterable[ProjectMSI | ProjectXRF]):

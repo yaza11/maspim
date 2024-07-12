@@ -21,7 +21,7 @@ path_xray = r'D:/Cariaco line scan Xray/Cariaco Xray/sliced/MD_03_2621_480-510_s
 
 # s = Spectra()
 
-# P.set_age_model(
+# P.require_age_model(
 #     path_file=r'G:/Meine Ablage/Master Thesis/AgeModel/480_510_MSI_age_model_mm_yr.txt',
 #     sep='\t',
 #     index_col=False,
@@ -33,7 +33,7 @@ def test_all(path_folder, depth_span=(490, 495), obj_color='light'):
 
     # age model (required for ImageROI (choice of filter size) and to add age to MSI)
     logger.info('setting age model ...')
-    P.set_age_model()
+    P.require_age_model()
     logger.info('setting depth span ...')
     P.set_depth_span(depth_span=depth_span)  # required for age_span and add_depth_to_msi
     logger.info('setting age span ...')
@@ -55,7 +55,7 @@ def test_all(path_folder, depth_span=(490, 495), obj_color='light'):
 
     # msi
     logger.info('setting data object ...')
-    P.set_object()
+    P.set_data_object()
     logger.info('setting ROI')
     P.add_pixels_ROI()
     logger.info('setting photo in ft ...')
@@ -85,7 +85,7 @@ def test_msi_minimal(path_folder):
     P = get_project(True, path_folder)
 
     P.set_spectra()
-    P.set_object()
+    P.set_data_object()
     return P
 
 
@@ -141,7 +141,7 @@ def test_punch_holes(
 self = test_all(path_folder)
 self = test_punch_holes(path_folder, path_xray, plts=True, depth_xray=(480, 510))
 # self.set_spectra()
-# self.set_object()
+# self.set_data_object()
 # self.set_depth_span((490, 495))
 # self.set_xray(path_xray)
 # self.set_image_roi()
@@ -171,11 +171,11 @@ self = test_punch_holes(path_folder, path_xray, plts=True, depth_xray=(480, 510)
 # msi_new = msi.combine_with(msi2)
 # P = get_project(is_MSI=True, path_folder=path_folder, depth_span=(490, 495))
 # P.set_spectra()
-# P.set_object()
+# P.set_data_object()
 # P.set_spectra()
 # P.set_msi_object()
 # P.set_xray(path_xray)
-# P.set_age_model()
+# P.require_age_model()
 # P.set_age_span()
 # P.set_image_roi()
 

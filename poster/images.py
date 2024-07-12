@@ -133,7 +133,7 @@ p1, p2, t = warping(p1, p2)
 # p1.set_image_classified()
 
 # p1.set_spectra()
-# p1.set_object()
+# p1.set_data_object()
 
 # p1.add_depth_column()
 # p1.add_age_column()

@@ -263,8 +263,6 @@ class UK37(RatioProxy):
         kwargs: str | int | float
             Keyword arguments to pass to RatioProxy.__init__
         """
-        mzs = (mC37_3, mC37_2)
-
         super().__init__(
             mz_a=mC37_2,
             mz_b=mC37_3,

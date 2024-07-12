@@ -40,7 +40,7 @@ plt.vlines([mC37_2, mC37_3], 0, 1e6, color='k', linestyle='--')
 # %%
 thresholds = [0, 1, 2, 3, 4, 5]
 for snr in thresholds:
-    p.set_object(SNR_threshold=snr)
+    p.set_data_object(SNR_threshold=snr)
     
     p.add_pixels_ROI()
     p.add_photo()
