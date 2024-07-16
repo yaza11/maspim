@@ -3,7 +3,7 @@ Cariaco/
 poster/
 .spyder/
 test*.py
-src/clustering
+src/clustering/
 src/data/annotating.py
 
 ### JetBrains template

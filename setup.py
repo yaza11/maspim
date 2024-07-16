@@ -12,7 +12,7 @@ DESCRIPTION = 'Processing of mass spectrometry imaging and micro X-Ray fluoresce
 
 # Setting up
 setup(
-    name="pyGC",
+    name="msi_workflow",
     version=VERSION,
     author="Yannick Zander",
     author_email="yzander@marum.de",

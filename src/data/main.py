@@ -27,7 +27,8 @@ logger = logging.getLogger('msi_workflow.' + __name__)
 
 
 def estimate_probability_distribution(
-        I, bin_edges: list[float] | None = None) -> tuple[np.ndarray[float], list[float], np.ndarray[float]]:
+        I, bin_edges: list[float] | None = None
+) -> tuple[np.ndarray[float], list[float], np.ndarray[float]]:
     """
     For an image I calculate the probability distribution.
 
