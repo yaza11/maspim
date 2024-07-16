@@ -5,7 +5,7 @@ import matplotlib.patches as patches
 import cv2
 import logging
 
-from src.imaging.util.Image_convert_types import ensure_image_is_gray
+from src.imaging.util.image_convert_types import ensure_image_is_gray
 
 logger = logging.getLogger("msi_workflow." + __name__)
 

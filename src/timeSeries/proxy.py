@@ -15,7 +15,7 @@ from src.res.compound_masses import (
     mC29stanol, mC29stenol, mC28, mC29  # steroids
 )
 from src.res.constants import YD_transition
-from src.timeSeries.cTimeSeries import TimeSeries
+from src.timeSeries.time_series import TimeSeries
 
 
 logger = logging.getLogger(__name__)

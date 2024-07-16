@@ -6,8 +6,8 @@ import os
 import numpy as np
 import pandas as pd
 
-from src.data.cDataClass import Data
-from src.Project.file_helpers import find_matches
+from src.data.main import Data
+from src.project.file_helpers import find_matches
 from src.res.constants import elements
 
 

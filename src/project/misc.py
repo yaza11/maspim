@@ -1,10 +1,10 @@
 import os
 import logging
 
-from src.Project.cProject import get_project, ProjectMSI
-from src.data.cAgeModel import AgeModel
-from src.exporting.from_mcf.cSpectrum import MultiSectionSpectra
-from src.timeSeries.cTimeSeries import MultiSectionTimeSeries
+from src.project.main import get_project, ProjectMSI
+from src.data.age_model import AgeModel
+from src.exporting.from_mcf.spectrum import MultiSectionSpectra
+from src.timeSeries.time_series import MultiSectionTimeSeries
 
 logger = logging.getLogger(__name__)
 

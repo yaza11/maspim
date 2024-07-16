@@ -5,9 +5,9 @@ import os
 import pandas as pd
 import logging
 
-from src.exporting.from_mcf.cSpectrum import Spectra
-from src.data.cDataClass import Data
-from src.Project.file_helpers import get_mis_file, search_keys_in_xml
+from src.exporting.from_mcf.spectrum import Spectra
+from src.data.main import Data
+from src.project.file_helpers import get_mis_file, search_keys_in_xml
 
 logger = logging.getLogger(__name__)
 

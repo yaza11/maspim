@@ -13,7 +13,7 @@ from scipy.signal import fftconvolve
 from scipy.interpolate import griddata, CubicSpline
 
 from src.imaging.register.helpers import Mapper, apply_displacement
-from src.imaging.util.Image_convert_types import ensure_image_is_gray
+from src.imaging.util.image_convert_types import ensure_image_is_gray
 
 logger = logging.getLogger(__name__)
 

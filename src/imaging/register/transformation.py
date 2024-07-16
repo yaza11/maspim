@@ -9,12 +9,12 @@ from scipy.optimize import basinhopping
 from typing import Callable, Any, Iterable, Sequence
 from skimage.transform import warp, PiecewiseAffineTransform
 
-from src.imaging.main.cImage import ImageSample, ImageROI
+from src.imaging.main.image import ImageSample, ImageROI
 from src.imaging.register.finding_global_shift import apply_stretching, fit_shifts_1D, stretching_func
 from src.imaging.register.helpers import apply_displacement, Mapper
 from src.imaging.register.tilt_descriptor import Descriptor
 from src.imaging.util.coordinate_transformations import kartesian_to_polar, polar_to_kartesian, rescale_values
-from src.imaging.util.Image_plotting import plt_contours, plt_cv2_image
+from src.imaging.util.image_plotting import plt_contours, plt_cv2_image
 from src.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
 
 logger = logging.getLogger(__name__)

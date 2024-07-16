@@ -6,8 +6,8 @@ import logging
 
 from typing import Any
 
-from src.imaging.util.Image_convert_types import ensure_image_is_gray
-from src.imaging.util.Image_plotting import plt_cv2_image
+from src.imaging.util.image_convert_types import ensure_image_is_gray
+from src.imaging.util.image_plotting import plt_cv2_image
 
 logger = logging.getLogger('msi_workflow' + __name__)
 

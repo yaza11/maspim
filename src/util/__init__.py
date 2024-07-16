@@ -1,1 +1,1 @@
-from .cClass import Convinience
+from .convinience import Convinience

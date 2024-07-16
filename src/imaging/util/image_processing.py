@@ -8,7 +8,7 @@ import scipy
 from scipy import interpolate
 from typing import Callable, Any
 
-from src.imaging.util.Image_convert_types import convert, ensure_image_is_gray, infer_mode
+from src.imaging.util.image_convert_types import convert, ensure_image_is_gray, infer_mode
 
 
 def adaptive_mean_with_mask(
@@ -441,7 +441,7 @@ def test():
     """Test functionality of all functions."""
     try:
         # setup
-        from Image_plotting import plt_cv2_image
+        from image_plotting import plt_cv2_image
         test_img = convert('np', 'cv', skimage.data.brick())
         mask = test_img < 120
         plt_cv2_image(test_img, 'original')

@@ -22,13 +22,13 @@ from scipy.ndimage import minimum_filter, median_filter
 
 from src.data.combine_feature_tables import combine_feature_tables
 from src.exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectrum
-from src.exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
+from src.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
 from src.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
 from src.exporting.from_mcf.helper import get_mzs_for_limits
 from src.res.calibrants import get_calibrants
 from src.util import Convinience
 from src.util.manage_obj_saves import class_to_attributes
-from src.Project.file_helpers import ImagingInfoXML, get_rxy
+from src.project.file_helpers import ImagingInfoXML, get_rxy
 
 logger = logging.getLogger(__name__)
 

@@ -1,1 +1,1 @@
-from Project.cProject import get_project
+from project.main import get_project

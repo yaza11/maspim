@@ -18,15 +18,15 @@ from src.imaging.interactive import InteractiveImage
 from src.imaging.register.helpers import Mapper
 from src.imaging.register.tilt_descriptor import Descriptor
 from src.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
-from src.util.cClass import Convinience
+from src.util.convinience import Convinience
 from src.imaging.misc.fit_distorted_rectangle import find_layers, distorted_rect
 from src.imaging.misc.find_punch_holes import find_holes
 
-import src.imaging.util.Image_convert_types as Image_convert_types
+import src.imaging.util.image_convert_types as Image_convert_types
 from src.imaging.util.coordinate_transformations import rescale_values
-from src.imaging.util.Image_convert_types import ensure_image_is_gray
-from src.imaging.util.Image_plotting import plt_cv2_image, plt_contours, plt_rect_on_image
-from src.imaging.util.Image_processing import (
+from src.imaging.util.image_convert_types import ensure_image_is_gray
+from src.imaging.util.image_plotting import plt_cv2_image, plt_contours, plt_rect_on_image
+from src.imaging.util.image_processing import (
     adaptive_mean_with_mask_by_rescaling,
     remove_outliers_by_median,
     func_on_image_with_mask,
@@ -34,9 +34,9 @@ from src.imaging.util.Image_processing import (
     downscale_image, adaptive_mean_with_mask
 )
 
-from src.imaging.util.Image_geometry import star_domain_contour
+from src.imaging.util.image_geometry import star_domain_contour
 
-from src.imaging.util.Image_helpers import (
+from src.imaging.util.image_helpers import (
     ensure_odd,
     get_half_width_padded,
     min_max_extent_layer,
@@ -44,7 +44,7 @@ from src.imaging.util.Image_helpers import (
     get_foreground_pixels_and_threshold, get_simplified_image, restore_unique_values
 )
 
-from src.imaging.util.Image_boxes import get_mean_intensity_box, region_in_box
+from src.imaging.util.image_boxes import get_mean_intensity_box, region_in_box
 
 logger = logging.getLogger("msi_workflow." + __name__)
 

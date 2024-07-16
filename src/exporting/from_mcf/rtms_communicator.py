@@ -52,7 +52,7 @@ class ReadBrukerMCF(ReaderBaseClass):
     or a spot name
     >>> spec = reader.get_spectrum_by_spot('R00X100Y085')
     If you define an m/z vector, it is also possible to resample the spectra right away
-    (this is not the recommended way, the Project class takes care of the details)
+    (this is not the recommended way, the project class takes care of the details)
     >>> reader.set_mzs(np.arange(spec.limits[0], spec.limits[1], 1e-4))
     >>> intensities = reader.get_spectrum_resampled_intensities(1000)
 

@@ -8,9 +8,9 @@ from typing import Iterable
 from scipy.spatial import KDTree
 from tqdm import tqdm
 
-from src.imaging.util.Image_convert_types import ensure_image_is_gray
-from src.imaging.util.Image_plotting import plt_cv2_image
-from src.imaging.util.Image_processing import threshold_background_as_min
+from src.imaging.util.image_convert_types import ensure_image_is_gray
+from src.imaging.util.image_plotting import plt_cv2_image
+from src.imaging.util.image_processing import threshold_background_as_min
 from src.imaging.util.coordinate_transformations import rescale_values
 
 logger = logging.getLogger(__name__)

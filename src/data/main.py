@@ -18,9 +18,9 @@ from src.data.helpers import plot_comp, plt_comps
 from src.util.manage_obj_saves import class_to_attributes, Data_nondata_columns
 from src.res.constants import elements
 from src.res.constants import dict_labels
-from src.util.cClass import Convinience
-from src.imaging.util.Image_plotting import plt_cv2_image
-from src.exporting.from_mcf.cSpectrum import Spectra
+from src.util.convinience import Convinience
+from src.imaging.util.image_plotting import plt_cv2_image
+from src.exporting.from_mcf.spectrum import Spectra
 
 
 logger = logging.getLogger('msi_workflow.' + __name__)

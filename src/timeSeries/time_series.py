@@ -10,7 +10,7 @@ from scipy.signal.windows import blackman
 from astropy.timeseries import LombScargle
 
 from src.data.combine_feature_tables import combine_feature_tables
-from src.util.cClass import Convinience, return_existing
+from src.util.convinience import Convinience, return_existing
 from src.res.constants import elements, YD_transition, contrasts_scaling
 from src.imaging.util.coordinate_transformations import rescale_values
 

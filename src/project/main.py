@@ -1,5 +1,5 @@
 """
-This module contains the Project class which is used to manage various objects for XRF and MSI measurements.
+This module contains the project class which is used to manage various objects for XRF and MSI measurements.
 """
 import json
 import os
@@ -23,30 +23,30 @@ from src.util import Convinience
 
 from src.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
 from src.exporting.from_mcf.helper import Spectrum
-from src.exporting.from_mcf.cSpectrum import Spectra, MultiSectionSpectra
-from src.exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
+from src.exporting.from_mcf.spectrum import Spectra, MultiSectionSpectra
+from src.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
 
-from src.data.cMSI import MSI
-from src.data.cXRF import XRF
-from src.data.cAgeModel import AgeModel
+from src.data.msi import MSI
+from src.data.xrf import XRF
+from src.data.age_model import AgeModel
 
-from src.Project.file_helpers import (
+from src.project.file_helpers import (
     get_folder_structure, find_files, get_mis_file, get_d_folder,
     search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy
 )
 
-from src.imaging.main.cImage import ImageSample, ImageROI, ImageClassified
-from src.imaging.util.Image_convert_types import (
+from src.imaging.main.image import ImageSample, ImageROI, ImageClassified
+from src.imaging.util.image_convert_types import (
     ensure_image_is_gray, PIL_to_np, convert
 )
 from src.imaging.util.coordinate_transformations import rescale_values
-from src.imaging.util.find_XRF_ROI import find_ROI_in_image, plt_match_template_scale
-from src.imaging.XRay.cXRay import XRay
+from src.imaging.util.find_xrf_roi import find_ROI_in_image, plt_match_template_scale
+from src.imaging.xray.cXRay import XRay
 from src.imaging.register.transformation import Transformation
 from src.imaging.register.helpers import Mapper
 
-from src.timeSeries.cTimeSeries import TimeSeries
-from src.timeSeries.cProxy import UK37
+from src.timeSeries.time_series import TimeSeries
+from src.timeSeries.proxy import UK37
 from src.util.read_msi_align import get_teaching_points
 
 PIL_Image.MAX_IMAGE_PIXELS = None
@@ -2519,7 +2519,7 @@ def get_project(is_MSI: bool, *args, **kwargs) -> ProjectMSI | ProjectXRF:
 
 class MultiMassWindowProject(ProjectBaseClass):
     """
-    Project with multiple measurement windows (e.g. XRF and MSI or MSI with
+    project with multiple measurement windows (e.g. XRF and MSI or MSI with
     multiple mass windows).
     """
 
@@ -2565,7 +2565,7 @@ class MultiMassWindowProject(ProjectBaseClass):
 
 class MultiSectionProject:
     """
-    Project with multiple depth sections combined, loses functionality for
+    project with multiple depth sections combined, loses functionality for
     image objects.
     """
 
