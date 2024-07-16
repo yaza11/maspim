@@ -1,6 +1,7 @@
 """
 This module contains the Project class which is used to manage various objects for XRF and MSI measurements.
 """
+import json
 import os
 import re
 import numpy as np
@@ -11,7 +12,7 @@ import logging
 from matplotlib import patches
 from scipy.interpolate import griddata
 from tqdm import tqdm
-from typing import Iterable, Self
+from typing import Iterable, Self, Any
 from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 
 from data.helpers import plot_comp, transform_feature_table, plot_comp_on_image
@@ -46,6 +47,7 @@ from imaging.register.helpers import Mapper
 
 from timeSeries.cTimeSeries import TimeSeries
 from timeSeries.cProxy import UK37
+from util.read_msi_align import get_teaching_points
 
 PIL_Image.MAX_IMAGE_PIXELS = None
 
@@ -1205,6 +1207,80 @@ class ProjectBaseClass:
                 f'the image_classification with use_tilt_correction set to True'
             )
         self.image_classified.set_corrected_image()
+
+    def set_punchholes_from_msi_align(
+            self, path_file_msi_align: str | None = None
+    ):
+        assert os.path.exists(path_file_msi_align), \
+            f'Provided file {path_file_msi_align} does not exist'
+        assert path_file_msi_align.split(".")[1] == 'json', \
+            'Provided file must be a json'
+
+        # teaching points of the photo
+        x_data, y_data, labels_data = get_teaching_points(
+            self.image_sample.path_image_file,
+            path_file_msi_align
+        )
+        # subtract the x and y ROI coordinates from the returned teaching points
+        # since teaching points are set on the entire images
+        x_ROI, y_ROI, *_ = self.image_sample.xywh_ROI
+
+        x_data: np.ndarray[float] = np.array(x_data) - x_ROI
+        y_data: np.ndarray[float] = np.array(y_data) - y_ROI
+
+        # TODO: check if this is x, y or y, x
+        self.holes_data: list[np.ndarray[int], np.ndarray[int]] = [
+            np.around(x_data).astype(int), np.around(y_data).astype(int)
+        ]
+
+        # teaching points of the photo
+        x_xray, y_xray, labels_xray = get_teaching_points(
+            self.image_sample.path_image_file,
+            path_file_msi_align
+        )
+        # subtract the x and y ROI coordinates from the returned teaching points
+        # since teaching points are set on the entire images
+        x_ROI, y_ROI, *_ = self.xray.xywh_ROI
+
+        x_xray: np.ndarray[float] = np.array(x_xray) - x_ROI
+        y_xray: np.ndarray[float] = np.array(y_xray) - y_ROI
+
+        # find the three points corresponding to the image
+        # 1. by labels
+        x_xray_new = []
+        y_xray_new = []
+        if labels_xray is not None:
+            with open(path_file_msi_align, 'r') as f:
+                d: dict[str, Any] = json.load(f)
+                mapping: str = d['pair_tp_str']
+                mapping: dict[int, int] = {
+                    int(e.split()[0]): int(e.split()[1])
+                    for e in mapping.split('\n')
+                }
+                assert (len(list(mapping.keys()) + list(mapping.values()))
+                        == len(set(mapping.keys()) | set(mapping.values()))), \
+                    'Found duplicate labels, make sure there are no duplicates'
+                inverse_mapping: dict[int, int] = {v: k for k, v in mapping.items()}
+            for label in labels_data:
+                m = mapping if label in mapping else inverse_mapping
+                # should have exactly one match
+                idx: np.ndarray[int] = np.argwhere(labels_xray == m[label]).squeeze()
+                assert idx.size == 1
+                x_xray_new.append(x_xray[idx])
+                y_xray_new.append(y_xray[idx])
+        # 2. closest in terms of relative image coordinates
+        else:
+            for xd, yd in zip(x_data, y_data):
+                # TODO: scale coordinates
+                # TODO: center X-Ray around section corresponding to image
+                idx_min = np.argmin((x_xray - xd) ** 2 + (y_xray - yd) ** 2)
+                x_xray_new.append(x_xray[idx_min])
+                y_xray_new.append(y_xray[idx_min])
+
+        # TODO: check if this is x, y or y, x
+        self.holes_xray: list[np.ndarray[int], np.ndarray[int]] = [
+            np.around(x_xray).astype(int), np.around(y_xray).astype(int)
+        ]
 
     def set_punchholes(
             self,

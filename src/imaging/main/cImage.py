@@ -907,6 +907,10 @@ class ImageSample(Image):
         return self._image_roi, self._xywh_ROI
 
     @property
+    def xywh_ROI(self):
+        return self._require_image_sample_area()[1]
+
+    @property
     def image_sample_area(self) -> np.ndarray:
         """Return a copy of the sample area."""
         x, y, w, h = self._require_image_sample_area()[1]
