@@ -1,10 +1,9 @@
 import os
 import re
-from typing import Iterable
-
 import numpy as np
 import pandas as pd
 
+from typing import Iterable
 from textdistance import damerau_levenshtein as textdistance
 
 def find_matches(

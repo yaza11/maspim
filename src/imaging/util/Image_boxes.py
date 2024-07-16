@@ -1,13 +1,13 @@
 """Functions for handling boxes."""
-from typing import Any
-
-from imaging.util.Image_convert_types import ensure_image_is_gray
-from imaging.util.Image_plotting import plt_cv2_image
-
 import matplotlib.pyplot as plt
 import cv2
 import numpy as np
 import logging
+
+from typing import Any
+
+from src.imaging.util.Image_convert_types import ensure_image_is_gray
+from src.imaging.util.Image_plotting import plt_cv2_image
 
 logger = logging.getLogger('msi_workflow' + __name__)
 

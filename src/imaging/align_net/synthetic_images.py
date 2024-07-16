@@ -1,16 +1,14 @@
 import os
+import numpy as np
 
+from matplotlib import pyplot as plt
 from PIL import Image
 
 if __name__ == '__main__':
     import sys
     sys.path.append('../../')
 
-from imaging.register.finding_global_shift import warp_with_params, interpolate_shifts
-
-import numpy as np
-
-from matplotlib import pyplot as plt
+from src.imaging.register.finding_global_shift import warp_with_params, interpolate_shifts
 
 
 

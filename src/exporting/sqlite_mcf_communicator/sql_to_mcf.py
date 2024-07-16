@@ -1,8 +1,8 @@
 """Obtain snr, intensities and fwhm from the SQL file. Complementary to the from_sqlite module."""
-from exporting.from_sqlite.parser import parse_sqlite
-
 import os
 import numpy as np
+
+from src.exporting.from_sqlite.parser import parse_sqlite
 
 names: list[str] = ['xy', 'snr', 'mzs', 'intensities', 'fwhm']
 

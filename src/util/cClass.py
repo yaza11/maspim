@@ -5,7 +5,7 @@ import os
 import pickle
 import logging
 
-from util.manage_obj_saves import class_to_attributes
+from src.util.manage_obj_saves import class_to_attributes
 
 logger = logging.getLogger("msi_workflow." + __name__)
 

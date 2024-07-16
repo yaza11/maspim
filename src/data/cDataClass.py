@@ -1,17 +1,6 @@
 """Superclass for cMSI, cXRF, cXRay."""
-from data.helpers import plot_comp, plt_comps
-from util.manage_obj_saves import class_to_attributes, Data_nondata_columns
-from res.constants import elements
-
 import os
 import pickle
-from typing import Callable, Self
-
-from res.constants import dict_labels
-from util.cClass import Convinience
-from imaging.util.Image_plotting import plt_cv2_image
-from exporting.from_mcf.cSpectrum import Spectra
-
 import cv2
 import scipy
 import numpy as np
@@ -19,10 +8,20 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import logging
 
+from typing import Callable, Self
 from collections.abc import Iterable
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA, NMF
 from sklearn.preprocessing import StandardScaler, MaxAbsScaler
+
+from src.data.helpers import plot_comp, plt_comps
+from src.util.manage_obj_saves import class_to_attributes, Data_nondata_columns
+from src.res.constants import elements
+from src.res.constants import dict_labels
+from src.util.cClass import Convinience
+from src.imaging.util.Image_plotting import plt_cv2_image
+from src.exporting.from_mcf.cSpectrum import Spectra
+
 
 logger = logging.getLogger('msi_workflow.' + __name__)
 

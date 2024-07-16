@@ -1,7 +1,4 @@
 """Feature descriptor based on rectangular filters."""
-from imaging.register.helpers import Mapper, apply_displacement
-from imaging.util.Image_convert_types import ensure_image_is_gray
-
 import matplotlib
 import numpy as np
 import logging
@@ -14,6 +11,9 @@ from skimage.filters import threshold_otsu
 from skimage.transform import rotate
 from scipy.signal import fftconvolve
 from scipy.interpolate import griddata, CubicSpline
+
+from src.imaging.register.helpers import Mapper, apply_displacement
+from src.imaging.util.Image_convert_types import ensure_image_is_gray
 
 logger = logging.getLogger(__name__)
 

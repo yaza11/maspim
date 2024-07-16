@@ -9,7 +9,6 @@ import pandas as pd
 
 from subprocess import Popen, PIPE
 from typing import Iterable, Callable, Any, Self
-
 from matplotlib import pyplot as plt
 
 

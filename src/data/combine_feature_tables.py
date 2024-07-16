@@ -1,7 +1,8 @@
 """Helper module for combining feature tables."""
+import pandas as pd
 
 from typing import Iterable
-import pandas as pd
+
 
 def combine_feature_tables(fts: Iterable[pd.DataFrame]) -> pd.DataFrame:
     """

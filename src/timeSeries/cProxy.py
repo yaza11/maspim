@@ -1,14 +1,4 @@
 """Calculate ratio proxies from time series data."""
-from data.combine_feature_tables import combine_feature_tables
-from res.compound_masses import (
-    mC37_2, mC37_3,  # alkenones
-    mGDGT0, mGDGT1, mGDGT2, mGDGT3, mCren_p,  # GDGTS
-    mC24FA, mC26FA, mC28FA, mC30FA,  # FA's
-    mC29stanol, mC29stenol, mC28, mC29  # steroids
-)
-from res.constants import YD_transition
-from timeSeries.cTimeSeries import TimeSeries
-
 import scipy
 import pandas as pd
 import numpy as np
@@ -16,6 +6,17 @@ import matplotlib.pyplot as plt
 import logging
 
 from typing import Iterable, Callable
+
+from src.data.combine_feature_tables import combine_feature_tables
+from src.res.compound_masses import (
+    mC37_2, mC37_3,  # alkenones
+    mGDGT0, mGDGT1, mGDGT2, mGDGT3, mCren_p,  # GDGTS
+    mC24FA, mC26FA, mC28FA, mC30FA,  # FA's
+    mC29stanol, mC29stenol, mC28, mC29  # steroids
+)
+from src.res.constants import YD_transition
+from src.timeSeries.cTimeSeries import TimeSeries
+
 
 logger = logging.getLogger(__name__)
 

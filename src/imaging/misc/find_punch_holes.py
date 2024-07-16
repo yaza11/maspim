@@ -1,11 +1,11 @@
 """Module for finding squre-shaped holes at the boundary of samples."""
-from imaging.util.Image_convert_types import ensure_image_is_gray
-
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import cv2
 import logging
+
+from src.imaging.util.Image_convert_types import ensure_image_is_gray
 
 logger = logging.getLogger("msi_workflow." + __name__)
 

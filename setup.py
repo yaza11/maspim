@@ -1,15 +1,35 @@
-from setuptools import setup
+from setuptools import setup, find_packages
+import codecs
+import os
 
+here = os.path.abspath(os.path.dirname(__file__))
+
+with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
+    long_description = "\n" + fh.read()
+
+VERSION = '0.0.1'
+DESCRIPTION = 'Analyse GC FID and IRMS data (dxf and txt files)'
+LONG_DESCRIPTION = 'A package that allows integrate peaks in GC FID and IRMS data.'
+
+# Setting up
 setup(
-    name='msi_workflow',
-    version='1.0',
-    packages=['res', 'data', 'util', 'imaging', 'imaging.main', 'imaging.misc', 'imaging.test',
-              'imaging.util', 'imaging.XRay', 'imaging.register', 'imaging.align_net', 'Project',
-              'exporting', 'exporting.legacy', 'exporting.from_mcf', 'exporting.from_sqlite',
-              'exporting.sqlite_mcf_communicator', 'timeSeries'],
-    url='https://github.com/weimin-liu/msi_workflow',
-    license='',
-    author='Yannick Zander, Weimin Liu',
-    author_email='yzander@marum.de',
-    description=''
+    name="pyGC",
+    version=VERSION,
+    author="Yannick Zander",
+    author_email="yzander@marum.de",
+    description=DESCRIPTION,
+    long_description_content_type="text/markdown",
+    long_description=long_description,
+    url="https://github.com/weimin-liu/msi_workflow",
+    packages=find_packages(),
+    install_requires=['matplotlib', 'numpy', 'pandas', 'rpy2', 'scipy', 'tqdm', 'cv2', 'sklearn'],
+    extras_require={'dev': 'twine'},
+    keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI', 'laminated', 'lamination', 'image registration'],
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: Unix",
+        "Operating System :: MacOS :: MacOS X",
+        "Operating System :: Microsoft :: Windows",
+    ]
 )

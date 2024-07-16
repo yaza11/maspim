@@ -1,16 +1,4 @@
-from copy import deepcopy
-
-import pywt
-
-from data.combine_feature_tables import combine_feature_tables
-from util.cClass import Convinience, return_existing, verbose_function
-from res.constants import elements, YD_transition, contrasts_scaling
-from util.manage_obj_saves import class_to_attributes
-from imaging.util.coordinate_transformations import rescale_values
-from Project.file_helpers import get_d_folder
-
 import os
-import pickle
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,6 +8,12 @@ from sklearn.preprocessing import StandardScaler
 from scipy.signal import detrend
 from scipy.signal.windows import blackman
 from astropy.timeseries import LombScargle
+
+from src.data.combine_feature_tables import combine_feature_tables
+from src.util.cClass import Convinience, return_existing
+from src.res.constants import elements, YD_transition, contrasts_scaling
+from src.imaging.util.coordinate_transformations import rescale_values
+
 
 logger = logging.getLogger('msi_workflow.' + __name__)
 

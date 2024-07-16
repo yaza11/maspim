@@ -6,21 +6,10 @@ In this module is also a class, that allows to handle multiple depth sections at
 """
 from __future__ import annotations
 
-from data.combine_feature_tables import combine_feature_tables
-from exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectrum
-from exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
-from exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
-from exporting.from_mcf.helper import get_mzs_for_limits
-from res.calibrants import get_calibrants
-from util import Convinience
-from util.manage_obj_saves import class_to_attributes
-from Project.file_helpers import ImagingInfoXML, get_rxy
-
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
-import re
 import pickle
 import psutil
 import logging
@@ -31,6 +20,15 @@ from scipy.signal import find_peaks, correlate, correlation_lags, peak_widths
 from scipy.optimize import curve_fit
 from scipy.ndimage import minimum_filter, median_filter
 
+from src.data.combine_feature_tables import combine_feature_tables
+from src.exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectrum
+from src.exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
+from src.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
+from src.exporting.from_mcf.helper import get_mzs_for_limits
+from src.res.calibrants import get_calibrants
+from src.util import Convinience
+from src.util.manage_obj_saves import class_to_attributes
+from src.Project.file_helpers import ImagingInfoXML, get_rxy
 
 logger = logging.getLogger(__name__)
 

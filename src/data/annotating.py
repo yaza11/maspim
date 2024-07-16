@@ -1,6 +1,7 @@
-# project
-from res.constants import elements, max_deviation_mz
-from res.directory_paths import file_dataBase
+raise NotImplementedError()
+
+from src.res.constants import elements, max_deviation_mz
+from src.res.directory_paths import file_dataBase
 # python
 from typing import Iterable
 from dataclasses import dataclass

@@ -1,39 +1,5 @@
 """Main image module. Implements the ImageSample, ImageROI and ImageClassified classes."""
 import skimage.transform
-from tqdm import tqdm
-
-from imaging.interactive import InteractiveImage
-from imaging.register.helpers import Mapper
-from imaging.register.tilt_descriptor import Descriptor
-from res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
-from util.cClass import Convinience
-from imaging.misc.fit_distorted_rectangle import find_layers, distorted_rect
-from imaging.misc.find_punch_holes import find_holes
-
-import imaging.util.Image_convert_types as Image_convert_types
-from imaging.util.coordinate_transformations import rescale_values
-from imaging.util.Image_convert_types import ensure_image_is_gray
-from imaging.util.Image_plotting import plt_cv2_image, plt_contours, plt_rect_on_image
-from imaging.util.Image_processing import (
-    adaptive_mean_with_mask_by_rescaling,
-    remove_outliers_by_median,
-    func_on_image_with_mask,
-    auto_downscaled_image,
-    downscale_image, adaptive_mean_with_mask
-)
-
-from imaging.util.Image_geometry import star_domain_contour
-
-from imaging.util.Image_helpers import (
-    ensure_odd,
-    get_half_width_padded,
-    min_max_extent_layer,
-    filter_contours_by_size,
-    get_foreground_pixels_and_threshold, get_simplified_image, restore_unique_values
-)
-
-from imaging.util.Image_boxes import get_mean_intensity_box, region_in_box
-
 import pandas as pd
 import os
 import cv2
@@ -46,6 +12,39 @@ import logging
 from skimage.segmentation import expand_labels
 from scipy.optimize import minimize
 from typing import Iterable, Self, Any
+from tqdm import tqdm
+
+from src.imaging.interactive import InteractiveImage
+from src.imaging.register.helpers import Mapper
+from src.imaging.register.tilt_descriptor import Descriptor
+from src.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
+from src.util.cClass import Convinience
+from src.imaging.misc.fit_distorted_rectangle import find_layers, distorted_rect
+from src.imaging.misc.find_punch_holes import find_holes
+
+import src.imaging.util.Image_convert_types as Image_convert_types
+from src.imaging.util.coordinate_transformations import rescale_values
+from src.imaging.util.Image_convert_types import ensure_image_is_gray
+from src.imaging.util.Image_plotting import plt_cv2_image, plt_contours, plt_rect_on_image
+from src.imaging.util.Image_processing import (
+    adaptive_mean_with_mask_by_rescaling,
+    remove_outliers_by_median,
+    func_on_image_with_mask,
+    auto_downscaled_image,
+    downscale_image, adaptive_mean_with_mask
+)
+
+from src.imaging.util.Image_geometry import star_domain_contour
+
+from src.imaging.util.Image_helpers import (
+    ensure_odd,
+    get_half_width_padded,
+    min_max_extent_layer,
+    filter_contours_by_size,
+    get_foreground_pixels_and_threshold, get_simplified_image, restore_unique_values
+)
+
+from src.imaging.util.Image_boxes import get_mean_intensity_box, region_in_box
 
 logger = logging.getLogger("msi_workflow." + __name__)
 
@@ -467,7 +466,7 @@ class ImageSample(Image):
 
     Example Usage
     -------------
-    >>> from imaging.main.cImage import ImageSample
+    >>> from src.imaging.main.cImage import ImageSample
     Create an ImageSample object from an image on disk
     >>> i = ImageSample(path_image_file="/path/to/your/file")
     in this case the object color will be infered, it is adviced to set it manually
@@ -486,7 +485,7 @@ class ImageSample(Image):
     It is recommended to stick to the properties, e.g. image, image_grayscale, image_binary, image_simplified, main_contour.
     The most important property is the image_sample_area which is the final result of performing all the steps of finding
     the sample area, so initiating and checking a new instance could look like this:
-    >>> from imaging.main.cImage import ImageSample
+    >>> from src.imaging.main.cImage import ImageSample
     >>> i = ImageSample(path_image_file="/path/to/your/file")
     >>> i.set_sample_area()
     >>> i.plot_overview()
@@ -970,7 +969,7 @@ class ImageROI(Image):
 
     If the image is derived from an ImageSample object, it is advised to iniate the ImageROI instance from
     the 'from_parent' constructor:
-    >>> from imaging.main.cImage import ImageROI
+    >>> from src.imaging.main.cImage import ImageROI
     >>> i = ImageSample(...)
     >>> i.set_from_parent(...)
     >>> ir = ImageROI.from_parent(i)
@@ -978,7 +977,7 @@ class ImageROI(Image):
     Otherwise the instance can be initiated using the default constructor by either providing an image or a file to an image.
     For file management it is required to specify the path_folder, if path_image_file is not provided (otherwise the folder
     will be infered from the image file path). So initiating could look like this (obj_color is always required):
-    >>> from imaging.main.cImage import ImageROI
+    >>> from src.imaging.main.cImage import ImageROI
     >>> ir = ImageROI(obj_color='light', path_image_file='path/to/your/image/file.png')
     or
     >>> your_image = np.random.random((100, 200))
@@ -1497,7 +1496,7 @@ class ImageClassified(Image):
 
     Example Usage
     -------------
-    >>> from imaging.main.cImage import ImageClassified, ImageROI
+    >>> from src.imaging.main.cImage import ImageClassified, ImageROI
     initiate from parent object, most common use case.
     >>> ir = ImageROI.from_disk('path/to/your/folder')
     >>> ic = ImageClassified.from_parent(ir)

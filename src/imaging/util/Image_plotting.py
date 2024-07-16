@@ -1,13 +1,13 @@
 """Module for plotting (cv2) images."""
-from imaging.util.Image_convert_types import swap_RB, infer_mode
-from imaging.util.coordinate_transformations import rescale_values
-
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 
 from typing import Iterable, Any
 from matplotlib import patches
+
+from src.imaging.util.Image_convert_types import swap_RB, infer_mode
+from src.imaging.util.coordinate_transformations import rescale_values
 
 
 def plt_cv2_image(

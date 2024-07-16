@@ -1,14 +1,13 @@
 """This module implements the MSI class."""
 from __future__ import annotations
 
-from exporting.from_mcf.cSpectrum import Spectra
-from data.cDataClass import Data
-from Project.file_helpers import get_mis_file, search_keys_in_xml
-
 import os
 import pandas as pd
-import numpy as np
 import logging
+
+from src.exporting.from_mcf.cSpectrum import Spectra
+from src.data.cDataClass import Data
+from src.Project.file_helpers import get_mis_file, search_keys_in_xml
 
 logger = logging.getLogger(__name__)
 

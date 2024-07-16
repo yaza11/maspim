@@ -1,10 +1,9 @@
 """Helper module for finding a sub-region with different scale."""
-from typing import Sequence
-
 import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import logging
 
 from skimage.feature import SIFT, match_descriptors, plot_matches, daisy
 from skimage.transform import AffineTransform, warp
@@ -12,8 +11,7 @@ from skimage.color import rgb2gray
 
 from scipy.optimize import minimize
 from PIL import Image as PIL_Image
-
-import logging
+from typing import Sequence
 
 logger = logging.getLogger(__name__)
 

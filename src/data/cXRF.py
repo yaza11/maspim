@@ -1,14 +1,14 @@
 """This module implements the XRF class."""
 from __future__ import annotations
 
-from data.cDataClass import Data
-from Project.file_helpers import find_matches
-from res.constants import elements
-
 import re
 import os
 import numpy as np
 import pandas as pd
+
+from src.data.cDataClass import Data
+from src.Project.file_helpers import find_matches
+from src.res.constants import elements
 
 
 def handle_video_file(folder: str, file_name: str) -> list[np.ndarray, np.ndarray, np.ndarray]:

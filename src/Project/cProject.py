@@ -15,39 +15,39 @@ from tqdm import tqdm
 from typing import Iterable, Self, Any
 from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 
-from data.helpers import plot_comp, transform_feature_table, plot_comp_on_image
-from exporting.data_analysis_export.ion_image import (get_da_export_ion_image,
+from src.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image
+from src.exporting.data_analysis_export.ion_image import (get_da_export_ion_image,
                                                       get_da_export_data)
 
-from util import Convinience
+from src.util import Convinience
 
-from exporting.from_mcf.rtms_communicator import ReadBrukerMCF
-from exporting.from_mcf.helper import Spectrum
-from exporting.from_mcf.cSpectrum import Spectra, MultiSectionSpectra
-from exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
+from src.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
+from src.exporting.from_mcf.helper import Spectrum
+from src.exporting.from_mcf.cSpectrum import Spectra, MultiSectionSpectra
+from src.exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
 
-from data.cMSI import MSI
-from data.cXRF import XRF
-from data.cAgeModel import AgeModel
+from src.data.cMSI import MSI
+from src.data.cXRF import XRF
+from src.data.cAgeModel import AgeModel
 
-from Project.file_helpers import (
+from src.Project.file_helpers import (
     get_folder_structure, find_files, get_mis_file, get_d_folder,
     search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy
 )
 
-from imaging.main.cImage import ImageSample, ImageROI, ImageClassified
-from imaging.util.Image_convert_types import (
+from src.imaging.main.cImage import ImageSample, ImageROI, ImageClassified
+from src.imaging.util.Image_convert_types import (
     ensure_image_is_gray, PIL_to_np, convert
 )
-from imaging.util.coordinate_transformations import rescale_values
-from imaging.util.find_XRF_ROI import find_ROI_in_image, plt_match_template_scale
-from imaging.XRay.cXRay import XRay
-from imaging.register.transformation import Transformation
-from imaging.register.helpers import Mapper
+from src.imaging.util.coordinate_transformations import rescale_values
+from src.imaging.util.find_XRF_ROI import find_ROI_in_image, plt_match_template_scale
+from src.imaging.XRay.cXRay import XRay
+from src.imaging.register.transformation import Transformation
+from src.imaging.register.helpers import Mapper
 
-from timeSeries.cTimeSeries import TimeSeries
-from timeSeries.cProxy import UK37
-from util.read_msi_align import get_teaching_points
+from src.timeSeries.cTimeSeries import TimeSeries
+from src.timeSeries.cProxy import UK37
+from src.util.read_msi_align import get_teaching_points
 
 PIL_Image.MAX_IMAGE_PIXELS = None
 

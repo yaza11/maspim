@@ -6,7 +6,7 @@ import struct
 import numpy as np
 import pandas as pd
 
-from exporting.from_sqlite.func import _find_closest_peak, estimateThreshold
+from src.exporting.from_sqlite.func import _find_closest_peak, estimateThreshold
 
 
 def parse_sqlite(peaks_sqlite_path, save=True, save_path=None, keep_all=False):

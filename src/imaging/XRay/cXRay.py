@@ -1,16 +1,16 @@
 """
 This module implements the XRay class, which offers to obtain xray regions from specific depths.
 """
-from imaging.main.cImage import ImageSample, ImageROI
-from imaging.util.Image_convert_types import ensure_image_is_gray
-from imaging.util.Image_plotting import plt_cv2_image
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
 
 from scipy.stats import linregress
+
+from src.imaging.main.cImage import ImageSample, ImageROI
+from src.imaging.util.Image_convert_types import ensure_image_is_gray
+from src.imaging.util.Image_plotting import plt_cv2_image
 
 logger = logging.getLogger(__name__)
 

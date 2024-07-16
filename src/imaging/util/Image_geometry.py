@@ -4,7 +4,7 @@ import cv2
 import matplotlib.pyplot as plt
 import scipy
 
-from imaging.util.coordinate_transformations import kartesian_to_polar, polar_to_kartesian
+from src.imaging.util.coordinate_transformations import kartesian_to_polar, polar_to_kartesian
 
 
 def calculate_directionality_PCA(contours):

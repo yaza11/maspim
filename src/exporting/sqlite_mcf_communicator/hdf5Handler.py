@@ -1,15 +1,14 @@
 """This module implements an HDF5 handler."""
-from tqdm import tqdm
-
-from exporting.from_mcf.rtms_communicator import ReadBrukerMCF
-from exporting.from_mcf.helper import get_mzs_for_limits, ReaderBaseClass, Spectrum
-
 import h5py
 import numpy as np
 import os
 import logging
 
 from typing import Iterable
+from tqdm import tqdm
+
+from src.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
+from src.exporting.from_mcf.helper import get_mzs_for_limits, ReaderBaseClass, Spectrum
 
 logger = logging.getLogger(__name__)
 

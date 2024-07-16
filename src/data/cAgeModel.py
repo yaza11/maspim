@@ -1,17 +1,13 @@
 """This module implements the AgeModel class."""
-
 import os
-from typing import Self, Any
-
 import numpy as np
 import pandas as pd
-import pickle
 import logging
 
+from typing import Self
 from collections.abc import Iterable
 
-from util import Convinience
-from util.manage_obj_saves import class_to_attributes
+from src.util import Convinience
 
 logger = logging.getLogger('msi_workflow.' + __name__)
 
