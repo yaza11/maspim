@@ -39,7 +39,7 @@ class ReadBrukerMCF(ReaderBaseClass):
     Example usage
     -------------
     Import and initialize a reader
-    >>> from exporting.from_mcf.rtms_communicator import ReadBrukerMCF
+    >>> from src.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
     >>> reader = ReadBrukerMCF(path="/path/to/d_folder.d")
     >>> reader.create_reader()  # this can take a while
     Get information about the indices and meta data

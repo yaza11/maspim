@@ -56,7 +56,9 @@ def gaussian(x: np.ndarray, x_c: float, H: float, sigma: float) -> np.ndarray:
     return H * np.exp(-1 / 2 * ((x - x_c) / sigma) ** 2)
 
 
-def bigaussian(x: np.ndarray, x_c: float, H: float, sigma_l: float, sigma_r: float) -> np.ndarray:
+def bigaussian(
+        x: np.ndarray, x_c: float, H: float, sigma_l: float, sigma_r: float
+) -> np.ndarray:
     """
     Evaluate bigaussian for mass vector based on parameters.
 

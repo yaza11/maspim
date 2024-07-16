@@ -16,8 +16,8 @@ from typing import Iterable, Self, Any
 from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 
 from src.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image
-from src.exporting.data_analysis_export.ion_image import (get_da_export_ion_image,
-                                                      get_da_export_data)
+from src.exporting.legacy.ion_image import (get_da_export_ion_image,
+                                            get_da_export_data)
 
 from src.util import Convinience
 
@@ -41,7 +41,7 @@ from src.imaging.util.image_convert_types import (
 )
 from src.imaging.util.coordinate_transformations import rescale_values
 from src.imaging.util.find_xrf_roi import find_ROI_in_image, plt_match_template_scale
-from src.imaging.xray.cXRay import XRay
+from src.imaging.xray.xray import XRay
 from src.imaging.register.transformation import Transformation
 from src.imaging.register.helpers import Mapper
 

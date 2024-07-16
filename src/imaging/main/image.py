@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from src.imaging.interactive import InteractiveImage
 from src.imaging.register.helpers import Mapper
-from src.imaging.register.tilt_descriptor import Descriptor
+from src.imaging.register.descriptor import Descriptor
 from src.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
 from src.util.convinience import Convinience
 from src.imaging.misc.fit_distorted_rectangle import find_layers, distorted_rect

@@ -7,9 +7,8 @@ here = os.path.abspath(os.path.dirname(__file__))
 with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
     long_description = "\n" + fh.read()
 
-VERSION = '0.0.1'
-DESCRIPTION = 'Analyse GC FID and IRMS data (dxf and txt files)'
-LONG_DESCRIPTION = 'A package that allows integrate peaks in GC FID and IRMS data.'
+VERSION = '1.0.0'
+DESCRIPTION = 'Processing of mass spectrometry imaging and micro X-Ray fluorescence data.'
 
 # Setting up
 setup(
@@ -22,9 +21,11 @@ setup(
     long_description=long_description,
     url="https://github.com/weimin-liu/msi_workflow",
     packages=find_packages(),
-    install_requires=['matplotlib', 'numpy', 'pandas', 'rpy2', 'scipy', 'tqdm', 'cv2', 'sklearn'],
+    install_requires=['matplotlib', 'numpy', 'pandas', 'rpy2', 'scipy', 'tqdm',
+                      'cv2', 'sklearn', 'skimage', 'psutil'],
     extras_require={'dev': 'twine'},
-    keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI', 'laminated', 'lamination', 'image registration'],
+    keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI',
+              'laminated', 'lamination', 'image registration'],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

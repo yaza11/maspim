@@ -23,8 +23,8 @@ class hdf5Handler(ReaderBaseClass):
 
     Example Usage
     -------------
-    >>> from exporting.sqlite_mcf_communicator.hdf5Handler import hdf5Handler
-    >>> from exporting.from_mcf.rtms_communicator import ReadBrukerMCF
+    >>> from src.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
+    >>> from src.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
     >>> brukerReader = ReadBrukerMCF('some/d/folder.d')
     >>> brukerReader.create_reader()
     >>> brukerReader.create_indices()

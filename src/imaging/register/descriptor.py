@@ -108,7 +108,7 @@ class Descriptor:
     Example Usage
     -------------
     Initialization
-    >>> from imaging.register.tilt_descriptor import Descriptor
+    >>> from src.imaging.register.tilt_descriptor import Descriptor
     >>> import skimage
     >>> image = skimage.data.brick()
     A mask is not suitable for this problem
