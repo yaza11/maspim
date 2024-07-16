@@ -7,12 +7,13 @@ here = os.path.abspath(os.path.dirname(__file__))
 with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
     long_description = "\n" + fh.read()
 
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 DESCRIPTION = 'Processing of mass spectrometry imaging and micro X-Ray fluorescence data.'
+NAME = "msi_workflow"
 
 # Setting up
 setup(
-    name="msi_workflow",
+    name=NAME,
     version=VERSION,
     author="Yannick Zander",
     author_email="yzander@marum.de",
@@ -21,8 +22,10 @@ setup(
     long_description=long_description,
     url="https://github.com/weimin-liu/msi_workflow",
     packages=find_packages(),
+    package_data={NAME: ['res/calibrants.txt', 'res/elements.txt']},
     install_requires=['matplotlib', 'numpy', 'pandas', 'rpy2', 'scipy', 'tqdm',
-                      'cv2', 'sklearn', 'skimage', 'psutil'],
+                      'opencv-python', 'scikit-learn', 'scikit-image', 'psutil',
+                      'h5py', 'pillow', 'textdistance'],
     extras_require={'dev': 'twine'},
     keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI',
               'laminated', 'lamination', 'image registration'],
