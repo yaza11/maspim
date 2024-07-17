@@ -424,7 +424,8 @@ class Image(Convinience):
         if pixels is not None:
             self._average_width_yearly_cycle = pixels
             return
-        assert hasattr(self, 'age_span'), 'call set_age_span'
+        assert hasattr(self, 'age_span') and (self.age_span is not None), \
+            'call set_age_span'
         pixels_x: int = self.image.shape[1]
         # calculate the number of expected cycles from the age difference for
         # the depth interval of the slice
@@ -1769,7 +1770,10 @@ class ImageClassified(Image):
             image_light, mask=self.mask_foreground
         )
 
-        yearly_thickness: float = self.average_width_yearly_cycle
+        if hasattr(self, 'age_span') and (self.age_span is not None):
+            yearly_thickness: float = self.average_width_yearly_cycle
+        else:
+            yearly_thickness: float = 12  # results in min distance of 3 pixels
         if min_distance is None:
             min_distance: float = yearly_thickness / 4
 
@@ -2307,7 +2311,9 @@ use_age_model, not {height0_mode}')
 
         return isc
 
-    def reduce_laminae(self, plts: bool = False, **kwargs) -> None:
+    def reduce_laminae(
+            self, plts: bool = False, n_expected: int | None = None, **kwargs
+    ) -> None:
         """
         Reduce number of layers to that predicted by age model.
 
@@ -2318,10 +2324,17 @@ use_age_model, not {height0_mode}')
         ----------
         plts : bool, optional
             Plot the new classified image and quality scores. Defaults to False
+        n_expected : int, optional
+            Number of expected layers. If not provided, attempts to use the age_span
         kwargs : dict, optional
             Additional keyword arguments passed on to set_laminae_images
         """
-        # TODO: fix
+        if (not hasattr(self, 'age_span') or (self.age_span is None)) and (n_expected is None):
+            logger.warning(
+                f'reduce_laminae requires either an age_span ' +
+                'or the number of expected layers, exiting method'
+            )
+            return
         assert hasattr(self, 'params_laminae_simplified'), \
             'call _set_params_laminae_simplified'
         assert 'quality' in self.params_laminae_simplified.columns, \
@@ -2368,13 +2381,14 @@ use_age_model, not {height0_mode}')
 
         # determine how many layers have to be removed
         # actual - expected
-        n_expected: int = round(self.age_span[1] - self.age_span[0])
+        if n_expected is None:
+            n_expected: int = round(self.age_span[1] - self.age_span[0])
         n_light: int = (np.unique(df.sseed) > 0).sum()
         n_dark: int = (np.unique(df.sseed) < 0).sum()
         n_light_excess: int = max((n_light - n_expected, 0))  # at least 0
         n_dark_excess: int = max((n_dark - n_expected, 0))  # at least 0
         logger.info(
-            f'expecting {round(self.age_span[1] - self.age_span[0])} each, ' +
+            f'expecting {n_expected} each, ' +
             f'found {n_light=} and {n_dark=} layers'
         )
         if (not n_light_excess) and (not n_dark_excess):
@@ -2399,7 +2413,7 @@ use_age_model, not {height0_mode}')
         n_light: int = (np.unique(df.sseed) > 0).sum()
         n_dark: int = (np.unique(df.sseed) < 0).sum()
         logger.info(
-            f'expecting {round(self.age_span[1] - self.age_span[0])}, ' +
+            f'expecting {n_expected}, ' +
             f'now found {n_light=} and {n_dark=} layers'
         )
 

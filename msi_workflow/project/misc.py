@@ -28,7 +28,7 @@ def get_long_time_series(
     ps = []
 
     # setup projects
-    # this includes all steps up to setting the data_obj, since the bins are
+    # this includes all steps up to setting the data_object, since the bins are
     # estimated on the MultiSectionSpectra
     for folder, depth_span, d_folder in zip(folders, depth_spans, d_folders):
         # create hdf5
@@ -73,7 +73,7 @@ def get_long_time_series(
         specs.filter_line_spectra(SNR_threshold=SNR_threshold)
         specs.binned_spectra_to_df(readers=readers)
 
-    # all steps after data_obj is set
+    # all steps after data_object is set
     ts = []
     for p, spec in zip(ps, specs.specs):
         p.spectra = spec
@@ -89,10 +89,10 @@ def get_long_time_series(
 
         if SNR_threshold > 0:
             # set intensities to zero if any of the compounds is zero
-            cols = p.data_obj.get_data_columns()
+            cols = p.data_object.get_data_columns()
             # test if all entries are nonzero
-            mask_all_nonzero = p.data_obj.feature_table.loc[:, cols].all(axis='columns')
-            p.data_obj.feature_table.loc[~mask_all_nonzero, cols] = 0
+            mask_all_nonzero = p.data_object.feature_table.loc[:, cols].all(axis='columns')
+            p.data_object.feature_table.loc[~mask_all_nonzero, cols] = 0
         # p.set_time_series(average_by_col='classification_s')
 
         p.set_time_series(

@@ -556,7 +556,7 @@ class ProjectBaseClass:
     path_folder: str | None = None
     path_d_folder: str | None = None
     _spectra: Spectra = None
-    _data_obj: MSI | XRF = None
+    _data_object: MSI | XRF = None
     _xray: XRay = None
     _time_series: TimeSeries = None
     # flags
@@ -578,7 +578,7 @@ class ProjectBaseClass:
     def require_age_model(
             self,
             path_file: str | None = None,
-            load: bool = True,
+            overwrite: bool = False,
             **kwargs_read: dict
     ) -> AgeModel:
         """
@@ -605,13 +605,13 @@ class ProjectBaseClass:
 
         """
         # return existing instance
-        if self._age_model is not None:
+        if (self._age_model is not None) and (not overwrite):
             return self._age_model
         # if an age model save is located in the folder, load it
-        elif hasattr(self, 'AgeModel_file') and load:
+        elif hasattr(self, 'AgeModel_file') and (not overwrite):
             self._age_model: AgeModel = AgeModel(self.path_d_folder)
         # if a file is provided, load it from the file provided
-        elif load and (path_file is not None):
+        elif (not overwrite) and (path_file is not None):
             self._age_model: AgeModel = AgeModel(path_file=path_file, **kwargs_read)
         else:  # otherwise create new age model
             self.set_age_model(path_file, **kwargs_read)
@@ -620,6 +620,11 @@ class ProjectBaseClass:
     @property
     def age_model(self) -> AgeModel:
         return self.require_age_model()
+
+    @age_model.setter
+    def age_model(self, age_model: AgeModel):
+        assert isinstance(age_model, AgeModel), 'Provided value should be an instance of AgeModel.'
+        self._age_model = age_model
 
     def set_depth_span(self, depth_span: tuple[float, float]) -> None:
         """
@@ -719,9 +724,6 @@ class ProjectBaseClass:
         None
 
         """
-        assert self.image_handler is not None, \
-            'call set_image_handler first'
-
         self._image_sample: ImageSample = ImageSample(
             path_folder=self.path_folder,
             image=self.image_handler.image,
@@ -751,12 +753,12 @@ class ProjectBaseClass:
             overwrite: bool = False,
             **kwargs_area: dict
     ) -> ImageSample:
-        if self._image_sample is not None:  # return existing
+        call_set: bool = True
+        if (self._image_sample is not None) and (not overwrite):  # return existing
             return self._image_sample
         # this will only be overwritten with false, if the loaded instance has
         # the _xywh_ROI attribute
-        call_set: bool = True
-        if hasattr(self, 'ImageSample_file') and not overwrite:
+        elif hasattr(self, 'ImageSample_file') and (not overwrite):
             logger.info('loading ImageSample')
             self._image_sample: ImageSample = ImageSample(
                 path_folder=self.path_folder,
@@ -773,7 +775,7 @@ class ProjectBaseClass:
                 )
                 call_set = True
 
-        if call_set:  # either overwrite or loaded partially processed obj
+        if call_set or overwrite:  # either overwrite or loaded partially processed obj
             self.set_image_sample(
                 obj_color=self._image_sample.obj_color,  # use eventually stored obj_color
                 **kwargs_area
@@ -791,36 +793,23 @@ class ProjectBaseClass:
 
         This function can only be called after set_image_sample has been called.
         """
-        assert self.image_sample is not None, 'call set_image_sample first'
-
         # create image_roi using image from image_sample
         self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
         self._image_roi.require_classification(**kwargs)
         self._image_roi.set_punchholes(**kwargs)
 
-        # attempt to classify laminated sample
-        if self.age_span is None:
-            logger.info(
-                'age_span has not been defined. If you want to analyze a '
-                'laminated sediment, set the age_span and call this function '
-                'again.'
-            )
-            return
-
-        self._image_roi.age_span = self.age_span
+        if self.age_span is not None:
+            self._image_roi.age_span = self.age_span
         self._image_roi.save()
 
         self._update_files()
 
     def require_image_roi(self, overwrite: bool = False, **kwargs) -> ImageROI:
-        if self._image_roi is not None:
+        if (self._image_roi is not None) and (not overwrite):
             return self._image_roi
-        elif hasattr(self, 'ImageROI_file') and not overwrite:
+        elif hasattr(self, 'ImageROI_file') and (not overwrite):
             logger.info('loading ImageROI')
-            self._image_roi = ImageROI(
-                obj_color='light',  # dummy, will be overwritten by load
-                path_folder=self.path_folder
-            )
+            self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
             self._image_roi.load()
             if self.age_span is not None:
                 self._image_roi.age_span = self.age_span
@@ -861,8 +850,6 @@ class ProjectBaseClass:
         -------
         None
         """
-        assert self.image_roi is not None, 'call set_image_roi before'
-
         # initialize ImageClassified
         self._image_classified: ImageClassified = ImageClassified.from_parent(
             self.image_roi, **kwargs
@@ -882,18 +869,17 @@ class ProjectBaseClass:
     def require_image_classified(
             self, overwrite: bool = False, **kwargs
     ) -> ImageClassified:
-        if self._image_classified is not None:
+        if (self._image_classified is not None) and (not overwrite):
             return self._image_classified
         elif hasattr(self, 'ImageClassified_file') and (not overwrite):
             logger.info('loading ImageClassified ...')
-            obj_color: str = kwargs.get('obj_color', 'light')  # use dummy if not provided
-            self._image_classified = ImageClassified(
-                path_folder=self.path_folder, obj_color=obj_color, **kwargs
+            self._image_classified: ImageClassified = ImageClassified.from_parent(
+                self.image_roi, **kwargs
             )
             self._image_classified.load()
             self._image_classified.age_span = self.age_span
 
-        if not hasattr(self._image_classified, 'params_laminae_simplified'):
+        if (not hasattr(self._image_classified, 'params_laminae_simplified')) or overwrite:
             self.set_image_classified(**kwargs)
 
         return self._image_classified
@@ -920,18 +906,32 @@ class ProjectBaseClass:
         if self._is_laminated:
             self.require_image_classified(overwrite=overwrite, **kwargs)
 
+    def add_image_attributes(self):
+        self.add_tic()
+        if self._image_handler is not None:
+            self.add_pixels_ROI()
+        if self._image_sample is not None:
+            self.add_photo()
+        if self._image_roi is not None:
+            self.add_holes()
+            self.add_light_dark_classification()
+        if self._image_classified is not None:
+            self.add_laminae_classification()
+        if self._xray is not None:
+            self.add_xray()
+
     def require_data_object(self, *args, **kwargs):
         """Overwritten by children"""
         raise NotImplementedError()
 
     @property
-    def data_obj(self):
+    def data_object(self):
         return self.require_data_object()
 
     def add_tic(self, imaging_info_xml: ImagingInfoXML | None = None):
         """Add the total ion count (TIC) for each pixel to the feature table
         of the data obj."""
-        assert self.data_obj is not None, "No data object"
+        assert self._data_object is not None, "No data object"
 
         if imaging_info_xml is None:
             imaging_info_xml: ImagingInfoXML = ImagingInfoXML(
@@ -940,20 +940,20 @@ class ProjectBaseClass:
         ft_imaging: pd.DataFrame = imaging_info_xml.feature_table.loc[
             :, ['R', 'x', 'y', 'tic', 'minutes']
         ]
-        self.data_obj.feature_table = pd.merge(
-            self.data_obj.feature_table, ft_imaging, how="left"
+        self.data_object.feature_table = pd.merge(
+            self.data_object.feature_table, ft_imaging, how="left"
         )
 
     def add_pixels_ROI(self) -> None:
         """
-        Add image pixels to data points in the feature table of the data_obj.
+        Add image pixels to data points in the feature table of the data_object.
 
         This requires that the image handler and sample have been set.
         Creates new columns x_ROI and y_ROI for the pixel coordinates in the
         feature table.
         """
-        assert self.image_sample is not None, 'call set_image_sample first'
-        assert self.image_handler is not None, 'call set_image_handler'
+        assert self._image_sample is not None, 'call set_image_sample first'
+        assert self._data_object is not None, 'call set_data_object'
 
         attrs: tuple[str, ...] = ('image_roi', 'photo_ROI_xywh', 'data_ROI_xywh')
         if not all([hasattr(self.image_handler, attr) for attr in attrs]):
@@ -962,13 +962,13 @@ class ProjectBaseClass:
         data_ROI_xywh: tuple[int, ...] = self.image_handler.data_ROI_xywh
         photo_ROI_xywh: tuple[int, ...] = self.image_handler.photo_ROI_xywh
 
-        self.data_obj._pixels_get_photo_ROI_to_ROI(
+        self.data_object._pixels_get_photo_ROI_to_ROI(
             data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh
         )
 
     def add_photo(self, median: bool = False) -> None:
         """
-        Add the gray-level values of the photo to the feature table of the data_obj.
+        Add the gray-level values of the photo to the feature table of the data_object.
 
         This function has to be called after add_pixels_ROI.
         In general the resolution of the data points is smaller than that of the photo.
@@ -976,24 +976,25 @@ class ProjectBaseClass:
         The column in the feature table is 'L'
 
         median: bool (default False)
-            If median is True, the median intensities inside the photo will be ascribed to each data point.
+            If median is True, the median intensities inside the photo will be
+            ascribed to each data point.
             If median is False, the closest values will be used.
 
         Returns
         -------
         None
         """
-        assert self.data_obj is not None, 'set data object first'
-        assert 'x_ROI' in self.data_obj.feature_table.columns, \
+        assert self._data_object is not None, 'set data object first'
+        assert 'x_ROI' in self.data_object.feature_table.columns, \
             'add x_ROI, y_ROI coords with add_pixels_ROI'
         image = ensure_image_is_gray(
             self.image_sample.image_sample_area
         )
-        self.data_obj.add_attribute_from_image(image, 'L', median=median)
+        self.data_object.add_attribute_from_image(image, 'L', median=median)
 
     def add_holes(self, **kwargs) -> None:
         """
-        Add classification for holes and sample to the feature table of the data_obj.
+        Add classification for holes and sample to the feature table of the data_object.
 
         This function has to be called after the ImageROI and data object have been set.
         Uses the closest pixel value.
@@ -1003,36 +1004,36 @@ class ProjectBaseClass:
         -------
         None
         """
-        assert self.image_roi is not None, 'set image_roi first'
-        assert self.data_obj is not None, 'set data_object first'
+        assert self._image_roi is not None, 'set image_roi first'
+        assert self._data_object is not None, 'set data_object first'
         image = self.image_roi.image_binary
-        self.data_obj.add_attribute_from_image(image, 'valid', median=False, **kwargs)
+        self.data_object.add_attribute_from_image(image, 'valid', median=False, **kwargs)
 
     def add_light_dark_classification(self, **kwargs) -> None:
         """
-        Add light and dark classification to the feature table of the data_obj.
+        Add light and dark classification to the feature table of the data_object.
         This only considers the foreground (valid) pixels.
 
-        The new column inside the feature table of the data_obj is called 'classification'.
+        The new column inside the feature table of the data_object is called 'classification'.
 
         Returns
         -------
         None
         """
-        assert self.image_roi is not None, 'call set_image_roi'
-        assert self.data_obj is not None, 'set data_object first'
+        assert self._image_roi is not None, 'call set_image_roi'
+        assert self._data_object is not None, 'set data_object first'
 
         image: np.ndarray[int] = self.image_roi.image_classification
-        self.data_obj.add_attribute_from_image(image, 'classification', **kwargs)
+        self.data_object.add_attribute_from_image(image, 'classification', **kwargs)
 
     def add_laminae_classification(self, **kwargs) -> None:
         """
-        Add light and dark laminae classification to the feature table of the data_obj.
+        Add light and dark laminae classification to the feature table of the data_object.
         This only considers the foreground (valid) pixels.
 
         This requires that the ImageClassified instance has already been set.
 
-        The new column inside the feature table of the data_obj is called 'classification_s'.
+        The new column inside the feature table of the data_object is called 'classification_s'.
         A column called 'classification_se' is also added, which is the classification image but laminae have been
         expanded to fill the entire image, except holes.
 
@@ -1040,36 +1041,36 @@ class ProjectBaseClass:
         -------
         None
         """
-        assert self.image_classified is not None, 'call set_image_classified'
-        assert self.data_obj is not None, 'set data_object first'
+        assert self._image_classified is not None, 'call set_image_classified'
+        assert self._data_object is not None, 'set data_object first'
 
         image: np.ndarray[int] = self.image_classified.image_seeds
         image_e: np.ndarray[int] = self.image_classified.get_image_expanded_laminae()
-        self.data_obj.add_attribute_from_image(image, 'classification_s', **kwargs)
-        self.data_obj.add_attribute_from_image(image_e, 'classification_se', **kwargs)
+        self.data_object.add_attribute_from_image(image, 'classification_s', **kwargs)
+        self.data_object.add_attribute_from_image(image_e, 'classification_se', **kwargs)
 
     def add_depth_column(self, exclude_gaps: bool = True) -> None:
         """
-        Add the depth column to the data_obj using the depth span.
+        Add the depth column to the data_object using the depth span.
 
-        Linearly map xs (from the data_obj.feature_table) to depths
+        Linearly map xs (from the data_object.feature_table) to depths
         (based on depth_span).
 
         If exclude_gaps is True, depth intervals where no sediment is present,
         will be excluded from the depth calculation (they will be assigned the
         same depth as the last valid depth).
         """
-        assert self.data_obj is not None, 'set the data_obj first'
+        assert self._data_object is not None, 'set the data_object first'
         assert self.depth_span is not None, 'set the depth_span first'
         if exclude_gaps:
-            assert 'valid' in self.data_obj.feature_table.columns,\
-                'set holes in data_obj first'
+            assert 'valid' in self.data_object.feature_table.columns,\
+                'set holes in data_object first'
 
         min_depth, max_depth = self.depth_span
         # convert seed pixel coordinate to depth and depth to age
-        x: pd.Series = self.data_obj.feature_table.x_ROI
+        x: pd.Series = self.data_object.feature_table.x_ROI
 
-        self.data_obj.feature_table['depth'] = np.nan
+        self.data_object.feature_table['depth'] = np.nan
 
         if not exclude_gaps:
             depths = rescale_values(
@@ -1079,11 +1080,11 @@ class ProjectBaseClass:
                 old_min=x.min(),
                 old_max=x.max()
             )
-            self.data_obj.feature_table['depth'] = depths
+            self.data_object.feature_table['depth'] = depths
 
         else:
             # row-wise check if any of the pixels are part of the sample
-            valid_mask: np.ndarray[bool] = self.data_obj.feature_table.pivot(
+            valid_mask: np.ndarray[bool] = self.data_object.feature_table.pivot(
                 index='x_ROI', columns='y_ROI', values='valid'
             ).any(axis=1).to_numpy()
             # set first valid entry to 0 as well because cumsum is used
@@ -1101,38 +1102,38 @@ class ProjectBaseClass:
             def map_depth(row):
                 return mapper[row.x_ROI]
 
-            self.data_obj.feature_table['depth'] = self.data_obj.feature_table.apply(map_depth, axis=1)
+            self.data_object.feature_table['depth'] = self.data_object.feature_table.apply(map_depth, axis=1)
         # add new column to feature table
 
     def add_age_column(self, use_corrected: bool = False) -> None:
         """
-        Add an age column to the data_obj using the depth column and age model.
+        Add an age column to the data_object using the depth column and age model.
 
-        Map the depths in the data_obj.feature_table with the age model.
+        Map the depths in the data_object.feature_table with the age model.
 
         Parameters
         ----------
         use_corrected : bool
             Whether to use the corrected depth column ('depth_corrected').
-            data_obj must have the corrected depth column, otherwise an error is raised.
+            data_object must have the corrected depth column, otherwise an error is raised.
 
         Returns
         -------
         None.
         """
-        assert self.age_model is not None, 'set age model first'
-        assert self.data_obj is not None, f'did not set data_obj yet'
-        assert hasattr(self.data_obj, 'feature_table'), 'must have data_obj'
+        assert self._age_model is not None, 'set age model first'
+        assert self._data_object is not None, f'did not set data_object yet'
+        assert hasattr(self.data_object, 'feature_table'), 'must have data_object'
         if use_corrected:
             depth_col = 'depth_corrected'
         else:
             depth_col = 'depth'
-        assert depth_col in self.data_obj.feature_table.columns, \
+        assert depth_col in self.data_object.feature_table.columns, \
             ('data object must have {depth_col} column, call add_depth_column '
              'and set the exclude_gaps accordingly')
 
-        self.data_obj.feature_table['age'] = self.age_model.depth_to_age(
-            self.data_obj.feature_table[depth_col]
+        self.data_object.feature_table['age'] = self.age_model.depth_to_age(
+            self.data_object.feature_table[depth_col]
         )
 
     def set_xray(
@@ -1185,9 +1186,9 @@ class ProjectBaseClass:
         return self._xray
 
 
-    def data_obj_apply_tilt_correction(self) -> None:
+    def data_object_apply_tilt_correction(self) -> None:
         assert not self._corrected_tilt, 'tilt has already been corrected'
-        assert self.data_obj is not None, 'set data_obj.'
+        assert self._data_object is not None, 'set data_object.'
         mapper = Mapper(
             image_shape=(-1, -1),
             path_folder=self.path_folder,
@@ -1208,16 +1209,16 @@ class ProjectBaseClass:
             XT, YT = mapper.get_transformed_coords()
 
             # insert into feature table
-            self.data_obj.add_attribute_from_image(
+            self.data_object.add_attribute_from_image(
                 XT, 'x_ROI_T', fill_value=np.nan
             )
-            self.data_obj.add_attribute_from_image(
+            self.data_object.add_attribute_from_image(
                 YT, 'y_ROI_T', fill_value=np.nan
             )
 
             # fit feature table
-            self.data_obj.feature_table = transform_feature_table(
-                self.data_obj.feature_table
+            self.data_object.feature_table = transform_feature_table(
+                self.data_object.feature_table
             )
             logger.info('successfully loaded mapper and applied tilt correction')
 
@@ -1334,8 +1335,8 @@ class ProjectBaseClass:
         None.
 
         """
-        assert self.xray is not None, 'call set_xray first'
-        assert self.image_roi is not None, 'call set_image_roi first'
+        assert self._xray is not None, 'call set_xray first'
+        assert self._image_roi is not None, 'call set_image_roi first'
 
         if 'side' in kwargs:
             raise ValueError('please provide "side_xray" and "side_data" seperately')
@@ -1389,8 +1390,8 @@ class ProjectBaseClass:
         assert method in methods, \
             f'method {method} is not valid, valid options are {methods}'
         assert self.holes_data is not None, 'call set_punchholes'
-        assert self.data_obj is not None, 'set data_obj object first'
-        assert 'depth' in self.data_obj.feature_table.columns, 'set depth column'
+        assert self._data_object is not None, 'set data_object object first'
+        assert 'depth' in self.data_object.feature_table.columns, 'set depth column'
         assert self.depth_span is not None, 'set the depth section'
 
         depth_section: float | int = self.depth_span[1] - self.depth_span[0]
@@ -1405,7 +1406,7 @@ class ProjectBaseClass:
         idxs_xray: np.ndarray[int] = np.array([point[1] for point in self.holes_xray])
         idxs_data: np.ndarray[int] = np.array([point[1] for point in self.holes_data])
 
-        depths: pd.Series = self.data_obj.feature_table['depth']
+        depths: pd.Series = self.data_object.feature_table['depth']
 
         if method not in ('linear', 'l'):
             idxs_xray: np.ndarray[int] = append_top_bottom(idxs_xray, img_xray_shape)
@@ -1451,7 +1452,7 @@ class ProjectBaseClass:
         else:
             raise NotImplementedError('internal error')
 
-        self.data_obj.feature_table['depth_corrected'] = depths_new
+        self.data_object.feature_table['depth_corrected'] = depths_new
 
     def add_xray(self, plts=False, is_piecewise=True, **_):
         """
@@ -1476,10 +1477,10 @@ class ProjectBaseClass:
         -------
 
         """
-        assert self.data_obj is not None, 'set data_obj object first'
-        assert 'x_ROI' in self.data_obj.feature_table.columns, 'call add_pixels_ROI'
-        assert self.xray is not None, 'call set_xray first'
-        assert self.image_roi is not None, 'call set_image_roi first'
+        assert self._data_object is not None, 'set data_object object first'
+        assert 'x_ROI' in self.data_object.feature_table.columns, 'call add_pixels_ROI'
+        assert self._xray is not None, 'call set_xray first'
+        assert self._image_roi is not None, 'call set_image_roi first'
         assert self.depth_span is not None, 'set the depth section'
         assert self.holes_data is not None, 'call add_depth_correction_with_xray'
 
@@ -1551,7 +1552,7 @@ class ProjectBaseClass:
         plt.title('xray after warp')
 
         # add to feature table
-        self.data_obj.add_attribute_from_image(warped_xray, 'xray')
+        self.data_object.add_attribute_from_image(warped_xray, 'xray')
 
         if plts and not is_loaded:
             # tie points on msi image
@@ -1603,11 +1604,11 @@ class ProjectBaseClass:
     def combine_with_project(
             self, project: Self, tag: str, plts: bool = False, **kwargs
     ) -> None:
-        assert project.image_roi is not None
-        assert project.data_obj is not None
+        assert project._image_roi is not None
+        assert project._data_object is not None
 
-        assert self.image_classified is not None
-        assert self.data_obj is not None
+        assert self._image_classified is not None
+        assert self._data_object is not None
 
         mapper = Mapper(path_folder=self.path_folder, tag=tag)
 
@@ -1638,8 +1639,8 @@ class ProjectBaseClass:
             mapper = t.to_mapper(path_folder=self.path_folder, tag='xrf')
             mapper.save()
 
-        x_ROI = project.data_obj.feature_table.x_ROI
-        y_ROI = project.data_obj.feature_table.y_ROI
+        x_ROI = project.data_object.feature_table.x_ROI
+        y_ROI = project.data_object.feature_table.y_ROI
         points = np.c_[x_ROI, y_ROI]
         _, _, w_ROI, h_ROI = project.image_handler.photo_ROI_xywh
         grid_x, grid_y = np.meshgrid(
@@ -1647,10 +1648,10 @@ class ProjectBaseClass:
             np.arange(h_ROI)
         )
         for comp in tqdm(
-                project.data_obj.get_data_columns(),
+                project.data_object.get_data_columns(),
                 desc='adding XRF ion images'
         ):
-            values: np.ndarray[float] = project.data_obj.feature_table.loc[
+            values: np.ndarray[float] = project.data_object.feature_table.loc[
                                         :, comp].to_numpy()
 
             # turn ion images into images that cover the image of the XRF photo
@@ -1674,7 +1675,7 @@ class ProjectBaseClass:
                 t.source.image, preserve_range=True
             )
             # add to feature table
-            self.data_obj.add_attribute_from_image(
+            self.data_object.add_attribute_from_image(
                 image=warped_xray, column_name=comp
             )
 
@@ -1684,30 +1685,30 @@ class ProjectBaseClass:
             plts: bool = False,
             **kwargs
     ) -> None:
-        assert self.data_obj is not None, 'call set_data_object'
-        assert 'L' in self.data_obj.feature_table.columns, \
+        assert self._data_object is not None, 'call set_data_object'
+        assert 'L' in self.data_object.feature_table.columns, \
             'call add_photo'
-        assert 'x_ROI' in self.data_obj.feature_table.columns, \
+        assert 'x_ROI' in self.data_object.feature_table.columns, \
             'call add_pixels_ROI'
-        assert average_by_col in self.data_obj.feature_table.columns, \
+        assert average_by_col in self.data_object.feature_table.columns, \
             ('call add_laminae_classification or use a different column name to'
              ' average by')
-        assert 'depth' in self.data_obj.feature_table.columns, \
-            'add the depths to data_obj with add_depth_column first'
-        assert 'age' in self.data_obj.feature_table.columns, \
-            'add the ages to data_obj with add_age_column first'
+        assert 'depth' in self.data_object.feature_table.columns, \
+            'add the depths to data_object with add_depth_column first'
+        assert 'age' in self.data_object.feature_table.columns, \
+            'add the ages to data_object with add_age_column first'
 
-        assert self.image_classified is not None, 'call set_image_classified'
+        assert self._image_classified is not None, 'call set_image_classified'
         assert hasattr(self.image_classified, 'params_laminae_simplified'), \
             ('could not find params table in classified image object, call '
              'set_image_classified')
 
         # x column always included in processing_zone_wise_average
         columns_feature_table = np.append(
-            self.data_obj.get_data_columns(),
+            self.data_object.get_data_columns(),
             ['x_ROI', 'R', 'L', 'depth']
         )
-        ft_seeds_avg, ft_seeds_std, ft_seeds_success = self.data_obj.processing_zone_wise_average(
+        ft_seeds_avg, ft_seeds_std, ft_seeds_success = self.data_object.processing_zone_wise_average(
             zones_key=average_by_col,
             columns=columns_feature_table,
             calc_std=True,
@@ -1804,12 +1805,12 @@ class ProjectBaseClass:
         self._update_files()
 
     def require_time_series(self, overwrite: bool = False, **kwargs) -> TimeSeries:
-        if self._time_series is not None:
+        if (self._time_series is not None) and (not overwrite):
             return self._time_series
         elif hasattr(self, 'TimeSeries_file') and (not overwrite):
             self._time_series = TimeSeries(self.path_d_folder)
             self._time_series.load()
-        if not hasattr(self._time_series, 'feature_table') or overwrite:
+        if (not hasattr(self._time_series, 'feature_table')) or overwrite:
             self.set_time_series(**kwargs)
 
         return self._time_series
@@ -1908,7 +1909,7 @@ class ProjectBaseClass:
                 )
             return comp_
 
-        sources = ('reader', 'spectra', 'data_obj', 'time_series', 'da_export')
+        sources = ('reader', 'spectra', 'data_object', 'time_series', 'da_export')
         assert source in sources, f'No source named {source}, must be one of {sources}'
 
         if source in ('reader', 'spectra', 'da_export') and (not self._is_MSI):
@@ -1940,42 +1941,43 @@ class ProjectBaseClass:
                 data=spectra_intensities,
                 tolerance=tolerance
             )
-            self.data_obj = MSI(self.path_d_folder)
-            self.data_obj.feature_table = df
+            da = self._data_object.copy() if self._data_object is not None else None
+            self._data_object = MSI(self.path_d_folder)
+            self.data_object.feature_table = df
             self.add_pixels_ROI()
             self.add_holes()
-
             if (
                     ('distance_pixels' not in kwargs) and
-                    (self.data_obj is not None) and
-                    hasattr(self.data_obj, 'distance_pixels')
+                    (self.data_object is not None) and
+                    hasattr(self.data_object, 'distance_pixels')
             ):
-                kwargs['distance_pixels'] = self.data_obj.distance_pixels
+                kwargs['distance_pixels'] = self.data_object.distance_pixels
             if plot_on_background:
                 plot_comp_on_image(
                     comp=comp,
                     background_image=self.image_roi.image,
-                    data_frame=self.data_obj.feature_table,
+                    data_frame=self.data_object.feature_table,
                     title=title,
                     **kwargs
                 )
             else:
                 plot_comp(
-                    data_frame=self.data_obj.feature_table,
+                    data_frame=self.data_object.feature_table,
                     title=title,
                     comp=comp,
                     **kwargs
                 )
-        elif source in ('data_obj', 'time_series'):
+            self._data_object = da
+        elif source in ('data_object', 'time_series'):
             assert self.__getattribute__(source) is not None,\
                 f'make sure to set the {source} before selecting it as source'
-            obj = self.data_obj if source == 'data_obj' else self.time_series
+            obj = self.data_object if source == 'data_object' else self.time_series
             comp: str = find_compound(obj, comp)
             if plot_on_background:
                 plot_comp_on_image(
                     comp=comp,
                     background_image=self.image_roi.image,
-                    data_frame=self.data_obj.feature_table,
+                    data_frame=self.data_object.feature_table,
                     title=title,
                     **kwargs
                 )
@@ -2141,7 +2143,7 @@ class ProjectXRF(ProjectBaseClass):
 
     def require_image_handler(self, overwrite=False) -> SampleImageHandlerXRF:
         call_set: bool = True
-        if self._image_handler is not None:
+        if (self._image_handler is not None) and (not overwrite):
             return self._image_handler
         elif hasattr(self, 'SampleImageHandlerXRF_file') and (not overwrite):
             self._image_handler: SampleImageHandlerXRF = SampleImageHandlerXRF(
@@ -2161,39 +2163,39 @@ class ProjectXRF(ProjectBaseClass):
                     'setter'
                 )
                 call_set = True
-        if call_set:
+        if call_set or overwrite:
             self.set_image_handler()
 
         return self._image_handler
 
     def set_data_object(self, **kwargs):
-        self._data_obj = XRF(
+        self._data_object = XRF(
             path_folder=self.path_folder,
             measurement_name=self.measurement_name,
             **kwargs
         )
-        self._data_obj.set_feature_table_from_txts()
-        self._data_obj.feature_table['R'] = 0
+        self._data_object.set_feature_table_from_txts()
+        self._data_object.feature_table['R'] = 0
 
     def require_data_object(self, overwrite: bool = False, **kwargs):
         call_set: bool = True
-        if self._data_obj is not None:
-            return self._data_obj
-        elif hasattr(self, 'XRF_file') and not overwrite:
-            self._data_obj = XRF(
+        if (self._data_object is not None) and (not overwrite):
+            return self._data_object
+        elif hasattr(self, 'XRF_file') and (not overwrite):
+            self._data_object = XRF(
                 path_folder=self.path_folder,
                 measurement_name=self.measurement_name,
                 **kwargs
             )
-            self._data_obj.load()
+            self._data_object.load()
             call_set = False
-            if not hasattr(self._data_obj, 'feature_table'):
+            if not hasattr(self._data_object, 'feature_table'):
                 logger.info('loaded object does not have feature table, setting new one')
                 call_set = True
-        if call_set:
+        if call_set or overwrite:
             self.set_data_object(**kwargs)
 
-        return self._data_obj
+        return self._data_object
 
 
 class ProjectMSI(ProjectBaseClass):
@@ -2363,7 +2365,7 @@ class ProjectMSI(ProjectBaseClass):
             )
             self._image_handler.load()
             self._image_handler.set_photo()
-        if not hasattr(self._image_handler, 'extent_spots') or overwrite:  # make sure it has extent_spots
+        if (not hasattr(self._image_handler, 'extent_spots')) or overwrite:  # make sure it has extent_spots
             self.set_image_handler()
 
         return self._image_handler
@@ -2425,17 +2427,16 @@ class ProjectMSI(ProjectBaseClass):
             plts: bool = False,
             **kwargs
     ):
-        # create spectra object
-        if spectra is None:
-            self._spectra: Spectra = Spectra(reader=reader)
-        else:
-            self._spectra = spectra
-
         if reader is None:
             reader = self.require_hdf_reader()
         if not full:
             logger.info('Setting partially initialized spectra object')
             return
+        # create spectra object
+        if spectra is None:
+            self._spectra: Spectra = Spectra(reader=reader)
+        else:
+            self._spectra = spectra
 
         if not np.any(self._spectra.intensities.astype(bool)):
             logger.info('spectra object does not have a summed intensity')
@@ -2454,7 +2455,7 @@ class ProjectMSI(ProjectBaseClass):
             self._spectra.set_kernels(**kwargs)
         if targets is not None:
             self._spectra.set_targets(targets, plts=plts)
-        if not hasattr(self.spectra, 'line_spectra'):
+        if (not hasattr(self.spectra, 'line_spectra')) or (not np.any(self._spectra.line_spectra)):
             logger.info('spectra object does not have binned spectra')
             self._spectra.bin_spectra(reader, **kwargs)
             self._spectra.filter_line_spectra(SNR_threshold=SNR_threshold, **kwargs)
@@ -2469,9 +2470,9 @@ class ProjectMSI(ProjectBaseClass):
 
     def require_spectra(self, overwrite: bool = False, **kwargs) -> Spectra:
         call_set: bool = True
-        if self._spectra is not None:
+        if (self._spectra is not None) and (not overwrite):
             return self._spectra
-        if (
+        elif (
             (
                 hasattr(self, 'spectra_object_file')
                 or hasattr(self, 'Spectra_file')
@@ -2488,7 +2489,7 @@ class ProjectMSI(ProjectBaseClass):
                 logger.info('loaded fully initialized spectra object')
                 self._spectra.binned_spectra_to_df()
                 call_set = True
-        if call_set:
+        if call_set or overwrite:
             self.set_spectra(
                 spectra=self._spectra,  # continue from loaded spectra or None
                 **kwargs
@@ -2501,17 +2502,15 @@ class ProjectMSI(ProjectBaseClass):
 
     def set_data_object(self, source='spectra'):
         assert (
-            (self.spectra is not None) and (
-                hasattr(self.spectra, 'feature_table')
-                or hasattr(self.spectra, 'line_spectra')
-            )
+            hasattr(self.spectra, 'feature_table')
+            or hasattr(self.spectra, 'line_spectra')
         ), 'set spectra object first'
         self._data_object: MSI = MSI(
             self.path_d_folder, path_mis_file=self.path_mis_file
         )
-        self._data_obj.set_distance_pixels()
+        self._data_object.set_distance_pixels()
         if source == 'spectra':
-            self._data_obj.set_feature_table_from_spectra(self.spectra)
+            self._data_object.set_feature_table_from_spectra(self.spectra)
         elif source == 'da_export':
             raise NotImplementedError()
         else:
@@ -2519,20 +2518,20 @@ class ProjectMSI(ProjectBaseClass):
 
     def require_data_object(self, overwrite=False):
         call_set = True
-        if self._data_obj is not None:
-            return self._data_obj
-        if hasattr(self, 'MSI_file') and not overwrite:
-            self._data_obj: MSI = MSI(
+        if (self._data_object is not None) and (not overwrite):
+            return self._data_object
+        if hasattr(self, 'MSI_file') and (not overwrite):
+            self._data_object: MSI = MSI(
                 self.path_d_folder, path_mis_file=self.path_mis_file
             )
-            self._data_obj.load()
+            self._data_object.load()
             call_set = False
-            if hasattr(self.data_obj, 'feature_table'):
+            if hasattr(self.data_object, 'feature_table'):
                 call_set = True
         if call_set:
             self.set_data_object()
 
-        return self._data_obj
+        return self._data_object
 
     def add_xrf(self, project_xrf: ProjectXRF, **kwargs) -> None:
         self.combine_with_project(project_xrf, tag='xrf', **kwargs)
@@ -2544,7 +2543,7 @@ class ProjectMSI(ProjectBaseClass):
             prior_std_bayspline: int = 10,
             **kwargs
     ):
-        assert self.time_series is not None
+        assert self._time_series is not None
 
         self.UK37_proxy = UK37(TS=self.time_series, **kwargs)
         self.UK37_proxy.correct(correction_factor=correction_factor)
@@ -2592,12 +2591,12 @@ class MultiMassWindowProject(ProjectBaseClass):
 
         # TODO: optimize
         # TODO: issue: image region is not the same as measurement region
-        for col in p_other.data_obj.feature_table.columns:
+        for col in p_other.data_object.feature_table.columns:
             # TODO: fix broken get_comp_as_img reference
-            img: np.ndarray[float] = p_other.data_obj.get_comp_as_img(col, exclude_holes=False)
+            img: np.ndarray[float] = p_other.data_object.get_comp_as_img(col, exclude_holes=False)
             img = expand_image(img)
             t.fit(img)
-            p_main.data_obj.add_attribute_from_image(img, column_name=col)
+            p_main.data_object.add_attribute_from_image(img, column_name=col)
 
         # combine feature tables
         return p_main
@@ -2628,11 +2627,11 @@ class MultiSectionProject:
 
     def _combine_feature_tables(self, *projects):
         # TODO: assertions
-        # self.data_obj = MultiSectionData(*folders)
+        # self.data_object = MultiSectionData(*folders)
         if hasattr(self.spectra, 'line_spectra') and not hasattr(self.spectra, 'feature_table'):
             self.spectra.feature_table = self.spectra.binned_spectra_to_df()
         if hasattr(self.spectra, 'feature_table'):
-            self.data_obj.feature_table = self.spectra.feature_table
+            self.data_object.feature_table = self.spectra.feature_table
         else:
             # TODO: this
             ...

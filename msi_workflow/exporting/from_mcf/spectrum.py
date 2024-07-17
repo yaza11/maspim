@@ -220,7 +220,7 @@ class Spectra(Convinience):
             initiate: bool,
     ) -> bool:
         assert (reader is not None) or (path_d_folder is not None), \
-            'Either pass a reader or load and the corresponding d-folder'
+            'Either pass a reader or the corresponding d-folder'
         if reader is not None:
             assert isinstance(reader, ReadBrukerMCF | hdf5Handler), \
                 'Reader must be an instance of ReadBrukerMCF or hdf5Handler'

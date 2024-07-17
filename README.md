@@ -16,7 +16,7 @@ You may also want to check out [msiAlign](https://github.com/weimin-liu/msiAlign
 
 ## Installing `maspim`
 
-Currently `maspim` is not on PyPI. For now (using pip), just run  
+Currently `maspim` is not on PyPI. For now just run  
 ````bash
 pip install git+https://github.com/weimin-liu/msi_workflow.git
 ````
@@ -52,10 +52,8 @@ p.set_time_series()
 p.set_UK37()
 ```
 
-Add run commands and examples you think users will find useful. Provide an options reference for bonus points!
-
 ## Contributing to `maspim`
-<!--- If your README is long or you have some specific process or steps you want contributors to follow, consider creating a separate CONTRIBUTING.md file--->
+
 If you find any bugs or missing features, you are welcome to contribute to `maspim`, just follow these steps:
 
 1. Fork this repository.
