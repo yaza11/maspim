@@ -991,7 +991,7 @@ class ImageROI(Image):
     >>> ir.set_classification_varying_kernel_size()
     can be used which takes the median classification of a bunch of classifications with filters at different sizes.
     This method is more prone to noise.
-    >>> ir._require_classification()
+    >>> ir.require_classification()
     is a convinience function which chooses the adaptive mean method if an age span has been set and the varying kernel
     size approach otherwise.
 
@@ -1380,21 +1380,21 @@ class ImageROI(Image):
         if plts:
             plt_cv2_image(image_classification, title='classified image')
 
-    def _require_classification(self) -> np.ndarray[np.uint8]:
+    def require_classification(self, **kwargs) -> np.ndarray[np.uint8]:
         """Create and return the image classification with parameters."""
         if not hasattr(self, '_image_classification'):
             if not hasattr(self, 'age_span'):
                 logger.warning('No age span specified, falling back to more general method')
-                self.set_classification_varying_kernel_size()
+                self.set_classification_varying_kernel_size(**kwargs)
             else:
-                self.set_classification_adaptive_mean()
+                self.set_classification_adaptive_mean(**kwargs)
 
         return self._image_classification
 
     @property
     def image_classification(self) -> np.ndarray[np.uint8]:
         """Create and return the image classification with parameters."""
-        return self._require_classification()
+        return self.require_classification()
 
     def set_punchholes(
             self,

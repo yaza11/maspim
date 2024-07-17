@@ -153,7 +153,7 @@ def plt_rect_on_image(
         save_png: str | None = None,
         dpi: int = 300,
         hold: bool | str = False,
-        **kwargs: dict
+        **kwargs
 ) -> tuple[plt.Figure, plt.Axes] | None:
     """
     Plot a rectangle on top of an image.
@@ -167,7 +167,7 @@ def plt_rect_on_image(
     save_png: str, optional
         The path to save the image. Default is None which will not save the image.
     dpi: int, optional
-        Resoluttion of saved image.
+        Resolution of saved image.
     hold: bool, optional
         Whether to return fig and ax.
     kwargs: Any

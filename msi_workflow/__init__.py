@@ -1,7 +1,7 @@
 from msi_workflow.project.main import get_project, ProjectXRF, ProjectMSI
 from msi_workflow.project.file_helpers import ImagingInfoXML
 
-from msi_workflow.imaging.xray import xray
+from msi_workflow.imaging.xray.main import XRay
 from msi_workflow.imaging.register.transformation import Transformation
 from msi_workflow.imaging.register.descriptor import Descriptor
 from msi_workflow.imaging.misc.find_punch_holes import find_holes
