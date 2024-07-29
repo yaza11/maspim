@@ -13,7 +13,10 @@ p.require_images()  # sets or loads ImageHandler, ImageSample, ImageROI and Imag
 p.require_spectra(targets=[mC37_2, mC37_3])  # perform all steps to extract intensities from alkenones
 p.require_data_object()
 p.add_image_attributes()
-p.add_depth_column()
-p.add_age_column()
-p.require_time_series(plts=plts)
-p.set_UK37()
+# p.add_depth_column()
+# p.add_age_column()
+# p.require_time_series(plts=plts, overwrite=True, average_by_col='depth')
+# p.set_UK37()
+
+
+p.plot_comp(mC37_2, 'data_object', plot_on_background=True)

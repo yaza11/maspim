@@ -18,6 +18,8 @@ from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 from msi_workflow.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image
 from msi_workflow.exporting.legacy.ion_image import (get_da_export_ion_image,
                                                      get_da_export_data)
+from msi_workflow.imaging.util.image_boxes import region_in_box
+from msi_workflow.imaging.util.image_plotting import plt_rect_on_image
 
 from msi_workflow.util import Convinience
 
@@ -289,20 +291,24 @@ class SampleImageHandlerMSI(Convinience):
         self.data_ROI_xywh: tuple[int, ...] = (xd, yd, wd, hd)  # data units
         self.image_roi: np.ndarray[int] = img_resized
 
-    def plot_overview(self):
+    def plot_overview(
+            self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False
+    ) -> None | tuple[plt.Figure, plt.Axes]:
         """Plot the image with identified region of measurement."""
         img = PIL_to_np(self.image)
-
-        # x, y, w, h = self.data_ROI_xywh
-        # rect_data = patches.Rectangle((x, y), w, h, fill=False, edgecolor='r')
 
         x, y, w, h = self.photo_ROI_xywh
         rect_photo = patches.Rectangle((x, y), w, h, fill=False, edgecolor='g')
 
-        fig, ax = plt.subplots()
+        if fig is None:
+            assert ax is None, "If ax is provided, must also provide fig"
+            fig, ax = plt.subplots()
+        else:
+            assert ax is not None, "If fig is provided, must also provide ax"
         plt.imshow(img)
-        # ax.add_patch(rect_data)
         ax.add_patch(rect_photo)
+        if hold:
+            return fig, ax
         plt.show()
 
 
@@ -524,19 +530,23 @@ class SampleImageHandlerXRF(Convinience):
         ]
         self.image_roi = img_resized
 
-    def plot_overview(self):
+    def plot_overview(
+            self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False
+    ) -> None | tuple[plt.Figure, plt.Axes]:
         img = PIL_to_np(self.image)
-
-        # x, y, w, h = self.data_ROI_xywh
-        # rect_data = patches.Rectangle((x, y), w, h, fill=False, edgecolor='r')
 
         x, y, w, h = self.photo_ROI_xywh
         rect_photo = patches.Rectangle((x, y), w, h, fill=False, edgecolor='g')
 
-        fig, ax = plt.subplots()
+        if fig is None:
+            assert ax is None, "If ax is provided, must also provide fig"
+            fig, ax = plt.subplots()
+        else:
+            assert ax is not None, "If fig is provided, must also provide ax"
         plt.imshow(img)
-        # ax.add_patch(rect_data)
         ax.add_patch(rect_photo)
+        if hold:
+            return fig, ax
         plt.show()
 
 
@@ -900,7 +910,7 @@ class ProjectBaseClass:
         kwargs: Any
             keywords for the setters.
         """
-        self.require_image_handler(overwrite=overwrite, **kwargs)
+        self.require_image_handler(overwrite=overwrite)
         self.require_image_sample(overwrite=overwrite, **kwargs)
         self.require_image_roi(overwrite=overwrite, **kwargs)
         if self._is_laminated:
@@ -1976,7 +1986,7 @@ class ProjectBaseClass:
             if plot_on_background:
                 plot_comp_on_image(
                     comp=comp,
-                    background_image=self.image_roi.image,
+                    background_image=self.image_classified.image if self._corrected_tilt else self.image_roi.image,
                     data_frame=self.data_object.feature_table,
                     title=title,
                     **kwargs
@@ -1984,7 +1994,36 @@ class ProjectBaseClass:
             else:
                 obj.plot_comp(title=title, comp=comp, **kwargs)
 
+    def plot_overview(self):
+        """Plot figures representing the current state of the project."""
+        fig, axs = plt.subplots(
+            nrows=5, ncols=2, figsize=(10, 25), frameon=False, layout='constrained'
+        )
+        if self._image_handler is not None:
+            fig, ax = self.image_handler.plot_overview(fig=fig, ax=axs[0, 0], hold=True)
+            axs[0, 0] = ax
+            axs[0, 0].set_title('Measurement region')
+        if self._image_sample is not None:
+            image = self.image_sample.image
+            x, y, w, h = self.image_sample.xywh_ROI
+            fig, ax = plt_rect_on_image(
+                fig=fig,
+                ax=axs[0, 1],
+                image=image,
+                box_params=region_in_box(image=image, x=x, y=y, w=w, h=h),
+                hold=True
+            )
+            axs[0, 1].set_title('Sample region')
+        if self._image_roi is not None:
+            fig, ax = self.image_roi.plot_overview(fig=fig, axs=[axs[1, 0]])
+            axs[1, 0] = ax[0]
+            axs[1, 0].set_title('Classification and punch-holes')
+        if self._image_classified is not None:
+            fig, ax = self.image_classified.plot_overview(fig=fig, axs=axs[1, 1])
+            axs[1, 1] = ax
+            axs[1, 1].set_title('Laminae')
 
+            
 class ProjectXRF(ProjectBaseClass):
     _is_MSI: bool = False
 

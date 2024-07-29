@@ -953,7 +953,7 @@ class ImageSample(Image):
         plt_cv2_image(
             fig=fig,
             ax=axs[1, 1],
-            image=self._require_image_sample_area()[0],
+            image=self.image_sample_area,
             title='final sample region', no_ticks=True
         )
         fig.tight_layout()
@@ -970,15 +970,15 @@ class ImageROI(Image):
 
     If the image is derived from an ImageSample object, it is advised to iniate the ImageROI instance from
     the 'from_parent' constructor:
-    >>> from msi_workflow.imaging.main.cImage import ImageROI
+    >>> from msi_workflow import ImageROI
     >>> i = ImageSample(...)
     >>> i.set_from_parent(...)
     >>> ir = ImageROI.from_parent(i)
 
-    Otherwise the instance can be initiated using the default constructor by either providing an image or a file to an image.
+    Otherwise, the instance can be initiated using the default constructor by either providing an image or a file to an image.
     For file management it is required to specify the path_folder, if path_image_file is not provided (otherwise the folder
     will be infered from the image file path). So initiating could look like this (obj_color is always required):
-    >>> from msi_workflow.imaging.main.cImage import ImageROI
+    >>> from msi_workflow import ImageROI
     >>> ir = ImageROI(obj_color='light', path_image_file='path/to/your/image/file.png')
     or
     >>> your_image = np.random.random((100, 200))
@@ -1451,25 +1451,36 @@ class ImageROI(Image):
             self.set_punchholes(*args, **kwargs)
         return self._punchholes, self._punchhole_size
 
-    def plot_overview(self):
+    def plot_overview(
+            self, fig: plt.Figure | None = None, axs: Iterable[plt.Axes] | None = None, hold=False
+    ) -> None | tuple[plt.Figure, Iterable[plt.Axes]]:
         """Plot the original, preprocessed, classified image and the punchholes."""
         if not hasattr(self, "_punchholes"):
             logger.warning("Punchholes not set with required parameter 'remove_gelatine', this may affect performance.")
         self.require_punchholes(remove_gelatine=True)
         hole_size: int = round(self._punchhole_size)
 
-        fig, axs = plt.subplots(nrows=2, ncols=2, layout="constrained")
-        plt_cv2_image(fig=fig, ax=axs[0, 0], image=self.image, title="Input image", no_ticks=True)
-        plt_cv2_image(fig=fig, ax=axs[0, 1], image=self._get_preprocessed_for_classification()[0],
-                      title="Preprocessed image",
-                      no_ticks=True)
-        plt_cv2_image(fig=fig, ax=axs[1, 0], image=self.image_classification, title="Classified image",
-                      no_ticks=True)
+        if fig is None:
+            assert axs is None, "If ax is provided, must also provide fig"
+            fig, axs = plt.subplots(nrows=2, ncols=2, layout="constrained")
+        else:
+            assert axs is not None, "If fig is provided, must also provide ax"
+
+        # will plot only the binary image with punch-holes
+        only_final = len(axs) == 0
+
+        if not only_final:
+            plt_cv2_image(fig=fig, ax=axs[0, 0], image=self.image, title="Input image", no_ticks=True)
+            plt_cv2_image(fig=fig, ax=axs[0, 1], image=self._get_preprocessed_for_classification()[0],
+                          title="Preprocessed image",
+                          no_ticks=True)
+            plt_cv2_image(fig=fig, ax=axs[1, 0], image=self.image_classification, title="Classified image",
+                          no_ticks=True)
 
         fig, ax11 = plt_rect_on_image(
             fig=fig,
-            ax=axs[1, 1],
-            image=self.image_binary,
+            ax=axs[0] if only_final else axs[1, 1],
+            image=self.image_classification if only_final else self.image_binary,
             box_params=region_in_box(image=self.image_binary,
                                      point_topleft=np.array(self._punchholes[0])[::-1] - hole_size / 2,
                                      point_bottomright=np.array(self._punchholes[0])[::-1] + hole_size / 2),
@@ -1479,7 +1490,7 @@ class ImageROI(Image):
         plt_rect_on_image(
             fig=fig,
             ax=ax11,
-            image=self.image_binary,
+            image=self.image_classification if only_final else self.image_binary,
             box_params=region_in_box(
                 image=self.image_binary,
                 point_topleft=np.array(self._punchholes[1])[::-1] - hole_size / 2,
@@ -1487,6 +1498,9 @@ class ImageROI(Image):
             ), no_ticks=True,
             title='Detected punch-holes'
         )
+
+        if hold:
+            return fig, axs
 
         plt.show()
 
@@ -2490,30 +2504,47 @@ use_age_model, not {height0_mode}')
         plt.title('zones')
         plt.show()
 
-    def plot_overview(self):
+    def plot_overview(
+            self, fig: plt.Figure | None = None, axs: Iterable[plt.Axes] | None = None, hold=False
+    ) -> None | tuple[plt.Figure, Iterable[plt.Axes]]:
         """Plot an overview graph."""
-        fig, axs = plt.subplots(nrows=2, ncols=2, sharex=True, layout='constrained')
 
-        plt_cv2_image(image=self.image,
-                      ax=axs[0, 0],
-                      fig=fig,
-                      title='Original image',
-                      no_ticks=True)
-        plt_cv2_image(image=self.image_classification,
-                      ax=axs[0, 1],
-                      fig=fig,
-                      title='Classification input',
-                      no_ticks=True)
+        if fig is None:
+            assert axs is None, "If ax is provided, must also provide fig"
+            fig, axs = plt.subplots(nrows=2, ncols=2, sharex=True, layout='constrained')
+        else:
+            assert axs is not None, "If fig is provided, must also provide ax"
+
+        # will plot only the simplified classification
+        only_final = len(axs) == 0
+
+        if not only_final:
+            plt_cv2_image(image=self.image,
+                          ax=axs[0, 0],
+                          fig=fig,
+                          title='Original image',
+                          no_ticks=True)
+            plt_cv2_image(image=self.image_classification,
+                          ax=axs[0, 1],
+                          fig=fig,
+                          title='Classification input',
+                          no_ticks=True)
+            fig, axs = self.plot_quality(fig=fig, ax=axs[1, 1])
+
         plt_cv2_image(image=self.get_image_simplified_classification(),
-                      ax=axs[1, 0],
+                      ax=axs[0] if only_final else axs[1, 0],
                       fig=fig,
                       title='Simplified classification',
                       no_ticks=True)
         # returns quality where axs = [ax]
-        fig, axs = self.plot_quality(fig=fig, ax=axs[1, 1])
-        ax11 = axs[0]
-        ax11.set_xlabel('depth (pixels)')
-        ax11.set_ylabel('scaled criterion')
+        if not only_final:
+            ax = axs[0]
+            ax.set_xlabel('depth (pixels)')
+            ax.set_ylabel('scaled criterion')
+
+        if hold:
+            return fig, axs
+
         plt.show()
 
     def set_laminae_params_table(self, **kwargs):
