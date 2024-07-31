@@ -1,5 +1,5 @@
 from copy import deepcopy
-from typing import Iterable, Callable, Any
+from typing import Iterable, Callable, Any, Self
 import numpy as np
 import os
 import pickle
@@ -37,7 +37,7 @@ def return_existing(attr_name: str) -> Callable:
     return return_existing_decorator
 
 
-class2d = {  # True if saved in d-folder
+class_in_d_folder = {  # True if saved in d-folder
     'ImageClassified': False,
     'ImageROI': False,
     'ImageSample': False,
@@ -53,15 +53,30 @@ class2d = {  # True if saved in d-folder
 }
 
 
+def check_attr(obj, attr_name: str, check_nonempty: bool = False) -> bool:
+    """
+    Check whether an attribute exists and is valid.
+
+    :param obj: Object to check
+    :param attr_name: Name of the attribute
+    :param check_nonempty: If True then also check if any of the values truthy
+    """
+    valid: bool = hasattr(obj, attr_name) and (getattr(obj, attr_name) is not None)
+    if not check_nonempty:
+        return valid
+    return valid and any(getattr(obj, attr_name))
+
+
 class Convinience:
     def _get_disc_folder_and_file(self) -> tuple[str, str]:
-        assert hasattr(self, 'path_folder') or hasattr(self, 'path_file'), \
+        assert (check_attr(self, 'path_folder')
+                or check_attr(self, 'path_file')), \
             'object does not have a path_folder attribute'
 
         class_name: str = str(self.__class__).split('.')[-1][:-2]
         file_name: str = class_name + '.pickle'
 
-        if class2d[class_name]:
+        if class_in_d_folder[class_name]:
             folder: str = self.path_d_folder
         else:
             folder: str = self.path_folder
@@ -70,15 +85,23 @@ class Convinience:
 
         return folder, file
 
+    def _post_load(self):
+        pass
+
+    def _pre_load(self):
+        pass
+
     def load(self):
+        self._pre_load()
+
         folder, file = self._get_disc_folder_and_file()
 
         if not os.path.exists(file):
             raise FileNotFoundError(
                 f'found no saved object in folder '
-                f'{folder if folder != "" else "."} ' +
-                f'with name {os.path.basename(file)}'
-        )
+                f'{folder if folder != "" else "."} with name '
+                f'{os.path.basename(file)}'
+            )
 
         # for backwards compatibility, filter out attributes that are no longer
         # desired to load
@@ -98,8 +121,18 @@ class Convinience:
             
         logger.info(f'loaded {self.__class__.__name__} with keys {load_attr}')
 
+        self._post_load()
+
+    def _pre_save(self):
+        pass
+
+    def _post_save(self):
+        pass
+
     def save(self):
         """Save class __dict__ instance to file."""
+        self._pre_save()
+
         folder, file = self._get_disc_folder_and_file()
 
         # discard all attributes that are not flagged as relevant
@@ -111,6 +144,8 @@ class Convinience:
         logger.info(f'saving image object with {self.__dict__.keys()} to {folder}')
         with open(file, 'wb') as f:
             pickle.dump(save_dict, f, pickle.HIGHEST_PROTOCOL)
+
+        self._post_save()
 
     def copy(self):
         return deepcopy(self)
@@ -148,9 +183,9 @@ class Convinience:
             deviation is small enough, otherwise returns None.
         """
         if cols is None:
-            if hasattr(self, 'feature_table'):
+            if check_attr(self, 'feature_table'):
                 cols = np.array(self.feature_table.columns).astype(str)
-            elif hasattr(self, 'feature_table_zone_averages'):
+            elif check_attr(self, 'feature_table_zone_averages'):
                 cols = np.array(self.feature_table_zone_averages.columns).astype(str)
             else:
                 raise AttributeError('Could not find feature table. Pass cols')

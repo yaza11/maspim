@@ -73,7 +73,14 @@ MetaFeatures_disc_attributes = {
     'features_clustering'
 }
 
-SampleImageHandlerMSI_attributes = {'extent_spots', 'd_folder', 'mis_file', 'image_file'}
+SampleImageHandlerMSI_attributes = {
+    '_extent_spots',
+    'd_folder',
+    'mis_file',
+    'image_file',
+    '_photo_roi_xywh',
+    '_data_roi_xywh'
+}
 
 SampleImageHandlerXRF_attributes = {
     'image_file',
@@ -86,24 +93,28 @@ SampleImageHandlerXRF_attributes = {
 
 Spectra_attributes = {
     'd_folder',
-    'delta_mz',
-    'mzs',
-    'intensities',
-    'indices',
-    'limits',
-    'peaks',
-    'peak_properties',
-    'peak_setting_parameters',
-    'kernel_shape',
-    'kernel_params',
-    'line_spectra',
-    'feature_table',
-    'losses',
-    'binning_by',
-    'noise_level',
-    'calibration_parameters',
-    'calibration_settings'
+    '_delta_mz',
+    '_mzs',
+    '_intensities',
+    '_indices',
+    '_limits',
+    '_peaks',
+    '_peak_properties',
+    '_peak_setting_parameters',
+    '_peaks_SNR',
+    '_peaks_is_side_peak',
+    '_kernel_params',
+    '_kernel_shape',
+    '_line_spectra',
+    '_feature_table',
+    '_losses',
+    '_binning_by',
+    '_noise_level',
+    '_noise_level_subtracted',
+    '_calibration_parameters',
+    '_calibration_settings'
 }
+
 MultiSectionSpectra_attributes = Spectra_attributes
 
 XRay_attributes = {

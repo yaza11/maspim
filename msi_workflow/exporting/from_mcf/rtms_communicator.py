@@ -132,7 +132,7 @@ class ReadBrukerMCF(ReaderBaseClass):
             self,
             index: int,
             poly_coeffs: np.ndarray[float] | None = None,
-            **kwargs
+            limits: tuple[float, float] | None = None
     ) -> Spectrum:
         """
         Get spectrum in mcf file by index (R index, so 1-based).
@@ -154,7 +154,9 @@ class ReadBrukerMCF(ReaderBaseClass):
         """
         rspectrum = rtms.getSpectrum(self.reader, int(index))
         # convert to python
-        spectrum: Spectrum = Spectrum(rspectrum, **kwargs)
+        if limits is None:
+            limits = self.limits
+        spectrum: Spectrum = Spectrum(rspectrum, limits=limits)
 
         if poly_coeffs is not None:
             spectrum: Spectrum = self.calibrate_spectrum(spectrum, poly_coeffs)

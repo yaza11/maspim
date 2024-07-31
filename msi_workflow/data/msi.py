@@ -124,7 +124,7 @@ class MSI(Data):
         if has_df:
             self.feature_table: pd.DataFrame = spectra.feature_table.copy()
         else:
-            self.feature_table: pd.DataFrame = spectra.binned_spectra_to_df().copy()
+            self.feature_table: pd.DataFrame = spectra.set_feature_table().copy()
     
 
 if __name__ == '__main__':

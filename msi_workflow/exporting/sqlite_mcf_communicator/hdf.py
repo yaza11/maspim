@@ -168,7 +168,12 @@ class hdf5Handler(ReaderBaseClass):
                 chunks=(1, len(mzs))
             )
             # read, resample and write all spectra
-            for it, idx in tqdm(enumerate(indices), total=N, desc='Writing to hdf5', smoothing=50/N):
+            for it, idx in tqdm(
+                    enumerate(indices),
+                    total=N,
+                    desc='Writing to hdf5',
+                    smoothing=50/N
+            ):
                 spec: Spectrum = reader.get_spectrum(idx)
                 spec.resample(mzs)
                 dset[it, :] = spec.intensities
@@ -247,9 +252,10 @@ class hdf5Handler(ReaderBaseClass):
         """
         index -= 1  # convert 1 based to 0 based index
 
-        res = self.read([index])
+        with h5py.File(self.path_file, 'r') as f:
+            intensities = f['intensities'][index, :]
 
-        spectrum = Spectrum((res['mzs'], res['intensities']), **kwargs)
+        spectrum = Spectrum((self.mzs, intensities), **kwargs)
 
         if poly_coeffs is not None:
             spectrum = self.calibrate_spectrum(spectrum, poly_coeffs)

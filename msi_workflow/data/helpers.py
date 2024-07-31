@@ -25,7 +25,8 @@ def get_comp_as_img(
         key_hole_pixels: int | bool | str = 0,
         flip: bool = False,
         idx_x: str = 'x_ROI',
-        idx_y: str = 'y_ROI'
+        idx_y: str = 'y_ROI',
+        **_
 ) -> [np.ndarray, str, str]:
     """
     Return a component from the feature table as an image by pivoting.
@@ -82,13 +83,52 @@ def get_comp_as_img(
     return img_mz, idx_x, idx_y
 
 
+def clip_image(
+        image: np.ndarray,
+        comp: str | float | int,
+        clip_above_percentile: float = .95,
+        clip_below_percentile: float = .0,
+        **_
+) -> tuple[np.ndarray, float, float]:
+    """Return copy of image where values below and above specified percentiles are clipped."""
+    image_clipped = image.copy()
+    if clip_above_percentile is None:
+        comp_is_numeric = str(comp).replace(".", "").isnumeric()
+        comp_is_element = str(comp) in elements.Abbreviation
+        comp_is_data = comp_is_element or comp_is_numeric
+        clip_above_percentile = .95 if comp_is_data else None
+    if clip_above_percentile is not None:
+        vmax = np.nanquantile(image, clip_above_percentile)
+        logger.info(f'clipping values to {clip_above_percentile:.0%} percentile')
+    else:
+        vmax = np.nanmax(image)
+        logger.info(f'not clipping values')
+
+    if clip_below_percentile is None:
+        comp_is_numeric = str(comp).replace(".", "").isnumeric()
+        comp_is_element = str(comp) in elements.Abbreviation
+        comp_is_data = comp_is_element or comp_is_numeric
+        clip_below_percentile = 0 if comp_is_data else None
+    if clip_below_percentile is not None:
+        vmin = np.nanquantile(image, clip_below_percentile)
+        logger.info(f'clipping values to {clip_below_percentile:.0%} percentile')
+    else:
+        vmin = np.nanmin(image)
+        logger.info(f'not clipping values')
+
+    image_clipped[image > vmax] = vmax
+    image_clipped[image < vmin] = vmin
+
+    return image_clipped, vmin, vmax
+
+
+
 def plot_comp_on_image(
         comp: str | float | int,
         background_image: np.ndarray,
         data_frame: pd.DataFrame,
         *,
         title: str | None = None,
-        clip_at: float = .95,
         fig: plt.Figure | None = None,
         ax: plt.Axes | None = None,
         hold: bool = False,
@@ -99,21 +139,8 @@ def plot_comp_on_image(
 
     # get ion image
     img_mz, *_ = get_comp_as_img(data_frame, comp, **kwargs)
-
-    if clip_at is None:
-        comp_is_numeric = str(comp).replace(".", "").isnumeric()
-        comp_is_element = str(comp) in elements.Abbreviation
-        comp_is_data = comp_is_element or comp_is_numeric
-        clip_at = .95 if comp_is_data else None
-    if clip_at is not None:
-        vmax = np.nanquantile(img_mz, clip_at)
-        logger.info(f'clipping values to {int(clip_at * 100)} percentile')
-    else:
-        vmax = np.nanmax(img_mz)
-        logger.info(f'not clipping values')
-
-    img_mz[img_mz > vmax] = vmax
-    # img_mz[img_mz < np.nanquantile(img_mz, .25)] = 0
+    # apply clipping
+    img_mz, *_ = clip_image(img_mz, comp=comp, **kwargs)
 
     # pad to fill out entire image
     x_ROI, *_ = get_comp_as_img(data_frame, 'x_ROI', **kwargs)
@@ -177,7 +204,6 @@ def plot_comp(
         title: str | None = None,
         save_png: str | None = None,
         flip: bool = False,
-        clip_at: float | None = None,
         SNR_scale: bool = False,
         N_labels: int = 5,
         y_tick_precision: int = 0,
@@ -201,7 +227,7 @@ def plot_comp(
         not be saved.
     flip: bool, optional
         Whether to flip the image over its main diagonal.
-    clip_at: float | None, optional
+    clip_above_percentile: float | None, optional
         By default values are clipped to the 95th percentile for data features.
         Nondata features are by default not clipped. Providing a value will
         clip the data at the given quantile (valid values are (0, 1]).
@@ -224,18 +250,7 @@ def plot_comp(
         data_frame=data_frame, comp=comp, flip=flip, **kwargs
     )
 
-    # clip values above vmax
-    if clip_at is None:
-        comp_is_numeric = str(comp).replace(".", "").isnumeric()
-        comp_is_element = str(comp) in elements.Abbreviation
-        comp_is_data = comp_is_element or comp_is_numeric
-        clip_at = .95 if comp_is_data else None
-    if clip_at is not None:
-        vmax = np.nanquantile(img_mz, clip_at)
-        logger.info(f'clipping values to {int(clip_at * 100)} percentile')
-    else:
-        vmax = np.nanmax(img_mz)
-        logger.info(f'not clipping values')
+    img_clipped, vmin, vmax = clip_image(img_mz, comp=comp, **kwargs)
 
     if fig is None:
         assert ax is None
@@ -243,9 +258,10 @@ def plot_comp(
     else:
         hold = True
 
-    im = plt.imshow(img_mz,
+    im = plt.imshow(img_clipped,
                     aspect='equal',
                     interpolation='none',
+                    vmin=vmin,
                     vmax=vmax)
 
     if title is None:
@@ -253,7 +269,7 @@ def plot_comp(
 
     y_tick_positions = np.linspace(
         start=0,
-        stop=img_mz.shape[0],
+        stop=img_clipped.shape[0],
         num=N_labels,
         endpoint=True
     )
@@ -301,16 +317,21 @@ def plot_comp(
     cax = divider.append_axes(cax_pos, size="20%", pad=0.05)
     # SNR ratios
     if SNR_scale:
-        ticks = [0, vmax / 3, 2 * vmax / 3, vmax]
-        ticklabels = [
-            '0',
-            f'{np.around(vmax / 3, 1)}',
-            f'{np.around(2 * vmax / 3, 1)}',
-            f'>{np.around(vmax, 1)}'
-        ]
+        ticks = [vmin, vmin + (vmax - vmin) / 3, vmin + (vmax - vmin) * 2 / 3, vmax]
+        ticklabels = [str(np.around(t, 1)) for t in ticks]
     else:
-        ticks = [0, vmax]
-        ticklabels = ['0', '{:.0e}'.format(vmax)]
+        ticks = [vmin, vmax]
+        i = 0
+        min_label = max_label = ''
+        while min_label == max_label:
+            min_label = f'{vmin:.{i}e}'
+            max_label = f'{vmax:.{i}e}'
+            i += 1
+        ticklabels = [min_label, max_label]
+    if vmin > np.nanmin(img_mz):
+        ticklabels[0] = r'$\leq$' + ticklabels[0]
+    if vmax < np.nanmax(img_mz):
+        ticklabels[-1] = r'$\geq$' + ticklabels[-1]
     cbar = plt.colorbar(im, cax=cax, ticks=ticks)
     cbar.ax.set_yticklabels(ticklabels)
     cbar.ax.set_ylabel('Intensity', rotation=270 if portait_mode else 0)

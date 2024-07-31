@@ -71,7 +71,7 @@ def get_long_time_series(
         specs.distribute_peaks_and_kernels()
         specs.bin_spectra(readers=readers, integrate_peaks=integrate_peaks)
         specs.filter_line_spectra(SNR_threshold=SNR_threshold)
-        specs.binned_spectra_to_df(readers=readers)
+        specs.set_feature_table(readers=readers)
 
     # all steps after data_object is set
     ts = []

@@ -8,7 +8,7 @@ import logging
 
 from scipy.stats import linregress
 
-from msi_workflow.imaging.main.image import ImageSample, ImageROI
+from msi_workflow.imaging.main import ImageSample, ImageROI
 from msi_workflow.imaging.util.image_convert_types import ensure_image_is_gray
 from msi_workflow.imaging.util.image_plotting import plt_cv2_image
 

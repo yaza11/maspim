@@ -9,7 +9,7 @@ from scipy.optimize import basinhopping
 from typing import Callable, Any, Iterable, Sequence
 from skimage.transform import warp, PiecewiseAffineTransform
 
-from msi_workflow.imaging.main.image import ImageSample, ImageROI
+from msi_workflow.imaging.main import ImageSample, ImageROI
 from msi_workflow.imaging.register.finding_global_shift import apply_stretching, stretching_func
 from msi_workflow.imaging.register.helpers import apply_displacement, Mapper
 from msi_workflow.imaging.register.descriptor import Descriptor

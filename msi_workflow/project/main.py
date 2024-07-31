@@ -37,7 +37,7 @@ from msi_workflow.project.file_helpers import (
     search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy
 )
 
-from msi_workflow.imaging.main.image import ImageSample, ImageROI, ImageClassified
+from msi_workflow.imaging.main import ImageSample, ImageROI, ImageClassified
 from msi_workflow.imaging.util.image_convert_types import (
     ensure_image_is_gray, PIL_to_np, convert
 )
@@ -188,11 +188,17 @@ class SampleImageHandlerMSI(Convinience):
                 ymax: int = img_y
             if img_y < ymin:
                 ymin: int = img_y
-        self.extent_spots = (xmin, xmax, ymin, ymax)
+        self._extent_spots = (xmin, xmax, ymin, ymax)
+
+    @property
+    def extent_spots(self):
+        if not hasattr(self, '_extent_spots'):
+            self.set_extent_data()
+        return self._extent_spots
 
     def set_photo_ROI(
             self,
-            match_pxls: bool = True,
+            match_roi_data: bool = True,
             plts: bool = False
     ) -> None:
         """
@@ -200,7 +206,7 @@ class SampleImageHandlerMSI(Convinience):
 
         Parameters
         ----------
-        match_pxls : bool, optional
+        match_roi_data : bool, optional
             Whether to resize the image to the datapoints. The default is True.
             False will return the original image cropped to the measurement 
             region.
@@ -267,7 +273,7 @@ class SampleImageHandlerMSI(Convinience):
         x_min_FT, x_max_FT, y_min_FT, y_max_FT = self.extent_spots
 
         # resize region in photo to match data points
-        if match_pxls:
+        if match_roi_data:
             img_resized = self.image.resize(
                 (x_max_FT - x_min_FT + 1, y_max_FT - y_min_FT + 1),  # new number of pixels
                 box=(x_min_area, y_min_area, x_max_area, y_max_area),  # area of photo
@@ -287,9 +293,36 @@ class SampleImageHandlerMSI(Convinience):
         wd: int = x_max_FT - x_min_FT
         hd: int = y_max_FT - y_min_FT
 
-        self.photo_ROI_xywh: tuple[int, ...] = (xp, yp, wp, hp)  # photo units
-        self.data_ROI_xywh: tuple[int, ...] = (xd, yd, wd, hd)  # data units
-        self.image_roi: np.ndarray[int] = img_resized
+        self._photo_roi_xywh: tuple[int, ...] = (xp, yp, wp, hp)  # photo units
+        self._data_roi_xywh: tuple[int, ...] = (xd, yd, wd, hd)  # data units
+        self._image_roi: np.ndarray[int] = img_resized
+
+    @property
+    def photo_ROI_xywh(self) -> tuple[int, ...]:
+        if not hasattr(self, '_photo_roi_xywh'):
+            self.set_photo_ROI()
+        return self._photo_roi_xywh
+
+    @property
+    def data_ROI_xywh(self) -> tuple[int, ...]:
+        if not hasattr(self, '_data_roi_xywh'):
+            self.set_photo_ROI()
+        return self._data_roi_xywh
+
+    @property
+    def image_ROI(self):
+        """Uses grayscale values resampled at data points."""
+        if hasattr(self, '_image_roi'):
+            return self._image_roi
+        x_min_FT, x_max_FT, y_min_FT, y_max_FT = self.extent_spots
+        x_min_area, y_min_area, wp, hp = self.photo_ROI_xywh
+        x_max_area, y_max_area = x_min_area + wp, y_min_area + hp
+
+        self._image_roi = self.image.resize(
+            (x_max_FT - x_min_FT + 1, y_max_FT - y_min_FT + 1),  # new number of pixels
+            box=(x_min_area, y_min_area, x_max_area, y_max_area),  # area of photo
+            resample=PIL_Image.Resampling.LANCZOS  # supposed to be best
+        )
 
     def plot_overview(
             self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False
@@ -787,7 +820,7 @@ class ProjectBaseClass:
 
         if call_set or overwrite:  # either overwrite or loaded partially processed obj
             self.set_image_sample(
-                obj_color=self._image_sample.obj_color,  # use eventually stored obj_color
+                obj_color=self._image_sample.obj_color if self._image_sample is not None else None,  # use eventually stored obj_color
                 **kwargs_area
             )
 
@@ -1925,6 +1958,9 @@ class ProjectBaseClass:
         if source in ('reader', 'spectra', 'da_export') and (not self._is_MSI):
             raise KeyError(f'{source} is not a valid source for XRF')
 
+        if plot_on_background:
+            background_image = convert('cv', 'np', self.image_roi.image)
+
         if source in ('reader', 'spectra'):
             reader, df = reader_setup()
             obj = self.spectra if source == 'spectra' else reader
@@ -1933,7 +1969,7 @@ class ProjectBaseClass:
             if plot_on_background:
                 plot_comp_on_image(
                     comp=comp,
-                    background_image=convert('cv', 'np', self.image_roi.image),
+                    background_image=background_image,
                     data_frame=df, **kwargs
                 )
             else:
@@ -1965,7 +2001,7 @@ class ProjectBaseClass:
             if plot_on_background:
                 plot_comp_on_image(
                     comp=comp,
-                    background_image=self.image_roi.image,
+                    background_image=background_image,
                     data_frame=self.data_object.feature_table,
                     title=title,
                     **kwargs
@@ -1986,7 +2022,7 @@ class ProjectBaseClass:
             if plot_on_background:
                 plot_comp_on_image(
                     comp=comp,
-                    background_image=self.image_classified.image if self._corrected_tilt else self.image_roi.image,
+                    background_image=self.image_classified.image if self._corrected_tilt else background_image,
                     data_frame=self.data_object.feature_table,
                     title=title,
                     **kwargs
@@ -2000,30 +2036,26 @@ class ProjectBaseClass:
             nrows=5, ncols=2, figsize=(10, 25), frameon=False, layout='constrained'
         )
         if self._image_handler is not None:
-            fig, ax = self.image_handler.plot_overview(fig=fig, ax=axs[0, 0], hold=True)
-            axs[0, 0] = ax
+            self.image_handler.plot_overview(fig=fig, ax=axs[0, 0], hold=True)
             axs[0, 0].set_title('Measurement region')
         if self._image_sample is not None:
             image = self.image_sample.image
             x, y, w, h = self.image_sample.xywh_ROI
-            fig, ax = plt_rect_on_image(
+            plt_rect_on_image(
                 fig=fig,
-                ax=axs[0, 1],
                 image=image,
                 box_params=region_in_box(image=image, x=x, y=y, w=w, h=h),
                 hold=True
             )
             axs[0, 1].set_title('Sample region')
         if self._image_roi is not None:
-            fig, ax = self.image_roi.plot_overview(fig=fig, axs=[axs[1, 0]])
-            axs[1, 0] = ax[0]
+            self.image_roi.plot_overview(fig=fig, axs=[axs[1, 0]], hold=True)
             axs[1, 0].set_title('Classification and punch-holes')
         if self._image_classified is not None:
-            fig, ax = self.image_classified.plot_overview(fig=fig, axs=axs[1, 1])
-            axs[1, 1] = ax
+            self.image_classified.plot_overview(fig=fig, axs=[axs[1, 1]], hold=True)
             axs[1, 1].set_title('Laminae')
 
-            
+
 class ProjectXRF(ProjectBaseClass):
     _is_MSI: bool = False
 
@@ -2417,15 +2449,11 @@ class ProjectMSI(ProjectBaseClass):
         reader.set_QTOF_window()
         return reader
 
-    def create_hdf_file(
-            self, reader: ReadBrukerMCF | None = None, overwrite=False, **kwargs
+    def set_hdf_file(
+            self, reader: ReadBrukerMCF | None = None, **kwargs
     ) -> hdf5Handler:
         handler = hdf5Handler(self.path_d_folder)
         logger.info(f'creating hdf5 file in {self.path_d_folder}')
-
-        if hasattr(self, 'Spectra_file') and not overwrite:
-            logger.info('found hdf5 file, not creating new file because overwrite is set to false')
-            return handler
 
         if reader is None:
             reader = self.get_mcf_reader()
@@ -2441,10 +2469,10 @@ class ProjectMSI(ProjectBaseClass):
         reader = hdf5Handler(self.path_d_folder)
         return reader
 
-    def require_hdf_reader(self) -> hdf5Handler:
-        if not hasattr(self, 'Spectra_file'):
+    def require_hdf_reader(self, overwrite: bool = False) -> hdf5Handler:
+        if (not hasattr(self, 'Spectra_file')) or overwrite:
             reader: ReadBrukerMCF = self.get_mcf_reader()
-            reader: hdf5Handler = self.create_hdf_file(reader)
+            reader: hdf5Handler = self.set_hdf_file(reader)
         else:
             reader: hdf5Handler = self.get_hdf_reader()
         return reader
@@ -2481,9 +2509,9 @@ class ProjectMSI(ProjectBaseClass):
             logger.info('spectra object does not have a summed intensity')
             self._spectra.add_all_spectra(reader)
             self._spectra.subtract_baseline(plts=plts, **kwargs)
-            self._spectra.set_calibrate_functions(reader=reader, **kwargs)
+            self._spectra.require_calibrate_functions(reader=reader, **kwargs)
             if plts:
-                self._spectra.plot_calibration_functions(reader, n=3)
+                self._spectra.plot_calibration_functions(reader, n_plot=3)
             self._spectra.add_all_spectra(reader)
             self._spectra.subtract_baseline(overwrite=True)
         if not hasattr(self.spectra, 'peaks'):
@@ -2499,10 +2527,10 @@ class ProjectMSI(ProjectBaseClass):
             self._spectra.bin_spectra(reader, **kwargs)
             self._spectra.filter_line_spectra(SNR_threshold=SNR_threshold, **kwargs)
         if not hasattr(self.spectra, 'feature_table'):
-            self._spectra.binned_spectra_to_df(**kwargs)
+            self._spectra.set_feature_table(**kwargs)
 
         if plts:
-            self._spectra.plt_summed()
+            self._spectra.plot_summed()
 
         self._spectra.save()
         self._update_files()
@@ -2526,7 +2554,7 @@ class ProjectMSI(ProjectBaseClass):
                 logger.info('loaded fully initialized spectra object')
             elif hasattr(self._spectra, 'line_spectra'):
                 logger.info('loaded fully initialized spectra object')
-                self._spectra.binned_spectra_to_df()
+                self._spectra.set_feature_table()
                 call_set = True
         if call_set or overwrite:
             self.set_spectra(
@@ -2668,7 +2696,7 @@ class MultiSectionProject:
         # TODO: assertions
         # self.data_object = MultiSectionData(*folders)
         if hasattr(self.spectra, 'line_spectra') and not hasattr(self.spectra, 'feature_table'):
-            self.spectra.feature_table = self.spectra.binned_spectra_to_df()
+            self.spectra.feature_table = self.spectra.set_feature_table()
         if hasattr(self.spectra, 'feature_table'):
             self.data_object.feature_table = self.spectra.feature_table
         else:

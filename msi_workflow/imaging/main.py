@@ -1344,8 +1344,9 @@ class ImageROI(Image):
             dim: tuple[int, int] = (new_width, new_height)
             image_downscaled: np.ndarray = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
             mask_downscaled: np.ndarray = cv2.resize(mask, dim, interpolation=cv2.INTER_NEAREST)
+            image_downscaled: np.ndarray[np.uint8] = rescale_values(image_downscaled, 0, 255).astype(np.uint8)
             # filter
-            image_filtered: np.ndarray = adaptive_mean_with_mask(
+            image_filtered: np.ndarray[np.uint8] = adaptive_mean_with_mask(
                 src=image_downscaled,
                 maxValue=255,
                 adaptiveMethod=cv2.ADAPTIVE_THRESH_MEAN_C,
@@ -1467,7 +1468,8 @@ class ImageROI(Image):
             assert axs is not None, "If fig is provided, must also provide ax"
 
         # will plot only the binary image with punch-holes
-        only_final = len(axs) == 0
+        axs = np.array(axs)
+        only_final = axs.shape == (1,)
 
         if not only_final:
             plt_cv2_image(fig=fig, ax=axs[0, 0], image=self.image, title="Input image", no_ticks=True)
@@ -1477,13 +1479,15 @@ class ImageROI(Image):
             plt_cv2_image(fig=fig, ax=axs[1, 0], image=self.image_classification, title="Classified image",
                           no_ticks=True)
 
-        fig, ax11 = plt_rect_on_image(
+        _, ax11 = plt_rect_on_image(
             fig=fig,
             ax=axs[0] if only_final else axs[1, 1],
             image=self.image_classification if only_final else self.image_binary,
-            box_params=region_in_box(image=self.image_binary,
-                                     point_topleft=np.array(self._punchholes[0])[::-1] - hole_size / 2,
-                                     point_bottomright=np.array(self._punchholes[0])[::-1] + hole_size / 2),
+            box_params=region_in_box(
+                image=self.image_binary,
+                point_topleft=np.array(self._punchholes[0])[::-1] - hole_size / 2,
+                point_bottomright=np.array(self._punchholes[0])[::-1] + hole_size / 2
+            ),
             no_ticks=True,
             hold=True
         )
@@ -1511,7 +1515,7 @@ class ImageClassified(Image):
 
     Example Usage
     -------------
-    >>> from msi_workflow.imaging.main.cImage import ImageClassified, ImageROI
+    >>> from msi_workflow import ImageClassified, ImageROI
     initiate from parent object, most common use case.
     >>> ir = ImageROI.from_disk('path/to/your/folder')
     >>> ic = ImageClassified.from_parent(ir)
@@ -1666,11 +1670,11 @@ class ImageClassified(Image):
 
         mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
         if os.path.exists(mapper._get_disc_folder_and_file()[1]) and not overwrite:
+            logger.info('loading tilt correction transformation')
             mapper.load()
         else:
             logger.info('setting new tilt correction transformation')
-            # downscaled image has at most 2000 pixels in x-direction
-            # downscale_factor: float = min((2000 / self._image.shape[1], 1))
+            # downscaled image has at most nx_pixels_downscaled pixels in x-direction
             downscale_factor: float = min((
                 nx_pixels_downscaled / self._image.shape[1],
                 1
@@ -1692,7 +1696,7 @@ class ImageClassified(Image):
             d.set_conv()
             d.fit(**kwargs)
 
-            U = d._get_shift_matrix(self._image.shape[:2])
+            U = d.get_shift_matrix(self._image.shape[:2])
             mapper.add_UV(U=U)
             mapper.save()
 
@@ -2153,7 +2157,8 @@ use_age_model, not {height0_mode}')
 
             # apply reflecting boundary condition
             brightnesses: np.ndarray[float] = np.append(
-                np.insert(brightnesses, 0, brightnesses[1]), brightnesses[-2]
+                np.insert(brightnesses, 0, brightnesses[1]),  # b|abc ...
+                brightnesses[-2]  # ... def|e
             )
             for idx in range(1, N_layers + 1):
                 neighbours: float = (brightnesses[idx - 1] + brightnesses[idx + 1]) / 2
@@ -2516,7 +2521,8 @@ use_age_model, not {height0_mode}')
             assert axs is not None, "If fig is provided, must also provide ax"
 
         # will plot only the simplified classification
-        only_final = len(axs) == 0
+        axs = np.array(axs)
+        only_final = axs.shape == (1,)
 
         if not only_final:
             plt_cv2_image(image=self.image,
@@ -2529,16 +2535,16 @@ use_age_model, not {height0_mode}')
                           fig=fig,
                           title='Classification input',
                           no_ticks=True)
-            fig, axs = self.plot_quality(fig=fig, ax=axs[1, 1])
+            self.plot_quality(fig=fig, ax=axs[1, 1])
 
         plt_cv2_image(image=self.get_image_simplified_classification(),
                       ax=axs[0] if only_final else axs[1, 0],
                       fig=fig,
                       title='Simplified classification',
                       no_ticks=True)
-        # returns quality where axs = [ax]
+
         if not only_final:
-            ax = axs[0]
+            ax = axs[0, 0]
             ax.set_xlabel('depth (pixels)')
             ax.set_ylabel('scaled criterion')
 

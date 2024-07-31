@@ -789,7 +789,7 @@ class Descriptor:
 
         return m_ip
 
-    def _get_shift_matrix(self, shape: tuple[int, ...], **kwargs) -> np.ndarray:
+    def get_shift_matrix(self, shape: tuple[int, ...], **kwargs) -> np.ndarray:
         """Interpolate shift values to match shape of input."""
         return self._grid_upscale(self._shifts, shape, is_inverse=False, **kwargs)
 
@@ -829,7 +829,7 @@ class Descriptor:
         if is_inverse:
             u = self._get_inverse_shift_matrix(image.shape[:2], method='cubic')
         else:
-            u = self._get_shift_matrix(image.shape[:2], method='cubic')
+            u = self.get_shift_matrix(image.shape[:2], method='cubic')
         v = np.zeros_like(u)
 
         warped = apply_displacement(u, v, image, preserve_range=True)

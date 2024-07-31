@@ -27,6 +27,7 @@ from msi_workflow.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_fi
 from msi_workflow.exporting.from_mcf.helper import get_mzs_for_limits
 from msi_workflow.res.calibrants import get_calibrants
 from msi_workflow.util import Convinience
+from msi_workflow.util.convinience import check_attr
 from msi_workflow.util.manage_obj_saves import class_to_attributes
 from msi_workflow.project.file_helpers import ImagingInfoXML, get_rxy
 
@@ -98,14 +99,14 @@ class Spectra(Convinience):
 
     Example Usage
     -------------
-    >>> from exporting.from_mcf.rtms_communicator import ReadBrukerMCF
-    >>> from exporting.from_mcf.cSpectrum import Spectra
+    >>> from msi_workflow import ReadBrukerMCF
+    >>> from msi_workflow import Spectra
     Create a reader
     >>> reader = ReadBrukerMCF('path/to/your/d_folder.d')
     Providing the reader is only necessary the first time an object is instanciated for a folder,
-    afterward a reader will be initiated from the stored hdf5file automatically, when used through
+    afterward a reader will be initiated from the stored hdf5 file automatically, when used through
     the get_project class (recommended). This guide only discusses steps when used on its own. For
-    more info, take a look at the hdf5handler and get_project classes.
+    more info, take a look at the hdf5Handler and get_project classes.
     >>> spec = Spectra(reader=reader)
     In that case initialization looks like this:
     >>> spec = Spectra(path='path/to/your/d_folder.d', initiate=False)
@@ -122,7 +123,7 @@ class Spectra(Convinience):
     although it was found not necessary for the data tested on and takes longer.
 
     The result can be viewed using the plotting function
-    >>> spec.plt_summed()
+    >>> spec.plot_summed()
 
     The next step is to subtract the baseline. Here a minimum filter is used. It is crucial to
     find the right window size: If it is too small, peaks will lose intensity because the minimum
@@ -133,7 +134,7 @@ class Spectra(Convinience):
     >>> spec.subtract_baseline(plts=True)
     
     Optionally, it is possible to perform lock mass calibration, e.g. with Pyropheophorbide a:
-    >>> spec.set_calibrate_functions(calibrants_mz=[557.25231],reader=reader,SNR_threshold=2)
+    >>> spec.require_calibrate_functions(calibrants_mz=[557.25231],reader=reader,SNR_threshold=2)
     >>> spec.add_all_spectra(reader=reader)
     Although not necessary, it is adviced to do this step after subtracting the
     baseline in order to have access to the SNR level. Afterward the calibration will be used
@@ -157,15 +158,40 @@ class Spectra(Convinience):
     It is possible to plot this as well, but due to the large number of kernels this will usually
     not be a pleasant experience and without the keyword only the summed intensity of the kernels
     will be plotted
-    >>> spec.plt_summed(plt_kernels=True)
+    >>> spec.plot_summed(plt_kernels=True)
 
     Then, spectra are binned using the kernels (this step will also take a while because every spectrum has
     to be read in again, but this time the hdf5 file can be used if the get_project class was used, which is a lot faster)
     >>> spec.bin_spectra()
 
     Finally, a feature table is created from the binned spectra
-    >>> spec.binned_spectra_to_df()
+    >>> spec.set_feature_table()
     """
+    _indices: np.ndarray[int] | None = None
+    _limits: np.ndarray[float] | None = None
+    _mzs: np.ndarray[float] | None = None
+    _delta_mz: float | None = None
+    _intensities: np.ndarray[float] | None = None
+    _noise_level: np.ndarray[float] | None = None
+    _noise_level_subtracted: bool = False
+
+    _calibration_parameters: np.ndarray[float] | None = None
+    _calibration_settings: np.ndarray[float] | None = None
+
+    _peaks: np.ndarray[int] | None = None
+    _peak_properties: np.ndarray[float] | None = None
+    _peak_setting_parameters: dict[str, Any] | None = None
+    _peaks_SNR: np.ndarray[float] | None = None
+    _peaks_is_side_peak: np.ndarray[bool] | None = None
+
+    _kernel_params: np.ndarray[float] | None = None
+    _kernel_shape: str | None = None
+
+    _binning_by: str | None = None
+    _line_spectra: np.ndarray[float] | None = None
+    _feature_table: pd.DataFrame | None = None
+
+    _losses: np.ndarray[float] | None = None
 
     def __init__(
             self,
@@ -184,11 +210,11 @@ class Spectra(Convinience):
 
         Parameters
         ----------
-        reader : ReadBrukerMCF | hdf5handler | None, optional
+        reader : ReadBrukerMCF | hdf5Handler | None, optional
             Reader to obtain metadata and spectra from disk. The default is None.
         limits : tuple[float], optional
-            mz range of spectra. The default is None. This defaults to setting the limits with
-            parameters from the QTOF.
+            mz range of spectra. The default is None. This defaults to setting
+            the limits with parameters from the QTOF.
         delta_mz : float, optional
             Used to resample the spectra when combining to the summed
             spectrum. The default is 1e-4.
@@ -206,12 +232,12 @@ class Spectra(Convinience):
 
         """
         initiate = self._set_files(reader, path_d_folder, initiate)
-        self.delta_mz = delta_mz
+        self._delta_mz: float = delta_mz
         if initiate:
             self._initiate(reader, indices, limits)
         else:
-            self.indices: np.ndarray[int] = np.array(indices)
-            self.limits: tuple[float, float] = limits
+            self._indices: np.ndarray[int] = np.array(indices)
+            self._limits: tuple[float, float] = limits
 
     def _set_files(
             self,
@@ -284,37 +310,106 @@ class Spectra(Convinience):
         is_rtms: bool = type_reader is ReadBrukerMCF
 
         assert is_rtms or (type_reader is hdf5Handler), \
-            f"Reader must be either a hdf5Handler or ReadBrukerMCF instance. You provided {type_reader}"
+            (f"Reader must be either a hdf5Handler or ReadBrukerMCF instance. "
+             f"You provided {type_reader}")
         assert (indices is None) or (len(indices) > 0), \
             f"indices must either be None or of non-zero length. You provided {indices}."
         assert (limits is None) or ((len(limits) == 2) and limits[0] < limits[1]), \
-            (f'limits must either be None or contain an upper and lower bound with upper != lower, you' +
-             f'provided {limits}.')
+            (f'limits must either be None or contain an upper and lower bound '
+             f'with upper != lower, you provided {limits}.')
 
         if indices is None:
-            if not hasattr(reader, 'indices'):
+            if not check_attr(reader, 'indices'):
                 reader.create_indices()
             indices = reader.indices
-        self.indices = np.array(indices)
+        self._indices = np.array(indices)
         if limits is None:
-            if (not hasattr(reader, 'metaData')) and is_rtms:
+            if (not check_attr(reader, 'metaData')) and is_rtms:
                 reader.set_meta_data()
-            if not hasattr(reader, 'limits'):
+            if not check_attr(reader, 'limits'):
                 reader.set_QTOF_window()
             limits = reader.limits
-        self.limits = limits
+        self._limits = limits
 
         if is_rtms:
-            self.mzs = get_mzs_for_limits(self.limits, self.delta_mz)
-            reader.set_mzs(self.mzs)
+            self._mzs = get_mzs_for_limits(self._limits, self._delta_mz)
+            reader.set_mzs(self._mzs)
         else:
-            self.mzs = reader.mzs
-        self.intensities = np.zeros_like(self.mzs)
+            self._mzs = reader.mzs
+        self._intensities = np.zeros_like(self._mzs)
 
-    def add_spectrum(self, spectrum: np.ndarray[float]):
+    @property
+    def indices(self) -> np.ndarray[int]:
+        check_attr(self, '_indices')
+        return self._indices
+
+    @property
+    def intensities(self) -> np.ndarray[float]:
+        assert check_attr(self, '_intensities')
+        return self._intensities
+
+    @property
+    def mzs(self) -> np.ndarray[float]:
+        assert check_attr(self, '_mzs')
+        return self._mzs
+
+    @property
+    def limits(self):
+        assert check_attr(self, '_limits')
+        return self._limits
+
+    @property
+    def delta_mz(self) -> float:
+        assert check_attr(self, '_delta_mz')
+        return self._delta_mz
+
+    @property
+    def _n_spectra(self) -> int:
+        return len(self.indices)
+
+    @property
+    def _n_peaks(self) -> int:
+        assert check_attr(self, '_peaks')
+        return len(self._peaks)
+
+    def reset_binning(self) -> None:
+        """Reset the binnend intensities"""
+        self._binning_by: str | None = None
+        self._line_spectra: np.ndarray[float] | None = None
+        self._feature_table: pd.DataFrame | None = None
+
+    def reset_kernels(self) -> None:
+        """Reset the kernels and everything downstream"""
+        self._kernel_params: np.ndarray[float] | None = None
+        self._kernel_shape: str | None = None
+
+        self.reset_binning()
+
+    def reset_peaks(self) -> None:
+        """Reset peaks and everything downstream"""
+        self._peaks: np.ndarray[int] | None = None
+        self._peak_properties: np.ndarray[float] | None = None
+        self._peak_setting_parameters: dict[str, Any] | None = None
+        self._peaks_SNR: np.ndarray[float] | None = None
+        self._peaks_is_side_peak: np.ndarray[bool] | None = None
+
+        self.reset_kernels()
+
+    def reset_noise_level(self):
+        self._noise_level: np.ndarray[float] | None = None
+        self._noise_level_subtracted: bool = False
+
+        self.reset_peaks()
+
+    def reset_intensities(self) -> None:
+        """Reset intensities and everything downstream"""
+        self._intensities = np.zeros_like(self.mzs)
+
+        self.reset_noise_level()
+
+    def add_spectrum(self, spectrum: np.ndarray[float]) -> None:
         """Add passed spectrum values to summed spectrum."""
-        # spectrum = spectrum.copy()
-        self.intensities += spectrum
+        self._intensities += spectrum
 
     def _get_spectrum(
             self,
@@ -353,11 +448,11 @@ class Spectra(Convinience):
         index: int = int(index)
 
         # Determine whether to use calibration functions on spectra
-        calibrate: bool = hasattr(self, 'calibration_parameters')
+        calibrate: bool = check_attr(self, '_calibration_parameters')
 
         if calibrate:
             array_idx: int = self.spectrum_idx2array_idx(index)
-            poly_coeffs: np.ndarray = self.calibration_parameters[array_idx, :]
+            poly_coeffs: np.ndarray = self._calibration_parameters[array_idx, :]
         else:
             poly_coeffs: None = None
 
@@ -387,19 +482,18 @@ class Spectra(Convinience):
         reader : ReadBrukerMCF | hdf5Handler
             Reader from which to obtain the spectra.
         """
+        logger.info(f'adding up {self._n_spectra} spectra ...')
 
-        N: int = len(self.indices)
-        logger.info(f'adding up {N} spectra ...')
+        self.reset_intensities()
 
-        self.intensities: np.ndarray[float] = np.zeros_like(self.mzs)
-
-        if not hasattr(reader, 'mzs'):
+        if not check_attr(reader, 'mzs'):
             reader.set_mzs(self.mzs)
 
-
         # iterate over all spectra
-        for index in tqdm(self.indices, desc='Adding spectra', smoothing=50/N):
-            spectrum: np.ndarray[float] = self._get_spectrum(reader=reader, index=index, only_intensity=True)
+        for index in tqdm(self.indices, desc='Adding spectra', smoothing=50/self._n_spectra):
+            spectrum: np.ndarray[float] = self._get_spectrum(
+                reader=reader, index=index, only_intensity=True
+            )
             self.add_spectrum(spectrum)
 
         logger.info('done adding up spectra')
@@ -417,91 +511,94 @@ class Spectra(Convinience):
         reader : ReadBrukerMCF | hdf5Handler
             Reader from which to obtain the spectra.
         """
+        self.reset_intensities()
+
         for it, index in enumerate(self.indices):
-            spectrum: np.ndarray[float] = self._get_spectrum(reader=reader, index=index, only_intensity=True)
+            spectrum: np.ndarray[float] = self._get_spectrum(
+                reader=reader, index=index, only_intensity=True
+            )
             if it > 0:
-                shift: float = self.xcorr(spectrum)  # shift in Da
+                shift: float = self.get_mass_shift(spectrum)  # shift in Da
                 # shift according to number of spectra
                 weight: float = 1 / (it + 1)
-                self.mzs += shift * weight
+                self._mzs += shift * weight
                 spectrum.mzs -= shift * (1 - weight)
             self.add_spectrum(spectrum.intensities)
 
-    def subtract_baseline(
-            self,
-            window_size: float | int | None = None,
-            overwrite: bool = False,
-            plts: bool = False,
-            **_: dict
-    ) -> None:
+    def set_noise_level(
+            self, window_size: int | float | None = None,
+            plts: bool = False
+    ):
         """
         Estimate and remove the noise level from the summed intensities.
 
         The noise level is stored as an attribute called 'noise_level'.
-        It is crucial to find the right window size: If it is too small, peaks will lose intensity because
-        the minimum filter climbs up the flanks of peaks. If it is too large, the noise level will
-        not be removed enterily. By default, the window_size is being estimated from the data by
-        taking the broadest peak at a relative height of .8 as the window size. The result can
-        be checked by setting the plts keyword to True. The result of the minimum filter is passed on
-        to a median filter of the same window size to smooth the output.
+        It is crucial to find the right window size: If it is too small,
+        peaks will lose intensity because the minimum filter climbs up the
+        flanks of peaks. If it is too large, the noise level will not be removed
+        enterily. By default, the window_size is being estimated from the data
+        by taking the broadest peak at a relative height of .8 as the window size.
+        The result can be checked by setting the plts keyword to True. The
+        result of the minimum filter is passed on to a median filter of the
+        same window size to smooth the output.
 
         Parameters
         ----------
         window_size : float | int, optional
-            The window size of the minimum filter as number of sample point. 
-            None defaults to estimating the window size from the peak widths. 
+            The window size of the minimum filter as number of sample points or
+            in Da.
+            None defaults to estimating the window size from the peak widths.
             A window_size of 0 will subtract the smallest intensity.
-            A window size in the interval (0, 1) is interpreted as the fraction 
-            of the entire window size.
+            A window size in the interval (0, 1) is assumed to be in Da.
         plts: bool, optional
-            The default is False. If True, will plot the summed intensities before and after baseline
-            removal.
+            The default is False. If True, will plot the summed intensities
+            before and after baseline removal.
 
         Notes
         -----
         This method defines the following attribute(s):
         noise_level: np.ndarray
-            The noise level of each spectrum. This assumes that each spectrum has the same noise level.
-            It is defined as the estimated bsae_line divided by the number of spectra.
+            The noise level of each spectrum. This assumes that each spectrum
+            has the same noise level. It is defined as the estimated bsae_line
+            divided by the number of spectra.
 
         """
+
         def estimate_peaks_width() -> int:
             """Estimate the minimum filter size from the peak widths."""
             prominence = .1 * np.median(self.intensities)
             peaks, peak_props = find_peaks(self.intensities, prominence=prominence, width=3)
             widths, *_ = peak_widths(self.intensities, peaks=peaks, rel_height=.8)
             return int(np.max(widths))
-        
-        assert np.any(self.intensities), \
-            'call add_all_spectra before subtracting the baseline'
 
-        if hasattr(self, 'noise_level') and (not overwrite):
-            logger.warning('found a noise level, exiting method')
-            return
-        
-        N: int = len(self.indices)
+        assert check_attr(self, 'intensities', True), \
+            'call add_all_spectra before setting the noise level'
+
+        n_spectra: int = self._n_spectra
 
         if window_size is None:
             # estimate peak width from FWHM
             window_size: int = estimate_peaks_width()
             logger.info(
                 'estimated window size for baseline subtraction is ' +
-                f'{self.delta_mz * window_size * 1e3:.1f} mDa'
+                f'{self._delta_mz * window_size * 1e3:.1f} mDa'
             )
         elif window_size == 0:  # subtract minimum
             base_lvl: float = self.intensities.min()
-            self.intensities -= base_lvl
-            self.noise_level: np.ndarray[float] = np.full_like(self.intensities, base_lvl / N)
+            self._intensities -= base_lvl
+            self._noise_level: np.ndarray[float] = np.full_like(
+                self.intensities, base_lvl / n_spectra
+            )
             return
         # convert Da to number of sample points
         elif (window_size < 1) and isinstance(window_size, float):
             dmz: float = self.mzs[1] - self.mzs[0]
-            window_size: int = int(window_size / dmz + .5)
+            window_size: int = round(window_size / dmz)
         ys_min: np.ndarray[float] = minimum_filter(self.intensities, size=window_size)
         # run median filter on that
-        ys_min:np.ndarray[float] = median_filter(ys_min, size=window_size)
+        ys_min: np.ndarray[float] = median_filter(ys_min, size=window_size)
         # store for SNR estimation
-        self.noise_level: np.ndarray[float] = ys_min / N
+        self._noise_level: np.ndarray[float] = ys_min / n_spectra
 
         if plts:
             plt.figure()
@@ -512,10 +609,30 @@ class Spectra(Convinience):
             plt.ylabel('Intensity')
             plt.legend()
             plt.show()
-            
-        self.intensities -= ys_min
 
-    def xcorr(
+    def require_noise_level(self, overwrite=False, **kwargs) -> np.ndarray[float]:
+        if overwrite:
+            self.reset_noise_level()
+
+        if not check_attr(self, '_noise_level'):
+            self.set_noise_level(**kwargs)
+
+        return self._noise_level
+
+    @property
+    def noise_level(self) -> np.ndarray[float]:
+        return self.require_noise_level()
+
+    def subtract_baseline(
+            self,
+            **kwargs
+    ) -> None:
+        assert not self._noise_level_subtracted
+        ys_min = self.require_noise_level(**kwargs)
+        self._intensities -= ys_min
+        self._noise_level_subtracted = True
+
+    def get_mass_shift(
             self: Self,
             other: Spectrum,
             max_mass_offset: float | None = 1e-3,
@@ -547,9 +664,9 @@ class Spectra(Convinience):
         other.resample(self.mzs)
         a: np.ndarray = self.intensities
         b: np.ndarray = other.intensities
-        N: int = len(b)
+        n_mzs: int = len(b)
 
-        lags: np.ndarray[float] = correlation_lags(N, N, mode='full')
+        lags: np.ndarray[float] = correlation_lags(n_mzs, n_mzs, mode='full')
         masses: np.ndarray[float] = diffs[0] * lags
         corrs: np.ndarray[float] = correlate(a, b, mode='full')
         if max_mass_offset is not None:
@@ -574,126 +691,6 @@ class Spectra(Convinience):
             plt.show()
         return mass_offset
 
-    def set_targets(
-            self,
-            targets: Iterable[float],
-            tolerances: Iterable[float] | float | None = None,
-            method: str = 'nearest_peak',
-            plts: bool = False,
-            **kwargs: dict
-    ) -> None:
-        """
-        Set the peaks based on a number of target compounds (mass given in Da). 
-        Peaks are searched within a mass window defined by tolerances, such that the
-        assigned mass is within target +/- tolerance. If no tolerance is given,
-        it is estimated from the kernel widths.
-
-        This function sets the kernel_params and then requires using the bin_spectra function.
-
-        Parameters
-        ----------
-        targets: Iterable[float]
-            The m/z values of interest in Da
-        tolerances: Iterable[float] | float
-            Tolerance(s) for deviation of peaks from theoretical masses.
-        method: str, optional
-            Method for calculating the intensities of target compounds in each spectrum:
-            -- 'nearest_peak' searches the closest peak in the summed up spectrum
-                and estimates the kernel shape of that
-            -- 'area_overlap' calculates the overlap between the kernels
-                (calculated from the tolerance where the tolerance is assumed to be
-                the standard deviation).
-            -- 'highest' takes the highest intensity within the given tolerance.
-                Currently not implemented.
-        plts: bool, optional
-            Whether to plot the target kernels on top of the summed spectrum.
-        kwargs: dict
-            Options passed on to set_peaks
-        """
-        # assertions
-        assert method in (methods := ('nearest_peak', 'area_overlap', 'highest')), \
-            f'methods must be in {methods}, not {method}'
-        has_summed_spectra: bool = np.any(self.intensities.astype(bool))
-        if method == 'nearest_peak':
-            assert has_summed_spectra, \
-                'nearest method requires summing up the spectra'
-        if tolerances is None:
-            assert has_summed_spectra, \
-                'estimating the tolerance requires that the spectra have been summed up'
-        if plts:
-            assert not np.all(self.intensities == 0), \
-                'if you want to plot the target kernels, add up the intensities first'
-
-        if tolerances is None:
-            logger.info('estimating tolerance from summed spectrum ...')
-            self.set_peaks(**kwargs)
-            self.set_kernels(**kwargs)
-            tolerances: float = np.median(self.kernel_params[:, -1])
-            logger.info(f'found tolerance of {tolerances*1e3:.1f} mDa')
-        if isinstance(tolerances, float | int):
-            tolerances: np.ndarray[float] = np.full_like(targets, tolerances)
-        assert len(tolerances) == len(targets), \
-            'If widths is not a scalar, widths and targets must have the same number of elements.'
-
-        N_peaks: int = len(targets)  # number of peaks equal to targets
-        N_spectra: int = len(self.indices)
-        self.line_spectra: np.ndarray[float] = np.zeros((N_spectra, N_peaks))
-        if method == 'area_overlap':
-            self.peaks = [np.argmin(np.abs(self.mzs - target)) for target in targets]
-            self.peak_setting_parameters['method'] = method
-            self.peak_setting_parameters['targets'] = np.array(targets)
-            self.peak_setting_parameters['tolerances'] = np.array(tolerances)
-            self.kernel_params = np.zeros((N_peaks, 3 + (self.kernel_shape == 'bigaussian')))  # gaussian
-            self.kernel_params[:, 0] = targets  # center
-            self.kernel_params[:, 1] = self.intensities[self.peaks]
-            self.kernel_params[:, 2] = tolerances
-        elif method == 'nearest_peak':
-            if not hasattr(self, 'peaks'):
-                self.set_peaks(**kwargs)
-            # filter peaks to keep only the closest one to each target
-            idxs_keep: list[int] = []
-            dists_keep: list[float] = []
-            for idx, target in enumerate(targets):
-                dists: np.ndarray[float] = np.abs(self.mzs[self.peaks] - target)
-                if not np.any(dists < tolerances[idx]):
-                    logger.warning(f'did not find peak for {target=}')
-                    continue
-                idx_keep: int = np.argmin(dists)
-                idxs_keep.append(idx_keep)
-                dists_keep.append(dists[idx_keep])
-            peaks_keep = self.peaks[idxs_keep].copy()
-            # delete irrelevant peaks
-            self.filter_peaks(whitelist=peaks_keep)
-            self.peak_setting_parameters['method'] = method
-            self.peak_setting_parameters['targets'] = np.array(targets)
-            self.peak_setting_parameters['tolerances'] = np.array(tolerances)
-            self.peak_setting_parameters['distances'] = np.array(dists_keep)
-            self.set_kernels()
-        elif method == 'highest':
-            # TODO: <--
-            ...
-            raise NotImplementedError
-
-        if plts:
-            plt.figure()
-            plt.plot(self.mzs, self.intensities, label='original')
-            for i in range(len(self.peaks)):
-                y = self._kernel_func(self.mzs, *self.kernel_params[i, :])
-                mask = np.abs(self.kernel_params[i, 0] - self.mzs) <= 10 * self.kernel_params[i, -1]
-                plt.plot(self.mzs[mask], y[mask])
-            plt.vlines(
-                targets,
-                ymin=0,
-                ymax=self.intensities.max(),
-                colors='k',
-                linestyles='--',
-                label='targets'
-            )
-            plt.xlabel('m/z in Da')
-            plt.ylabel('Intensity')
-            plt.legend()
-            plt.show()
-
     def set_peaks(self, prominence: float = .1, width=3, **kwargs):
         """
         Find peaks in summed spectrum using scipy's find_peaks function.
@@ -713,31 +710,44 @@ class Spectra(Convinience):
         Sets peaks and properties
 
         """
+        self.reset_peaks()
+
         if prominence < 1:
             med: float = np.median(self.intensities)
             prominence *= med
 
-        self.peaks, self.peak_properties = find_peaks(
-            self.intensities, prominence=prominence, width=width
+        # pop out valid kwargs
+        valid_kwargs: list[str] = 'height threshold distance wlen rel_height plateau_size'.split()
+        kwargs_peaks: dict[str, Any] = {k: v for k, v in kwargs.items() if k in valid_kwargs}
+
+        self._peaks, self._peak_properties = find_peaks(
+            self.intensities, prominence=prominence, width=width, **kwargs_peaks
         )
 
         # save parameters to dict for later reference
-        self.peak_setting_parameters: dict[str, Any] = kwargs
-        self.peak_setting_parameters['prominence'] = prominence
-        self.peak_setting_parameters['width'] = width
+        self._peak_setting_parameters: dict[str, Any] = kwargs_peaks
+        self._peak_setting_parameters['prominence'] = prominence
+        self._peak_setting_parameters['width'] = width
 
-    def _check_calibration_file_exists(self):
+    def require_peaks(self, overwrite=False, **kwargs) -> np.ndarray[int]:
+        if overwrite or (not check_attr(self, '_peaks')):
+            self.set_peaks(**kwargs)
+        return self._peaks
+
+    def _check_calibration_file_exists(self) -> bool:
         """
         Look for Calibrator.ami file in d folder.
 
         Lock mass calibration always creates this file, so this can be used as an indicator.
         """
         # calibration always creates an ami file
-        if os.path.exists(os.path.join(self.path_d_folder, 'Calibrator.ami')):
-            return True
-        return False
+        return os.path.exists(
+            os.path.join(
+                self.path_d_folder, 'Calibrator.ami'
+            )
+        )
 
-    def set_calibrate_functions(
+    def set_calibration_functions(
             self,
             reader: ReadBrukerMCF | hdf5Handler,
             calibrants_mz: Iterable[float] = None,
@@ -746,9 +756,11 @@ class Spectra(Convinience):
             max_degree: int = 1,
             min_height: float | int = 10_000,
             **_
-    ) -> None:
+
+    ):
         """
-        Calibrate spectra using calibrants by fitting a polynomial of degree max_degree or less.
+        Calibrate spectra using calibrants by fitting a polynomial of degree
+        max_degree or less.
 
         This algorithm matches the cloesest peak fulfilling the criteria (search
         range and SNR_threshold or min_height) to the theoretical masses.
@@ -760,53 +772,61 @@ class Spectra(Convinience):
         Parameters
         ----------
         calibrants_mz : float | Iterable[float] | None, optional
-            Exact mass(es) of the calibrants in Da. If not provided, will use the calibrant list from
-            Wörmer et al., 2019 (Towards multiproxy, ultra-high resolution molecular stratigraphy:
-            Enabling laser-induced mass spectrometry imaging of diverse molecular biomarkers in sediments, Appendix)
+            Exact mass(es) of the calibrants in Da. If not provided, will use
+            the calibrant list from Wörmer et al., 2019 (Towards multiproxy,
+            ultra-high resolution molecular stratigraphy: Enabling laser-induced
+            mass spectrometry imaging of diverse molecular biomarkers in sediments, Appendix)
         search_range : float, optional
-            Range in which to look for peaks in Da. The default is 5 mDa. This will look in a range of
-            +/- 5 mDa around the theoretical mass.
+            Range in which to look for peaks in Da. The default is 5 mDa.
+            This will look in a range of +/- 5 mDa around the theoretical mass.
         SNR_threshold : float, optional
-            Minimal prominence required for a peak to be considered (see prominence in set_peaks).
-            By default, an SNR of 4 is used. If a value
+            Minimal prominence required for a peak to be considered (see
+            prominence in set_peaks). By default, an SNR of 4 is used. If a value
             of 0 is provided, the min_height condition is applied instead.
         max_degree: int, optional
-            Maximum degree of the polynomial used to describe the fit. If the number of matched
-            peaks is greater than the required number of points, the best fit is used.
+            Maximum degree of the polynomial used to describe the fit. If the
+            number of matched peaks is greater than the required number of
+            points, the best fit is used.
         min_height: float | int, optional
-            Minimum intensity required. The default is 10_000. Only used, if SNR_threshold is
-            not provided.
+            Minimum intensity required. The default is 10_000. Only used, if
+            SNR_threshold is not provided.
 
         Notes
         -----
         This function sets the attribute(s):
         calibration_parameters: np.ndarray,
-            Array holding the coefficients of the calibration functions where each
+            Array holding the coefficients of the calibration functions where
+            each row corresponds to the coefficients of a calibration function.
 
-        This function tries to emulate the calibration performed in DataAnalysis 5.0. This is the
-        description from the handbook:
-        -- The spectrum is searched for signals which (1) are within the given search range (m/z)
-        of the expected lock mass(es) and which (2) exceed the given intensity threshold. The
-        expected lock mass(es), search range (m/z) and intensity threshold are specified in the
-        corresponding method.
-        -- If at least one lock mass peak is found in the spectrum one of current calibration
-        coefficients is corrected such as it is needed to adapt the current m/z value of the lock
-        mass signal exactly to the theoretical m/z value of the respective lock mass. The new
-        correlation coefficient is then used to recalibrate the respective spectrum.
-        -- If the spectrum does not have at least one lock mass peak (above the given intensity
-        threshold) the current calibration coefficient is kept for that spectrum.
+        This function tries to emulate the calibration performed in
+        DataAnalysis 5.0. This is the description from the handbook:
+        -- The spectrum is searched for signals which (1) are within the given
+        search range (m/z) of the expected lock mass(es) and which (2) exceed
+        the given intensity threshold. The expected lock mass(es), search range
+        (m/z) and intensity threshold are specified in the corresponding method.
+        -- If at least one lock mass peak is found in the spectrum one of current
+        calibration coefficients is corrected such as it is needed to adapt the
+        current m/z value of the lock mass signal exactly to the theoretical
+        m/z value of the respective lock mass. The new correlation coefficient
+        is then used to recalibrate the respective spectrum.
+        -- If the spectrum does not have at least one lock mass peak (above the
+        given intensity threshold) the current calibration coefficient is kept
+        for that spectrum.
 
-        To me, it is not clear what the calibration/ correlation coefficient is supposed to mean,
-        but a linear fit seems reasonable as higher degree polynomials may result in unreasonably large
-        shifts outside the found peak range.
+        To me, it is not clear what the calibration/ correlation coefficient is
+        supposed to mean, but a linear fit seems reasonable as higher degree
+        polynomials may result in unreasonably large shifts outside the found
+        peak range.
         """
-        def calib_spec(spectrum: np.ndarray[float]) -> int | tuple[np.ndarray[float], int]:
+        def calib_spec(_spectrum: np.ndarray[float]) -> int | tuple[np.ndarray[float], int]:
             """Find the calibration function for a single spectrum."""
             # pick peaks
             if SNR_threshold > 0:
-                peaks: np.ndarray[int] = find_peaks(spectrum, height=self.noise_level * SNR_threshold)[0]
+                peaks: np.ndarray[int] = find_peaks(
+                    _spectrum, height=self._noise_level * SNR_threshold
+                )[0]
             else:
-                peaks: np.ndarray[int] = find_peaks(spectrum, height=min_height)[0]
+                peaks: np.ndarray[int] = find_peaks(_spectrum, height=min_height)[0]
             peaks_mzs: np.ndarray[float] = self.mzs[peaks]
 
             # find valid peaks for each calibrant
@@ -815,7 +835,9 @@ class Spectra(Convinience):
             for jt, calibrant in enumerate(calibrants_mz):
                 distances: np.ndarray[float] = np.abs(calibrant - peaks_mzs)  # theory - actual
                 if not np.any(distances < search_range):  # no peak with required SNR found inside range
-                    logger.debug(f'found no peak above noise level for {calibrant=} and {index=}')
+                    logger.debug(
+                        f'found no peak above noise level for {calibrant=} and {index=}'
+                    )
                     calibrator_presences[it, jt] = False
                     continue
                 closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
@@ -838,25 +860,25 @@ class Spectra(Convinience):
 
         if self._check_calibration_file_exists():
             logger.warning(
-                'Found calibration file. This suggests that Lock Mass calibration has been ' +
-                'performed already. It is not recommended to do this step for already calibrated ' +
-                'data.'
+                'Found calibration file. This suggests that Lock Mass calibration '
+                'has been performed already.'
             )
 
         assert isinstance(reader, ReadBrukerMCF | hdf5Handler), \
             f'reader must be a ReadBrukerMCF or hdf5Handler instance, not {type(reader)}'
-        assert hasattr(reader, 'indices'), 'call reader.set_indices()'
-        assert hasattr(reader, 'mzs') and np.allclose(reader.mzs, self.mzs), \
-            ('Make sure the mzs of the reader match that of the spectra object (consider calling' +
-             ' reader.set_mzs(spec.mzs))')
+        assert check_attr(reader, 'indices'), 'call reader.set_indices()'
+        assert check_attr(reader, 'mzs') and np.allclose(reader.mzs, self.mzs), \
+            ('Make sure the mzs of the reader match that of the spectra object '
+             '(consider calling reader.set_mzs(spec.mzs))')
         if SNR_threshold > 0:
-            assert hasattr(self, 'noise_level'), \
-                ('This step has to be performed after subtracting the baseline to have access ' +
-                 'to the noise_level, unless you set the SNR_threshold to 0.')
+            assert check_attr(self, 'noise_level'), \
+                ('This step has to be performed after subtracting the baseline '
+                 'to have access to the noise_level, unless you set the '
+                 'SNR_threshold to 0.')
         if calibrants_mz is None:
             calibrants_mz = get_calibrants(self.limits)
 
-        N: int = len(self.indices)  # number spectra
+        n_spectra: int = self._n_spectra  # number spectra
 
         # first column corresponds to highest degree
         # last column to constant
@@ -865,20 +887,20 @@ class Spectra(Convinience):
         n_calibration_parameters: int = max_degree + 1
 
         calibration_parameters: np.ndarray[float] = np.zeros(
-            (N, n_calibration_parameters),
+            (n_spectra, n_calibration_parameters),
             dtype=float
         )
         calibrator_presences: np.ndarray[bool] = np.ones(
-            (N, len(calibrants_mz)),
+            (n_spectra, len(calibrants_mz)),
             dtype=bool
         )
 
         # iterate over all spectra
         for it, index in tqdm(
                 enumerate(self.indices),
-                total=N,
+                total=n_spectra,
                 desc='Finding calibration parameters',
-                smoothing=50 / N
+                smoothing=50 / n_spectra
         ):
             spectrum: np.ndarray[float] = \
                 reader.get_spectrum_resampled_intensities(int(index))
@@ -896,9 +918,9 @@ class Spectra(Convinience):
         logger.info('done calibrating spectra, found calibrants in the following abundances:')
         logger.info('\n'.join([f'{k} : {v:.0%}' for k, v in calibrant_matches.items()]))
 
-        self.calibration_parameters = calibration_parameters
+        self._calibration_parameters = calibration_parameters
 
-        self.calibration_settings: dict[str, Any] = {
+        self._calibration_settings: dict[str, Any] = {
             'calibrants': calibrants_mz,
             'search_range': search_range,
             'SNR_threshold': SNR_threshold,
@@ -906,75 +928,44 @@ class Spectra(Convinience):
             'presences calibrants': calibrant_matches
         }
 
-    def plot_calibration_functions(
+    def require_calibrate_functions(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
-            indices: Iterable[int] | None = None,
-            n: int = 10
-    ) -> None:
-        assert hasattr(self, 'calibration_parameters'), 'Call set_calibrate_functions before plotting.'
-        if indices is not None:
-            n = len(indices)
-        assert (n > 0), 'Number of spectra should be bigger than 0'
+            *args,
+            overwrite: bool = False,
+            **kwargs
+    ) -> np.ndarray[float]:
+        """
+        Try to return existing calibration parameters.
 
-        if indices is None:
-            indices: np.ndarray[int] = np.random.choice(self.indices, size=n, replace=False)
+        Parameters
+        ----------
+        overwrite: bool, optional
+            If this is set to True, previous calibrations will be overwritten
+        """
+        if not check_attr(self, '_calibration_parameters', True):
+            self.set_calibration_functions(*args, **kwargs)
 
-        fig, axs = plt.subplots(nrows=n, ncols=2, sharex='col')
-        if n == 1:
-            axs = [axs]
+        return self._calibration_parameters
 
-        calibrants_mz: np.ndarray[float] = get_calibrants(self.limits)
-
-        for idx, (ax_l, ax_r) in zip(indices, axs):
-            # obtain spectra
-            spec_o: Spectrum = reader.get_spectrum(index=idx, limits=self.limits)
-            spec_c: Spectrum = self._get_spectrum(reader=reader, index=idx, only_intensity=False)
-
-            array_idx: int = self.spectrum_idx2array_idx(idx)
-            poly_coeffs: np.ndarray = self.calibration_parameters[array_idx, :]
-            f: Callable = np.poly1d(poly_coeffs)
-            cal_vals: np.ndarray[float] = f(self.mzs)
-            ax_l.plot(self.mzs, self.noise_level)
-            ax_l.plot(spec_o.mzs, spec_o.intensities)
-            ax_l.plot(spec_c.mzs, spec_c.intensities)
-            ax_l.vlines(calibrants_mz, 0, spec_o.intensities.max(), colors='k', linestyles='--')
-
-            ax_r.plot(self.mzs, cal_vals * 1e3)
-        ax_l.set_xlabel('m/z in Da')
-        ax_r.set_xlabel('m/z in Da')
-        ax_l.legend(['noise lvl', 'original', 'calibrated', 'calibrants', 'verification'])
-        ax_r.legend(['shift in mDa'])
-
-        # fig.add_subplot(111, frameon=False)
-        # hide tick and tick label of the big axis
-        # ax = plt.gca()
-
-        # plt.xlabel("common X")
-        # ax.set_ylabel('Intensity')
-        # ax_t.set_ylabel('correction (mDa)')
-
-        # plt.tick_params(labelcolor='none', which='both', top=False, bottom=False, left=False, right=False)
-        fig.tight_layout()
-        plt.show()
-
-
-    def detect_side_peaks(
+    def set_side_peaks(
             self, 
             max_relative_height: float = .1,
             max_distance: float = .001,
     ) -> None:
         """
-        This method defines a list of peaks that are likely artifacts from the Fourier transformation.
+        This method defines a list of peaks that are likely artifacts from the
+        Fourier transformation.
 
-        Windowing introduces spectral leakage, which is especially pronounced around high isolated peaks.
-        This method goes through the peaks list and marks peaks with low relative height to their neighbour
-        within a small region as side-peaks.
+        Windowing introduces spectral leakage, which is especially pronounced
+        around high isolated peaks. This method goes through the peaks list
+        and marks peaks with low relative height to their neighbour within a
+        small region as side-peaks.
 
         Parameters
         ----------
         max_relative_height : float, optional
-            Relative height below which peaks are considered artifacts. The default is 0.1.
+            Relative height below which peaks are considered artifacts. The
+            default is 0.1.
         max_distance : float, optional
             Region in which to look for artifacts. The default is 1 mDa.
 
@@ -984,7 +975,7 @@ class Spectra(Convinience):
         peaks_is_side_peak : np.ndarray[bool]
             An array marking sidepeaks as True, otherwise as False.
         """
-        assert hasattr(self, 'peaks'), 'call set_peaks first'
+        assert check_attr(self, '_peaks'), 'call set_peaks first'
 
         def eval_peak_valid(pc: int, ps: int) -> bool:
             """
@@ -1003,8 +994,8 @@ class Spectra(Convinience):
             return False
 
         # sort peaks by intensity (highest first)
-        N_peaks: int = len(self.peaks)
-        peak_order: np.ndarray[int] = np.argsort(self.intensities[self.peaks])[::-1]
+        N_peaks: int = len(self._peaks)
+        peak_order: np.ndarray[int] = np.argsort(self.intensities[self._peaks])[::-1]
         # peaks that have to be evaluated
         to_do: np.ndarray[bool] = np.full(N_peaks, True)
         valids: np.ndarray[bool] = np.full(N_peaks, True)
@@ -1012,25 +1003,31 @@ class Spectra(Convinience):
             if not to_do[peak_idx]:
                 continue
             # mz idx corresponding to peak
-            peak: int = self.peaks[peak_idx]
+            peak: int = self._peaks[peak_idx]
             # check if peaks left and right of it fulfill conditions
             # if they are detected as sidepeaks, they no longer have to be taken into consideration
             # valids will be changed accordingly
             if ((peak_idx_l := peak_idx - 1) >= 0) and to_do[peak_idx_l]:
-                peak_l: int = self.peaks[peak_idx_l]
+                peak_l: int = self._peaks[peak_idx_l]
                 valid: bool = eval_peak_valid(peak, peak_l)
                 valids[peak_idx_l] = valid
                 if not valid:
                     to_do[peak_idx_l] = False
             if ((peak_idx_r := peak_idx + 1) < N_peaks) and to_do[peak_idx_r]:
-                peak_r: int = self.peaks[peak_idx_r]
+                peak_r: int = self._peaks[peak_idx_r]
                 valid: bool = eval_peak_valid(peak, peak_r)
                 valids[peak_idx_r] = valid
                 if not valid:
                     to_do[peak_idx_r] = False
             to_do[peak_idx] = False
 
-        self.peaks_is_side_peak: np.ndarray[bool] = ~valids
+        self._peaks_is_side_peak: np.ndarray[bool] = ~valids
+
+    def require_side_peaks(self, **kwargs) -> np.ndarray[bool]:
+        if not check_attr(self, '_peaks_is_side_peak'):
+            self.set_side_peaks(**kwargs)
+
+        return self._peaks_is_side_peak
 
     def _set_peaks_SNR(self) -> None:
         """
@@ -1042,11 +1039,17 @@ class Spectra(Convinience):
         peaks_SNR: np.ndarray[float]
             The noise level for each mz value.
         """
-        assert hasattr(self, 'noise_level'), 'call subtract_baseline'
+        assert check_attr(self, 'noise_level'), 'call subtract_baseline'
         N_spec: int = len(self.indices)
-        av_intensities: np.ndarray[float] = self.intensities[self.peaks] / N_spec
-        self.peaks_SNR: np.ndarray[float] = \
-            av_intensities / self.noise_level[self.peaks]
+        av_intensities: np.ndarray[float] = self.intensities[self._peaks] / N_spec
+        self._peaks_SNR: np.ndarray[float] = \
+            av_intensities / self.noise_level[self._peaks]
+
+    @property
+    def peaks_SNR(self) -> np.ndarray[float]:
+        if not check_attr(self, '_peaks_SNR'):
+            self._set_peaks_SNR()
+        return self._peaks_SNR
 
     def _get_SNR_table(self) -> np.ndarray[float]:
         """
@@ -1057,7 +1060,7 @@ class Spectra(Convinience):
         This function scales the intensities by the estimated noise level, 
         thereby assigning SNR values to all peaks in each spectrum.
         """
-        assert hasattr(self, 'noise_level'), 'call subtract_baseline'
+        assert check_attr(self, 'noise_level'), 'call subtract_baseline'
         
         heights: np.ndarray[float] = self.get_heights()
         # noise level is assumed to be the same for each spectrum
@@ -1095,18 +1098,13 @@ class Spectra(Convinience):
             Minimum SNR required for keeping peaks. The default is to not remove any peaks
             based on SNR.
         remove_sidepeaks : bool, optional
-            Remove peaks likely introduced by spectral leakage (see detect_side_peaks).
+            Remove peaks likely introduced by spectral leakage (see set_side_peaks).
             The default is not to remove side peaks
         plts: bool, optional,
             Whether to plot the removed peaks.
         kwargs_sidepeaks: dict
-            Additional peaks passed on to detect_side_peaks.
+            Additional kwargs passed on to set_side_peaks.
         """
-        if not hasattr(self, 'peaks_SNR') and SNR_threshold:
-            self._set_peaks_SNR()
-        if remove_sidepeaks and (not hasattr(self, 'peaks_is_side_peak')):
-            self.detect_side_peaks(**kwargs_sidepeaks)
-
         # skip filtering of valid peaks if a list of peaks to keep is provided
         skip_filtering: bool = whitelist is not None
 
@@ -1125,34 +1123,34 @@ class Spectra(Convinience):
                 'two filtering steps instead.'
             )
 
-        N_peaks: int = len(self.peaks)
-        peaks_valid: np.ndarray[bool] = np.full(N_peaks, True, dtype=bool)
+        n_peaks: int = len(self._peaks)
+        peaks_valid: np.ndarray[bool] = np.full(n_peaks, True, dtype=bool)
 
         if skip_filtering:  # exclude all peaks not in whitelist
-            peaks_valid &= np.array([peak in whitelist for peak in self.peaks], dtype=bool)
+            peaks_valid &= np.array([peak in whitelist for peak in self._peaks], dtype=bool)
         if (not skip_filtering) and (SNR_threshold > 0):  # set peaks below SNR threshold to False
             peaks_valid &= self.peaks_SNR > SNR_threshold
         if (not skip_filtering) and remove_sidepeaks:  # set sidepeaks to False
-            peaks_valid &= ~self.peaks_is_side_peak
+            peaks_valid &= ~self.require_side_peaks(**kwargs_sidepeaks)
 
         if plts:  # keep a copy of the original peaks
-            peaks = self.peaks.copy()
+            peaks = self._peaks.copy()
 
         # filter out invalid peaks
-        self.peaks: np.ndarray[int] = self.peaks[peaks_valid]
+        self._peaks: np.ndarray[int] = self._peaks[peaks_valid]
         peak_props = {}
-        for key, val in self.peak_properties.items():
+        for key, val in self._peak_properties.items():
             peak_props[key] = val[peaks_valid]
-        self.peak_properties = peak_props
+        self._peak_properties = peak_props
         # add flag
-        self.peak_setting_parameters['modified'] = {
+        self._peak_setting_parameters['modified'] = {
             'whitelist': whitelist,
             'SNR_threshold': SNR_threshold,
             'remove_sidepeaks': remove_sidepeaks
         }
 
-        if hasattr(self, 'kernel_params'):
-            self.kernel_params = self.kernel_params[peaks_valid, :]
+        if check_attr(self, '_kernel_params'):
+            self._kernel_params = self._kernel_params[peaks_valid, :]
 
         if plts:
             idxs_removed: np.ndarray[int] = peaks[~peaks_valid]
@@ -1195,16 +1193,16 @@ class Spectra(Convinience):
         sigma : flaot
             The standard deviation of the gaussian.
         """
-        assert hasattr(self, 'peaks'), 'call set_peaks first'
-        mz_idx: float = self.peaks[peak_idx]  # mz index of of center
+        assert check_attr(self, '_peaks'), 'call set_peaks first'
+        mz_idx: float = self._peaks[peak_idx]  # mz index of center
 
         H: float = self.intensities[mz_idx]  # corresponding height
         # width of peak at half maximum
         FWHM_l: float = self.mzs[
-            (self.peak_properties["left_ips"][peak_idx] + .5).astype(int)
+            (self._peak_properties["left_ips"][peak_idx] + .5).astype(int)
         ]
         FWHM_r: float = self.mzs[
-            (self.peak_properties["right_ips"][peak_idx] + .5).astype(int)
+            (self._peak_properties["right_ips"][peak_idx] + .5).astype(int)
         ]
         mz_c: float = (FWHM_l + FWHM_r) / 2
         # convert FWHM to standard deviation
@@ -1234,17 +1232,17 @@ class Spectra(Convinience):
         sigma_r : flaot
             The right-sided standard deviation of the gaussian.
         """
-        assert hasattr(self, 'peaks'), 'call set_peaks first'
-        mz_idx: int = self.peaks[peak_idx]  # mz index of of center
+        assert check_attr(self, '_peaks'), 'call set_peaks first'
+        mz_idx: int = self._peaks[peak_idx]  # mz index of of center
         mz_c: float = self.mzs[mz_idx]  # center of gaussian
         # height at center of peak - prominence
         H: float = self.intensities[mz_idx]  # corresponding height
         # width of peak at half maximum
         FWHM_l: float = self.mzs[
-            (self.peak_properties["left_ips"][peak_idx] + .5).astype(int)
+            (self._peak_properties["left_ips"][peak_idx] + .5).astype(int)
         ]
         FWHM_r: float = self.mzs[
-            (self.peak_properties["right_ips"][peak_idx] + .5).astype(int)
+            (self._peak_properties["right_ips"][peak_idx] + .5).astype(int)
         ]
         # convert FWHM to standard deviation
         sigma_l = -(FWHM_l - mz_c) / (2 * np.log(2))
@@ -1268,30 +1266,35 @@ class Spectra(Convinience):
             The maximum allowed value for sigma. Defaults to 5 mDa. Larger
             peaks are likely coelutions.
         """
-        assert hasattr(self, 'peaks'), 'call set_peaks first'
-        assert hasattr(self, 'kernel_params'), 'call set_kernel_params first'
+        assert check_attr(self, '_peaks'), 'call set_peaks first'
+        assert check_attr(self, '_kernel_params'), 'call set_kernel_params first'
 
         if len(ignore) > 0:
             logger.info(f'unused kwargs in set_kernels: {ignore}')
 
         # width of peak at half maximum
-        idx_l: np.ndarray[int] = (self.peak_properties["left_ips"][peak_idx] + .5).astype(int)
-        idx_r: np.ndarray[int] = (self.peak_properties["right_ips"][peak_idx] + .5).astype(int)
+        idx_l: np.ndarray[int] = np.around(
+            self._peak_properties["left_ips"][peak_idx]
+        ).astype(int)
+        idx_r: np.ndarray[int] = np.around(
+            self._peak_properties["right_ips"][peak_idx]
+        ).astype(int)
         mask: slice = slice(idx_l, idx_r)
 
-        if not np.any(self.kernel_params[peak_idx, :]):
+        if not np.any(self._kernel_params[peak_idx, :]):
             return None
 
-        mz_c, H, sigma, *sigma_r = self.kernel_params[peak_idx, :]
-        if sigma_clippied := (sigma > sigma_max):
+        mz_c, H, sigma, *sigma_r = self._kernel_params[peak_idx, :]
+        if sigma > sigma_max:
             logger.warning(
                 f'sigma of kernel ({sigma * 1e3:.1f} mDa) with index {peak_idx} '
                 f'is bigger than max ({sigma_max * 1e3:.1f} mDa), halfing sigma.'
             )
 
-            ys = self.intensities[mask].copy()
             # take smaller window to hopefully climb up peak
-            *_, l, r = peak_widths(self.intensities, [self.peaks[peak_idx]], rel_height=.9)
+            *_, l, r = peak_widths(
+                self.intensities, [self._peaks[peak_idx]], rel_height=.9
+            )
             mask: slice = slice(round(l[0]), round(r[0]))
 
             sigma /= 2
@@ -1315,7 +1318,7 @@ class Spectra(Convinience):
                 f=self._kernel_func,
                 xdata=self.mzs[mask],
                 ydata=self.intensities[mask],
-                p0=self.kernel_params[peak_idx, :],
+                p0=self._kernel_params[peak_idx, :],
                 bounds=(bounds_l, bounds_r)
             )
         except ValueError as e:
@@ -1324,24 +1327,25 @@ class Spectra(Convinience):
                 f'for peak with index {peak_idx}: \n {e} \n'
                 f'This can happen for double peaks.'
             )
-            return None
+            return
 
         return params
 
     @property
     def _kernel_func(self) -> Callable[[tuple[np.ndarray, float, ...]], np.ndarray[float]]:
         """Return either gaussian or bigaussian function."""
-        if self.kernel_shape == 'bigaussian':
+        assert check_attr(self, '_kernel_shape')
+        if self._kernel_shape == 'bigaussian':
             return bigaussian
-        elif self.kernel_shape == 'gaussian':
+        elif self._kernel_shape == 'gaussian':
             return gaussian
 
     @property
     def _kernel_func_from_peak(self) -> Callable[[int], tuple[float, ...]]:
         """Return either gaussian or bigaussian function"""
-        if self.kernel_shape == 'bigaussian':
+        if self._kernel_shape == 'bigaussian':
             return self._bigaussian_from_peak
-        elif self.kernel_shape == 'gaussian':
+        elif self._kernel_shape == 'gaussian':
             return self._gaussian_from_peak
 
     def set_kernels(
@@ -1380,23 +1384,23 @@ class Spectra(Convinience):
             or mz_c, H, sigma_l, sigma_r (for bigaussian).
 
         """
-        assert hasattr(self, 'peaks'), 'call set peaks first'
+        assert check_attr(self, '_peaks'), 'call set peaks first'
 
         y: np.ndarray[float] = self.intensities.copy()
 
         if use_bigaussian:
-            self.kernel_shape: str = 'bigaussian'
-            self.kernel_params: np.ndarray[float] = np.zeros((len(self.peaks), 4))
+            self._kernel_shape: str = 'bigaussian'
+            self._kernel_params: np.ndarray[float] = np.zeros((len(self._peaks), 4))
         else:
-            self.kernel_shape: str = 'gaussian'
-            self.kernel_params: np.ndarray[float] = np.zeros((len(self.peaks), 3))
+            self._kernel_shape: str = 'gaussian'
+            self._kernel_params: np.ndarray[float] = np.zeros((len(self._peaks), 3))
 
         # start with heighest peak, work down
-        idxs_peaks: np.ndarray[int] = np.argsort(self.peak_properties['prominences'])[::-1]
-        mask_valid: np.ndarray[bool] = np.ones(len(self.peaks), dtype=bool)
+        idxs_peaks: np.ndarray[int] = np.argsort(self._peak_properties['prominences'])[::-1]
+        mask_valid: np.ndarray[bool] = np.ones(len(self._peaks), dtype=bool)
         for idx in idxs_peaks:
             params: tuple = self._kernel_func_from_peak(idx)
-            if self.kernel_shape == 'bigaussian':
+            if self._kernel_shape == 'bigaussian':
                 mz_c, H, sigma_l, sigma_r = params
             else:
                 mz_c, H, sigma_l = params
@@ -1405,80 +1409,129 @@ class Spectra(Convinience):
                 mask_valid[idx] = False
                 continue
             else:
-                self.kernel_params[idx, :] = params
+                self._kernel_params[idx, :] = params
             if fine_tune:
                 params: np.ndarray = self._kernel_fit_from_peak(idx, **kwargs)
                 if params is not None:
-                    self.kernel_params[idx, :] = params
+                    self._kernel_params[idx, :] = params
                 else:
                     mask_valid[idx] = False
                     continue
-            self.intensities -= self._kernel_func(
-                self.mzs, *self.kernel_params[idx, :]
+            self._intensities -= self._kernel_func(
+                self.mzs, *self._kernel_params[idx, :]
             )
         # restore intensities
-        self.intensities: np.ndarray[float] = y
+        self._intensities: np.ndarray[float] = y
 
         # delete invalid peaks
-        self.filter_peaks(whitelist=self.peaks[mask_valid])
+        self.filter_peaks(whitelist=self._peaks[mask_valid])
 
-    def plt_summed(
+    def require_kernels(self, **kwargs) -> np.ndarray[float]:
+        if not check_attr(self, '_kernel_params', True):
+            self.set_kernels(**kwargs)
+        return self._kernel_params
+
+    @property
+    def kernel_params(self):
+        return self.require_kernels()
+
+    def _find_tolerances(
             self,
-            plt_kernels: bool = False,
-            plt_lines: bool = False,
-            mz_limits: tuple[float] | None = None
+            targets: np.ndarray[float],
+            tolerances: Iterable[float] | float | None
+    ) -> np.ndarray[float]:
+        if tolerances is None:
+            assert check_attr(self, 'intensities', True), \
+                'estimating the tolerance requires that the spectra have been summed up'
+
+        if tolerances is None:
+            logger.info('estimating tolerance from summed spectrum ...')
+            tolerances: float = np.median(self.kernel_params[:, -1])
+            logger.info(f'found tolerance of {tolerances * 1e3:.1f} mDa')
+
+        tolerances_a: np.ndarray[float] = np.array(tolerances)
+
+        if tolerances_a.shape == (1,):
+            tolerances_a: np.ndarray[float] = np.full_like(targets, tolerances)
+        assert len(tolerances_a) == len(targets), \
+            ('If widths is not a scalar, widths and targets must have the same '
+             'number of elements.')
+
+        return tolerances_a
+
+    def set_targets(
+            self,
+            targets: Iterable[float],
+            tolerances: Iterable[float] | float | None = None,
+            plts: bool = False,
+            **kwargs_binning
     ) -> None:
         """
-        Plot the summed up intensities with synthetic spectrum estimated
-        from kernel parameters, if determined.
+        Set the peaks based on a number of target compounds (mass given in Da).
+        Peaks are searched within a mass window defined by tolerances, such that the
+        assigned mass is within target +/- tolerance. If no tolerance is given,
+        it is estimated from the kernel widths.
 
-        This method plots the summed intensities. If 'set_kernel_params' has been called already,
-        the synthetic spectrum will be plotted as well, the loss denotes the area between the
-        original and synthetic data.
+        This function sets the kernel_params and then requires using the bin_spectra function.
 
         Parameters
         ----------
-        plt_kernels: bool, optional
-            The default is False. If kernel parameters have been determined, this option becomes
-            available. It is generally not recommended to plot individual kernels and intended for
-            debugging. Unless your mass window or number of kernels is fairly small, this will take
-            a long time to plot.
-        plt_lines: bool, optional
-            If spectra have been binned, this option will plot vertical lines at the peak centers where
-            there height corresponds to the summed intensity across all spectra.
-        mz_limits: tuple[float] | None, optional.
-            By default, the entire mass range is plotted. With this parameter it can be decreased.
+        targets: Iterable[float]
+            The m/z values of interest in Da
+        tolerances: Iterable[float] | float
+            Tolerance(s) for deviation of peaks from theoretical masses.
+        plts: bool, optional
+            Whether to plot the target kernels on top of the summed spectrum.
+        kwargs_binning: Any,
+            Keyword arguments provided to bin_spectra
         """
-        # calculate approximated signal by summing up kernels
-        if plt_reconstructed := hasattr(self, 'kernel_params'):
-            kernels = self._get_kernels(norm_mode='height')
-            intensities_approx = (kernels * self.kernel_params[:, 1]).sum(axis=1)
-            loss = np.sum(np.abs(self.intensities - intensities_approx)) \
-                / np.sum(self.intensities)
 
-        plt.figure()
-        if plt_kernels and plt_reconstructed:
-            for i in range(len(self.peaks)):
-                y: np.ndarray[float] = self._kernel_func(self.mzs, *self.kernel_params[i, :])
-                # reduce to 10 std
-                mask: np.ndarray[bool] = np.abs(self.kernel_params[i, 0] - self.mzs) <= 10 * self.kernel_params[i, -1]
+        if plts:
+            assert not np.all(self.intensities == 0), \
+                'if you want to plot the target kernels, add up the intensities first'
+
+        targets: np.ndarray[float] = np.array(targets)
+
+        tolerances = self._find_tolerances(targets, tolerances)
+
+        n_peaks: int = len(targets)  # number of peaks equal to targets
+        n_spectra: int = self._n_spectra
+        self._line_spectra: np.ndarray[float] = np.zeros((n_spectra, n_peaks))
+
+        # set peaks and kernels artificially from the target mzs and tolerances
+        self.reset_peaks()
+        self._peaks = [np.argmin(np.abs(self.mzs - target)) for target in targets]
+        self._peak_setting_parameters['method'] = 'targeted'
+        self._peak_setting_parameters['targets'] = np.array(targets)
+        self._peak_setting_parameters['tolerances'] = np.array(tolerances)
+        # set kernels based on tolerance
+        self._kernel_params = np.zeros((n_peaks, 3 + (self._kernel_shape == 'bigaussian')))  # gaussian
+        self._kernel_params[:, 0] = targets  # center
+        self._kernel_params[:, 1] = self.intensities[self._peaks]
+        self._kernel_params[:, 2] = tolerances
+
+        if plts:
+            plt.figure()
+            plt.plot(self.mzs, self.intensities, label='original')
+            for i in range(len(self._peaks)):
+                y = self._kernel_func(self.mzs, *self.kernel_params[i, :])
+                mask = (np.abs(self.kernel_params[i, 0] - self.mzs)
+                        <= (10 * self.kernel_params[i, -1]))
                 plt.plot(self.mzs[mask], y[mask])
-        plt.plot(self.mzs, self.intensities, label='summed intensity')
-        if plt_reconstructed:
-            plt.plot(self.mzs, intensities_approx, label='estimated')
-        if hasattr(self, 'binning_by') and plt_lines:
-            plt.stem(self.kernel_params[:, 0], self.get_heights().sum(axis=0),
-                     markerfmt='', linefmt='red')
-        if mz_limits is not None:
-            plt.xlim(mz_limits)
-            mask: np.ndarray[bool] = (self.mzs >= mz_limits[0]) & (self.mzs <= mz_limits[1])
-            plt.ylim((0, self.intensities[mask].max()))
-        plt.legend()
-        plt.xlabel(r'$m/z$ in Da')
-        plt.ylabel('Intensity')
-        if plt_reconstructed:
-            plt.title(f'Reconstructed summed intensities (loss: {loss:.1f})')
-        plt.show()
+            plt.vlines(
+                targets,
+                ymin=0,
+                ymax=self.intensities.max(),
+                colors='k',
+                linestyles='--',
+                label='targets'
+            )
+            plt.xlabel('m/z in Da')
+            plt.ylabel('Intensity')
+            plt.legend()
+            plt.show()
+
+        self.bin_spectra(**kwargs_binning)
 
     def _get_kernels(self, norm_mode: str = 'area') -> np.ndarray[float]:
         """
@@ -1493,11 +1546,10 @@ class Spectra(Convinience):
             Factor by which to scale the intensities.
             Options are 'area' and 'height'. Default is area.
         """
-        assert hasattr(self, 'kernel_params'), \
+        assert check_attr(self, '_kernel_params'), \
             'call set_kernels() first'
 
-        N_peaks: int = self.kernel_params.shape[0]  # number of identified peaks
-
+        n_peaks: int = self.kernel_params.shape[0]  # number of identified peaks
 
         if norm_mode == 'area':
             H: float = np.sqrt(2)  # normalization constant
@@ -1506,11 +1558,10 @@ class Spectra(Convinience):
         else:
             raise KeyError('norm_mode must be one of "area", "height", "prob"')
 
-
-        kernels: np.ndarray[float] = np.zeros((N_peaks, len(self.mzs)))
+        kernels: np.ndarray[float] = np.zeros((n_peaks, len(self.mzs)))
         # TODO: make use of _kernel_func
-        if self.kernel_shape == 'bigaussian':
-            for idx_peak in range(N_peaks):
+        if self._kernel_shape == 'bigaussian':
+            for idx_peak in range(n_peaks):
                 # x_c, H, sigma_l, sigma_r
                 sigma_l: float = self.kernel_params[idx_peak, 2]
                 sigma_r: float = self.kernel_params[idx_peak, 3]
@@ -1521,8 +1572,8 @@ class Spectra(Convinience):
                     sigma_l=sigma_l,
                     sigma_r=sigma_r
                 )
-        elif self.kernel_shape == 'gaussian':
-            for idx_peak in range(N_peaks):
+        elif self._kernel_shape == 'gaussian':
+            for idx_peak in range(n_peaks):
                 # x_c, H, sigma
                 sigma: float = self.kernel_params[idx_peak, 2]
                 kernels[idx_peak] = gaussian(
@@ -1538,7 +1589,7 @@ class Spectra(Convinience):
             reader: ReadBrukerMCF | None = None,
             profile_spectra: np.ndarray[float] | None = None,
             method: str = 'height',
-            **_: dict
+            **_
     ) -> None:
         """
         For each spectrum find overlap between kernels and signal.
@@ -1546,34 +1597,37 @@ class Spectra(Convinience):
         Parameters
         ----------
         reader: ReadBrukerMCF, optional
-            Reader to get the spectra. The default is None. Either reader or profile_spectra must be
-            provided.
+            Reader to get the spectra. The default is None. Either reader or
+            profile_spectra must be provided.
         profile_spectra: np.ndarray[float], optional
-            Resampled spectra as 2D matrix. The default is None. Either reader or profile_spectra must be
-            provided.
-        integrate_peaks: bool
-            If this is set to True, estimate the intensity of each compound by
-            assuming that the area under the kernel corresponds to the compound,
-            this is valid if spectra are fairly similar. If this is set to False,
-            the height of the signal at the center of kernel estimation is used.
+            Resampled spectra as 2D matrix. The default is None. Either reader
+            or profile_spectra must be provided.
+        method: str, optional
+            Method for calculating the intensities of target compounds in each
+            spectrum:
+            -- 'height' takes the height of spectra at target masses
+            -- 'area' calculates the overlap between the kernels
+            -- 'max' takes the highest intensity within the given tolerance.
 
         Notes
         -----
         This method defines the following attribute(s):
-        line_spectra : np.ndarray[float]
+        _line_spectra : np.ndarray[float]
             The centroided spectra.
         """
-        def _bin_spectrum_area(spectrum: np.ndarray[float], idx: int) -> None:
+        def _bin_spectrum_area(_spectrum: np.ndarray[float], _idx: int) -> None:
             """
             Find intensities of compound based on kernels as the overlap.
 
             Parameters
             ----------
-            spectrum: np.ndarray[float]
+            _spectrum: np.ndarray[float]
                 Intensities of spectrum for which to find integrated peak intensities.
-            idx: int
+            _idx: int
                 Index of spectrum
 
+            Notes
+            -----
             weight is the integrated weighted signal
             ideally this would take the integral but since mzs are equally
             spaced, we can use the sum (scaled accordingly), so instead of
@@ -1585,15 +1639,15 @@ class Spectra(Convinience):
             multiplication
 
             equivalent to
-            line_spectrum = np.zeros(N_peaks)
-            >>> for idx_peak in range(N_peaks):
+            line_spectrum = np.zeros(n_peaks)
+            >>> for idx_peak in range(n_peaks):
             >>>     weighted_signal = spectrum.intensities * bigaussians[idx_peak, :]
             >>>     line_spectrum[idx_peak] = np.sum(weighted_signal) * dmz
             """
-            self.line_spectra[idx, :] = (spectrum @ kernels) * dmz
+            self._line_spectra[_idx, :] = (_spectrum @ kernels) * dmz
 
         def _bin_spectrum_height(
-                spectrum: np.ndarray[float], idx: int
+                _spectrum: np.ndarray[float], _idx: int
         ) -> None:
             """
             Find intensities of compound based on kernels as the height of
@@ -1601,44 +1655,46 @@ class Spectra(Convinience):
 
             Parameters
             ----------
-            spectrum: np.ndarray[float]
+            _spectrum: np.ndarray[float]
                 Intensities of spectrum for which to find peak intensities.
-            idx: int
+            _idx: int
                 Index of spectrum
 
             """
             # pick values of profile spectrum at kernel maxima
-            self.line_spectra[idx, :] = spectrum[idxs_mzs_c]
+            self._line_spectra[_idx, :] = _spectrum[idxs_mzs_c]
 
-        def _bin_spectrum_max(spectrum: np.ndarray[float], idx: int) -> None:
+        def _bin_spectrum_max(_spectrum: np.ndarray[float], _idx: int) -> None:
             # 2D matrix with intensities windowed to kernels: each column is the
             # product of a kernel with the spectrum
-            vals = kernels * spectrum[:, None]
+            vals = kernels * _spectrum[:, None]
             # the position of the highest value for each kernel
             idcs = np.argmax(vals, axis=0)
             # only accept value if it is not at the boundary of the kernel window
             mask_valid = np.array([
-                (vals[idx - 1, i] > 0) & (vals[idx + 1, i] > 0)
+                (vals[_idx - 1, i] > 0) & (vals[_idx + 1, i] > 0)
                 for i, idx in enumerate(idcs)
             ])
-            self.line_spectra[idx, :] = vals.max(axis=0) * mask_valid
+            self._line_spectra[_idx, :] = vals.max(axis=0) * mask_valid
 
-        assert hasattr(self, 'kernel_params'), 'calculate kernels with set_kernels'
+        assert len(self._peaks) > 0, 'need at least one peak'
+        assert check_attr(self, '_kernel_params'), \
+            'calculate kernels with set_kernels'
         assert (profile_spectra is not None) or (reader is not None), \
             'provide either a reader or the profile spectra'
         assert method in ('area', 'height', 'max'), \
             'method must be either "area" or "height" or "max"'
 
         indices_spectra: np.ndarray[int] = self.indices
-        N_spectra: int = len(indices_spectra)  # number of spectra in mcf file
-        N_peaks: int = self.kernel_params.shape[0]  # number of identified peaks
-        self.line_spectra: np.ndarray[float] = np.zeros((N_spectra, N_peaks))  # result array
+        n_spectra: int = self._n_spectra  # number of spectra in mcf file
+        n_peaks: int = self._n_peaks  # number of identified peaks
+        self._line_spectra: np.ndarray[float] = np.zeros((n_spectra, n_peaks))  # result array
 
-        self.binning_by: str = method
+        self._binning_by: str = method
 
         if method == 'area':
             _bin_spectrum: Callable[[np.ndarray[float], int], None] = _bin_spectrum_area
-            dmz: float = self.mzs[1] - self.mzs[0]
+            dmz: float = self.delta_mz
             # precompute (bi)gaussians
             kernels: np.ndarray[float] = self._get_kernels(norm_mode='area')
         elif method == 'height':
@@ -1649,9 +1705,9 @@ class Spectra(Convinience):
                 np.argmin(np.abs(mz_c - self.mzs)) for mz_c in mzs_c
             ])
         elif method == 'max':
-            if self.kernel_shape != 'gaussian':
+            if self._kernel_shape != 'gaussian':
                 raise NotImplementedError(
-                    f'max only implemented for gaussian kernels, not {self.kernel_shape}'
+                    f'max only implemented for gaussian kernels, not {self._kernel_shape}'
                 )
             _bin_spectrum: Callable[[np.ndarray[float], int], None] = _bin_spectrum_max
             kernels: np.ndarray[float] = self._get_kernels(norm_mode='height')
@@ -1663,8 +1719,8 @@ class Spectra(Convinience):
         # iterate over spectra and bin according to kernels
         for it, idx_spectrum in tqdm(
                 enumerate(indices_spectra),
-                total=N_spectra,
-                desc='binning spectra', smoothing=50 / N_spectra
+                total=n_spectra,
+                desc='binning spectra', smoothing=50 / n_spectra
         ):
             if reader is not None:
                 spectrum: np.ndarray[float] = self._get_spectrum(
@@ -1710,7 +1766,7 @@ class Spectra(Convinience):
         RXYs = get_rxy(names)
 
         # search indices of spectra object in reader
-        if len(self.indices) != len(reader.indices):
+        if self._n_spectra != len(reader.indices):
             mask: np.ndarray[bool] = np.array(
                 [np.argwhere(idx == reader.indices)[0][0] for idx in self.indices]
             )
@@ -1722,8 +1778,8 @@ class Spectra(Convinience):
 
         return df
 
-    def binned_spectra_to_df(
-            self, integrate_area: bool = False, **kwargs
+    def set_feature_table(
+            self, integrate_area: bool = False, **_
     ) -> pd.DataFrame:
         """
         Turn the line_spectra into the familiar df with R, x, y columns.
@@ -1736,8 +1792,6 @@ class Spectra(Convinience):
         ----------
         integrate_area: If True, this will return the area of each peak,
             otherwise it will return the height of each peak
-        kwargs: dict
-            Keyword arguments. Allows providing a reader.
 
         Notes
         -----
@@ -1752,15 +1806,13 @@ class Spectra(Convinience):
             Feature table with the spot-wise and compound wise intensities
             together with the R, x, y columns.
         """
-        if hasattr(self, 'feature_table'):
-            return self.feature_table
-        assert hasattr(self, 'line_spectra'), 'create line spectra with bin_spectra'
+        assert check_attr(self, '_line_spectra'), 'create line spectra with bin_spectra'
 
         if integrate_area:
-            assert self.binning_by == 'area', \
+            assert self._binning_by == 'area', \
                 ('currently writing a feature table with area is only possible '
                  'if binning was also done with peak integration.')
-            data: np.ndarray[float] = self.line_spectra.copy()
+            data: np.ndarray[float] = self._line_spectra.copy()
         else:
             data: np.ndarray[float] = self.get_heights()
 
@@ -1769,19 +1821,28 @@ class Spectra(Convinience):
             columns=np.around(self.kernel_params[:, 0], 4).astype(str)
         )
 
-        df: pd.DataFrame = self._add_rxys_to_df(df, **kwargs)
+        df: pd.DataFrame = self._add_rxys_to_df(df)
         # drop possible duplicates due to shift in optimizer
         df: pd.DataFrame = df.loc[:, ~df.columns.duplicated()].copy()
 
-        self.feature_table: pd.DataFrame = df
-        return self.feature_table
+        self._feature_table: pd.DataFrame = df
+        return self._feature_table
+
+    def require_feature_table(self, **kwargs) -> pd.DataFrame:
+        if not check_attr(self, 'feature_table'):
+            self.set_feature_table(**kwargs)
+        return self._feature_table
+
+    @property
+    def feature_table(self):
+        return self.require_feature_table()
 
     def get_kernel_params_df(self) -> pd.DataFrame:
         """Turn the kernel parameters into a feature table."""
-        assert hasattr(self, 'kernel_params'), 'call set_kernels'
-        if self.kernel_shape == 'bigaussian':
+        assert check_attr(self, '_kernel_params'), 'call set_kernels'
+        if self._kernel_shape == 'bigaussian':
             columns = ['mz', 'H', 'sigma_l', 'sigma_r']
-        elif self.kernel_shape == 'gaussian':
+        elif self._kernel_shape == 'gaussian':
             columns = ['mz', 'H', 'sigma']
         else:
             raise NotImplementedError()
@@ -1829,13 +1890,15 @@ class Spectra(Convinience):
         If binning was done by height, returns the line_spectra attribute.
         Otherwise, heights are calculated from areas.
         """
-        assert hasattr(self, 'line_spectra'), 'call bin_spectra'
-        if self.binning_by in ('height', 'max'):
-            return self.line_spectra.copy()
-        elif self.binning_by == 'area':
-            area: np.ndarray[float] = self.line_spectra
+        assert check_attr(self, '_line_spectra'), 'call bin_spectra'
+        assert check_attr(self, '_binning_by'), \
+            'instance is corrupted, found _line_spectra, but not _binning_by'
+        if self._binning_by in ('height', 'max'):
+            return self._line_spectra.copy()
+        elif self._binning_by == 'area':
+            area: np.ndarray[float] = self._line_spectra
             sigma_l: np.ndarray[float] = self.kernel_params[:, 2]
-            if self.kernel_shape == 'bigaussian':
+            if self._kernel_shape == 'bigaussian':
                 sigma_r: np.ndarray[float] = self.kernel_params[:, 3]
             else:
                 sigma_r: None = None
@@ -1843,10 +1906,12 @@ class Spectra(Convinience):
             return Hs
         else:
             raise NotImplementedError(
-                f'get_heights for {self.binning_by} not implemented'
+                f'get_heights for {self._binning_by} not implemented'
             )
 
-    def spectrum_idx2array_idx(self, spectrum_idx: int | Iterable[int]) -> int | np.ndarray[int]:
+    def spectrum_idx2array_idx(
+            self, spectrum_idx: int | Iterable[int]
+    ) -> int | np.ndarray[int]:
         """
         Convert the 1-based spectrum index to 0-based array index.
 
@@ -1895,11 +1960,11 @@ class Spectra(Convinience):
         if spectrum_idxs is None:
             spectrum_idxs: np.ndarray[int] = self.indices
 
-        if not hasattr(self, 'losses'):
-            self.losses: np.ndarray[float] = np.zeros(len(self.indices))
+        if not check_attr(self, 'losses'):
+            self._losses: np.ndarray[float] = np.zeros(len(self.indices))
         # get sigmas (same for all spectra)
-        sigma_ls: np.ndarray[float]  = self.kernel_params[:, 2]
-        if self.kernel_shape == 'bigaussian':
+        sigma_ls: np.ndarray[float] = self.kernel_params[:, 2]
+        if self._kernel_shape == 'bigaussian':
             sigma_rs: np.ndarray[float] = self.kernel_params[:, 3]
         else:
             sigma_rs: None = None
@@ -1915,13 +1980,13 @@ class Spectra(Convinience):
             )
 
             Hs: np.ndarray[float] = self.H_from_area(
-                self.line_spectra[array_idx, :],
+                self._line_spectra[array_idx, :],
                 sigma_ls,
                 sigma_rs
             )
             y_rec: np.ndarray[float] = kernels @ Hs
             loss: float = np.sum(np.abs(spec - y_rec)) / np.sum(spec)
-            self.losses[c] = loss
+            self._losses[c] = loss
 
             if plts:
                 plt.figure()
@@ -1952,19 +2017,19 @@ class Spectra(Convinience):
             Mask object where values not meeting the criteria are set to False
         """
         if SNR_threshold > 0:
-            assert hasattr(self, 'noise_level'), 'Call subtract_baseline first'
+            assert check_attr(self, 'noise_level'), 'Call subtract_baseline first'
             mask_snr_too_low: np.ndarray[bool] = self._get_SNR_table() < SNR_threshold
         else:
-            mask_snr_too_low: np.ndarray[bool] = np.zeros(self.line_spectra.shape, dtype=bool)
+            mask_snr_too_low: np.ndarray[bool] = np.zeros(self._line_spectra.shape, dtype=bool)
         if intensity_min > 0:
-            mask_intensity_too_low: np.ndarray[bool] = self.line_spectra < intensity_min
+            mask_intensity_too_low: np.ndarray[bool] = self._line_spectra < intensity_min
         else:
             mask_intensity_too_low: np.ndarray[bool] = np.zeros(
-                self.line_spectra.shape, dtype=bool
+                self._line_spectra.shape, dtype=bool
             )
 
         mask = mask_snr_too_low | mask_intensity_too_low
-        self.line_spectra[mask] = 0
+        self._line_spectra[mask] = 0
 
         return mask
 
@@ -2001,10 +2066,10 @@ class Spectra(Convinience):
             Spectra object with combined properties.
         """
         assert type(other) is type(self), '"+" is only defined for Spectra objects'
-        assert hasattr(self, 'noise_level') and hasattr(other, 'noise_level'), \
+        assert check_attr(self, 'noise_level') and check_attr(other, 'noise_level'), \
             'make sure both objects have the baseline removed'
-        assert hasattr(self, 'kernel_params') and hasattr(other, 'kernel_params')
-        assert hasattr(self, 'binning_by') and hasattr(other, 'binning_by')
+        assert check_attr(self, '_kernel_params') and check_attr(other, '_kernel_params')
+        assert check_attr(self, '_binning_by') and check_attr(other, '_binning_by')
 
         # determine if spectra are from the same source folder
         is_same_measurement: bool = self.path_d_folder == other.path_d_folder
@@ -2014,8 +2079,8 @@ class Spectra(Convinience):
             path_d_folder: str = self.path_d_folder
             indices: np.ndarray[int] = np.hstack([self.indices, other.indices])
         else:
-            logger.warning('this and other object are not from the same folder, this will result \
-in loss of functionality!')
+            logger.warning('this and other object are not from the same folder, '
+                           'this will result in loss of functionality!')
             path_d_folder: str = os.path.commonpath([
                 self.path_d_folder, other.path_d_folder
             ])
@@ -2039,106 +2104,164 @@ in loss of functionality!')
         # find peaks, bin
         # summed: np.ndarray[float] = profiles.sum(axis=0)
         s_new.noise_level = (np.interp(self.mzs, other.mzs, other.noise_level) + self.noise_level) / 2
-        kwargs_peak = self.peak_setting_parameters.copy()
+        kwargs_peak = self._peak_setting_parameters.copy()
         prominence: float = kwargs_peak.pop('prominence')
         prominence *= 2  # assume both summed spectra have roughly the same prominences
         s_new.set_peaks(prominence=prominence, **kwargs_peak)
-        s_new.set_kernels(use_bigaussian=self.kernel_shape == 'bigaussian')
+        s_new.set_kernels(use_bigaussian=self._kernel_shape == 'bigaussian')
         s_new.bin_spectra(
             profile_spectra=profiles,
-            integrate_peaks=self.binning_by == 'area'
+            integrate_peaks=self._binning_by == 'area'
         )
         return s_new
 
-    def full(self, reader: ReadBrukerMCF | hdf5Handler, **kwargs: dict):
-        """Perform all steps with the provided parameters."""
+    def add_calibrated_spectra(self, reader: ReadBrukerMCF | hdf5Handler, **kwargs: Any):
         self.add_all_spectra(reader=reader)
         self.subtract_baseline(**kwargs)
-        self.set_calibrate_functions(reader=reader, **kwargs)
+        self.require_calibrate_functions(reader=reader, **kwargs)
         self.add_all_spectra(reader=reader)
-        self.subtract_baseline(overwrite=True, **kwargs)
+        self.subtract_baseline(**kwargs)
+
+    def full(self, reader: ReadBrukerMCF | hdf5Handler, **kwargs: Any):
+        """Perform all steps with the provided parameters."""
+        self.add_calibrated_spectra(reader=reader, **kwargs)
         self.set_peaks(**kwargs)
         self.set_kernels(**kwargs)
         self.bin_spectra(reader, **kwargs)
         self.filter_line_spectra(**kwargs)
-        self.binned_spectra_to_df(**kwargs)
+        self.set_feature_table(**kwargs)
 
     def full_targeted(self, reader: ReadBrukerMCF | hdf5Handler, targets: list[float], **kwargs):
         """Perform all steps for targeted compounds with the provided parameters."""
-        self.add_all_spectra(reader=reader)
-        self.subtract_baseline(**kwargs)
-        self.set_calibrate_functions(reader=reader, **kwargs)
-        self.add_all_spectra(reader=reader)
-        self.subtract_baseline(overwrite=True)
-        self.set_peaks(**kwargs)
-        self.set_kernels(**kwargs)
+        self.add_calibrated_spectra(reader=reader, **kwargs)
         # set target compounds
-        self.set_targets(targets, plts=True)
-        self.bin_spectra(reader=reader, **kwargs)
+        self.set_targets(targets, reader=reader, **kwargs)
         self.filter_line_spectra(**kwargs)
-        self.binned_spectra_to_df(**kwargs)
+        self.set_feature_table(**kwargs)
 
-    def save(self):
-        """Save object to d-folder."""
-        folder, file = self._get_disc_folder_and_file()
-        file_old: str = self.path_d_folder + '/' + 'spectra_object.pickle'
-        if os.path.exists(os.path.join(folder, file_old)):
-            logger.info('deleting legacy file')
-            os.remove(os.path.join(folder, file_old))
-
-        keep_attributes: set[str] = set(self.__dict__.keys()) & class_to_attributes(self)
-        if hasattr(self, 'feature_table') and hasattr(self, 'line_spectra'):
-            keep_attributes.remove('line_spectra')
-
-        save_dict: dict[str, Any] = {key: self.__dict__[key] for key in keep_attributes}
-
-        logger.info(f'saving image object with {self.__dict__.keys()} to {folder}')
-        with open(file, 'wb') as f:
-            pickle.dump(save_dict, f, pickle.HIGHEST_PROTOCOL)
-
-    def load(self):
-        """Load object from d-folder."""
-        folder, file = self._get_disc_folder_and_file()
-        file_old: str = os.path.join(folder,'spectra_object.pickle')
-
-        if not os.path.exists(file):
-            logger.info(f'loading legacy file {file_old} from {folder}')
-            assert os.path.exists(file_old), \
-                f'found no saved spectra object in {folder}'
-            file: str = file_old
-
-        # for backwards compatibility, filter out attributes that are no longer
-        # desired to load
-        filter_attr = class_to_attributes(self)
-
-        with open(file, 'rb') as f:
-            obj: object | dict = pickle.load(f)
-            if type(obj) is not dict:  # legacy
-                obj: dict[str, Any] = obj.__dict__
-            # filter out attributes that are not supposed to be saved
-            load_attr: set[str] = filter_attr & set(obj.keys())
-            # generate new dict, that only has the desired attributes
-            obj_new: dict[str, Any] = {key: obj[key] for key in load_attr}
-            # merge the objects dict with the disk dict, overwriting
-            # instance attributes with saved once, if they both exist
-            self.__dict__ |= obj_new
-
-        if hasattr(self, 'feature_table'):
-            self.line_spectra: np.ndarray[float] = self.feature_table.\
+    def _post_load(self):
+        if check_attr(self, 'feature_table'):
+            self._line_spectra: np.ndarray[float] = self.feature_table.\
                 drop(columns=['R', 'x', 'y']).\
                 to_numpy()
+
+    def plot_summed(
+            self,
+            plt_kernels: bool = False,
+            plt_lines: bool = False,
+            mz_limits: tuple[float] | None = None
+    ) -> None:
+        """
+        Plot the summed up intensities with synthetic spectrum estimated
+        from kernel parameters, if determined.
+
+        This method plots the summed intensities. If 'set_kernel_params' has been called already,
+        the synthetic spectrum will be plotted as well, the loss denotes the area between the
+        original and synthetic data.
+
+        Parameters
+        ----------
+        plt_kernels: bool, optional
+            The default is False. If kernel parameters have been determined, this option becomes
+            available. It is generally not recommended to plot individual kernels and intended for
+            debugging. Unless your mass window or number of kernels is fairly small, this will take
+            a long time to plot.
+        plt_lines: bool, optional
+            If spectra have been binned, this option will plot vertical lines at the peak centers where
+            there height corresponds to the summed intensity across all spectra.
+        mz_limits: tuple[float] | None, optional.
+            By default, the entire mass range is plotted. With this parameter it can be decreased.
+        """
+        # calculate approximated signal by summing up kernels
+        if plt_reconstructed := check_attr(self, '_kernel_params'):
+            kernels = self._get_kernels(norm_mode='height')
+            intensities_approx = (kernels * self.kernel_params[:, 1]).sum(axis=1)
+            loss = np.sum(np.abs(self.intensities - intensities_approx)) \
+                / np.sum(self.intensities)
+
+        plt.figure()
+        if plt_kernels and plt_reconstructed:
+            for i in range(len(self._peaks)):
+                y: np.ndarray[float] = self._kernel_func(self.mzs, *self.kernel_params[i, :])
+                # reduce to 10 std
+                mask: np.ndarray[bool] = np.abs(self.kernel_params[i, 0] - self.mzs) <= 10 * self.kernel_params[i, -1]
+                plt.plot(self.mzs[mask], y[mask])
+        plt.plot(self.mzs, self.intensities, label='summed intensity')
+        if plt_reconstructed:
+            plt.plot(self.mzs, intensities_approx, label='estimated')
+        if check_attr(self, '_binning_by') and plt_lines:
+            plt.stem(self.kernel_params[:, 0], self.get_heights().sum(axis=0),
+                     markerfmt='', linefmt='red')
+        if mz_limits is not None:
+            plt.xlim(mz_limits)
+            mask: np.ndarray[bool] = (self.mzs >= mz_limits[0]) & (self.mzs <= mz_limits[1])
+            plt.ylim((0, self.intensities[mask].max()))
+        plt.legend()
+        plt.xlabel(r'$m/z$ in Da')
+        plt.ylabel('Intensity')
+        if plt_reconstructed:
+            plt.title(f'Reconstructed summed intensities (loss: {loss:.1f})')
+        plt.show()
+
+    def plot_calibration_functions(
+            self,
+            reader: ReadBrukerMCF | hdf5Handler,
+            indices: Iterable[int] | None = None,
+            n_plot: int = 10
+    ) -> None:
+        assert check_attr(self, '_calibration_parameters'), \
+            'Call set_calibrate_functions before plotting.'
+        if indices is not None:
+            n_plot = len(indices)
+        assert (n_plot > 0), 'Number of spectra should be bigger than 0'
+
+        if indices is None:
+            indices: np.ndarray[int] = np.random.choice(
+                self.indices, size=n_plot, replace=False
+            )
+
+        fig, axs = plt.subplots(nrows=n_plot, ncols=2, sharex='col')
+        if n_plot == 1:
+            axs = [axs]
+
+        calibrants_mz: np.ndarray[float] = get_calibrants(self.limits)
+
+        for idx, (ax_l, ax_r) in zip(indices, axs):
+            # obtain spectra
+            spec_o: Spectrum = reader.get_spectrum(index=idx, limits=self.limits)
+            spec_c: Spectrum = self._get_spectrum(
+                reader=reader, index=idx, only_intensity=False
+            )
+
+            array_idx: int = self.spectrum_idx2array_idx(idx)
+            poly_coeffs: np.ndarray = self._calibration_parameters[array_idx, :]
+            f: Callable = np.poly1d(poly_coeffs)
+            cal_vals: np.ndarray[float] = f(self.mzs)
+            ax_l.plot(self.mzs, self.noise_level)
+            ax_l.plot(spec_o.mzs, spec_o.intensities)
+            ax_l.plot(spec_c.mzs, spec_c.intensities)
+            ax_l.vlines(calibrants_mz, 0, spec_o.intensities.max(), colors='k', linestyles='--')
+
+            ax_r.plot(self.mzs, cal_vals * 1e3)
+        ax_l.set_xlabel('m/z in Da')
+        ax_r.set_xlabel('m/z in Da')
+        ax_l.legend(['noise lvl', 'original', 'calibrated', 'calibrants', 'verification'])
+        ax_r.legend(['shift in mDa'])
+
+        fig.tight_layout()
+        plt.show()
 
 
 class ClusteringManager:
     """
-    Handle Spectra in clusters (e.g. regions of interest) for more precise  peak-picking. Also, more
-    RAM-light.
+    Handle Spectra in clusters (e.g. regions of interest) for more precise
+    peak-picking. Also, more RAM-light.
 
     Currently not tested, usage is discouraged.
     """
     def __init__(self, reader: ReadBrukerMCF, **kwargs_spectra):
-        assert hasattr(reader, 'indices'), 'call create_indices'
-        assert hasattr(reader, 'limits'), \
+        assert check_attr(reader, 'indices'), 'call create_indices'
+        assert check_attr(reader, 'limits'), \
             'call set_QTOF_window or define mass limits'
         self.path_d_folder: str = reader.path_d_folder
         self.indices = reader.indices
@@ -2218,7 +2341,7 @@ class ClusteringManager:
             raise NotImplementedError()
 
     def plt_cluster_distribution(self):
-        assert hasattr(self, 'clusters')
+        assert check_attr(self, 'clusters')
         info: ImagingInfoXML = ImagingInfoXML(path_d_folder=self.path_d_folder)
         names: np.ndarray[str] = info.spotName
         idxs: np.ndarray[int] = info.count
@@ -2238,7 +2361,7 @@ class ClusteringManager:
         plt.show()
 
     def get_spectra(self, reader: ReadBrukerMCF, **kwargs: dict) -> Spectra:
-        assert hasattr(self, 'clusters'), 'call set_clusters first'
+        assert check_attr(self, 'clusters'), 'call set_clusters first'
         spec_main = Spectra(
             reader=reader, indices=self.clusters[0], **self.kwargs_spectra
         )
@@ -2263,8 +2386,8 @@ class MultiSectionSpectra(Spectra):
     Example
     -------
     Imports
-    >>> from exporting.from_mcf.cSpectrum import MultiSectionSpectra
-    >>> from exporting.from_mcf.rtms_communicator import ReadBrukerMCF
+    >>> from msi_workflow.exporting.from_mcf.spectrum import MultiSectionSpectra
+    >>> from msi_workflow.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
     Initiate readers (could also be hdf5Handler's)
     >>> folders = ['path/to/d_folder1.d', 'path/to/d_folder2.d', ...]
     >>> readers = [ReadBrukerMCF(path_d_folder=folder) for folder in folders]
@@ -2326,7 +2449,7 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.set_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibrate_functions
         """
         for i, reader in enumerate(readers):
             self.specs[i].add_all_spectra(reader)
@@ -2340,7 +2463,7 @@ class MultiSectionSpectra(Spectra):
             self.noise_level += spec.noise_level
         self.noise_level /= len(self.specs)
 
-    def set_calibrate_functions(
+    def require_calibrate_functions(
             self,
             *,
             readers: list[ReadBrukerMCF | hdf5Handler] | None = None,
@@ -2354,17 +2477,17 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.set_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibrate_functions
         """
         for i, reader in enumerate(readers):
-            self.specs[i].set_calibrate_functions(reader=reader, **kwargs)
+            self.specs[i].require_calibrate_functions(reader=reader, **kwargs)
 
     def distribute_peaks_and_kernels(self):
         """
         Transmit the peak and kernel properties of this object to the Spectra children
         """
-        assert hasattr(self, 'peaks'), 'call set_peaks() first'
-        assert hasattr(self, 'kernel_params'), 'call set_kernel_params() first'
+        assert check_attr(self, '_peaks'), 'call set_peaks() first'
+        assert check_attr(self, '_kernel_params'), 'call set_kernel_params() first'
         for spec in self.specs:
             spec.peaks = self.peaks.copy()
             spec.peak_properties = self.peak_properties.copy()
@@ -2372,7 +2495,7 @@ class MultiSectionSpectra(Spectra):
             spec.peak_setting_parameters['notes'] = 'peak properties set in MultiSectionSpectra'
             spec.kernel_params = self.kernel_params.copy()
             spec.kernel_shape = self.kernel_shape
-            if hasattr(self, 'noise_level'):
+            if check_attr(self, 'noise_level'):
                 spec.noise_level = self.noise_level
 
     def bin_spectra(self, readers: Iterable[ReadBrukerMCF | hdf5Handler], **kwargs):
@@ -2384,7 +2507,7 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.set_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibrate_functions
         """
         line_spectra = []
         for i, reader in enumerate(readers):
@@ -2393,7 +2516,7 @@ class MultiSectionSpectra(Spectra):
         self.line_spectra: np.ndarray[float] = np.vstack(line_spectra)
         self.binning_by = self.specs[0].binning_by
 
-    def binned_spectra_to_df(
+    def set_feature_table(
             self,
             readers: Iterable[ReadBrukerMCF | hdf5Handler] | None = None,
             **kwargs: dict
@@ -2406,18 +2529,18 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.set_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibrate_functions
         """
         if readers is None:
             readers = [None] * len(self.specs)
 
         fts = []
         for i, reader in enumerate(readers):
-            self.specs[i].binned_spectra_to_df(reader=reader, **kwargs)
+            self.specs[i].set_feature_table(reader=reader, **kwargs)
             fts.append(self.specs[i].feature_table)
 
-        self.feature_table: pd.DataFrame = combine_feature_tables(fts)
-        return self.feature_table
+        self._feature_table: pd.DataFrame = combine_feature_tables(fts)
+        return self._feature_table
 
     def full(self, readers: list[ReadBrukerMCF | hdf5Handler], **kwargs: dict):
         """
@@ -2428,11 +2551,11 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.set_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibrate_functions
         """
         self.add_all_spectra(readers=readers)
         self.subtract_baseline(**kwargs)
-        self.set_calibrate_functions(readers=readers, **kwargs)
+        self.require_calibrate_functions(readers=readers, **kwargs)
         self.add_all_spectra(readers=readers)
         self.subtract_baseline(overwrite=True, **kwargs)
         self.set_peaks(**kwargs)
@@ -2440,7 +2563,7 @@ class MultiSectionSpectra(Spectra):
         self.distribute_peaks_and_kernels()
         self.bin_spectra(readers=readers, **kwargs)
         self.filter_line_spectra(**kwargs)
-        self.binned_spectra_to_df(readers=readers, **kwargs)
+        self.set_feature_table(readers=readers, **kwargs)
 
     def full_targeted(
             self,
@@ -2458,11 +2581,11 @@ class MultiSectionSpectra(Spectra):
         targets: list[float]
             Target mzs.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.set_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibrate_functions
         """
         self.add_all_spectra(readers=readers)
         self.subtract_baseline(**kwargs)
-        self.set_calibrate_functions(readers=readers, **kwargs)
+        self.require_calibrate_functions(readers=readers, **kwargs)
         self.add_all_spectra(readers=readers)
         self.subtract_baseline(overwrite=True, **kwargs)
         # set target compounds
@@ -2470,7 +2593,7 @@ class MultiSectionSpectra(Spectra):
         self.distribute_peaks_and_kernels()
         self.bin_spectra(readers=readers, **kwargs)
         self.filter_line_spectra(**kwargs)
-        self.binned_spectra_to_df(readers=readers, **kwargs)
+        self.set_feature_table(readers=readers, **kwargs)
 
     def save(self, path_file: str):
         """
@@ -2490,7 +2613,7 @@ class MultiSectionSpectra(Spectra):
             os.remove(path_file)
 
         keep_attributes: set[str] = set(self.__dict__.keys()) & class_to_attributes(self)
-        if hasattr(self, 'feature_table') and hasattr(self, 'line_spectra'):
+        if check_attr(self, 'feature_table') and check_attr(self, '_line_spectra'):
             keep_attributes.remove('line_spectra')
 
         save_dict: dict[str, Any] = {key: self.__dict__[key] for key in keep_attributes}
@@ -2510,7 +2633,7 @@ class MultiSectionSpectra(Spectra):
 
         Example
         -------
-        >>> from exporting.from_mcf.cSpectrum import MultiSectionSpectra
+        >>> from msi_workflow.exporting.from_mcf.spectrum import MultiSectionSpectra
         >>> obj = MultiSectionSpectra([])
         >>> obj.load(r'path/to/save/file.pickle')
         """
@@ -2534,7 +2657,7 @@ class MultiSectionSpectra(Spectra):
             # instance attributes with saved once, if they both exist
             self.__dict__ |= obj_new
 
-        if hasattr(self, 'feature_table'):
-            self.line_spectra: np.ndarray[float] = self.feature_table. \
+        if check_attr(self, 'feature_table'):
+            self._line_spectra: np.ndarray[float] = self.feature_table. \
                 drop(columns=['R', 'x', 'y']). \
                 to_numpy()
