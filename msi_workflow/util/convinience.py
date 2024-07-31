@@ -64,7 +64,7 @@ def check_attr(obj, attr_name: str, check_nonempty: bool = False) -> bool:
     valid: bool = hasattr(obj, attr_name) and (getattr(obj, attr_name) is not None)
     if not check_nonempty:
         return valid
-    return valid and any(getattr(obj, attr_name))
+    return valid and np.any(getattr(obj, attr_name))
 
 
 class Convinience:

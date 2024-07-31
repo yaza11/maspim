@@ -134,7 +134,7 @@ class Spectra(Convinience):
     >>> spec.subtract_baseline(plts=True)
     
     Optionally, it is possible to perform lock mass calibration, e.g. with Pyropheophorbide a:
-    >>> spec.require_calibrate_functions(calibrants_mz=[557.25231],reader=reader,SNR_threshold=2)
+    >>> spec.require_calibrate_functions(calibrants_mz=[557.25231],reader=reader,calib_SNR_threshold=2)
     >>> spec.add_all_spectra(reader=reader)
     Although not necessary, it is adviced to do this step after subtracting the
     baseline in order to have access to the SNR level. Afterward the calibration will be used
@@ -526,7 +526,8 @@ class Spectra(Convinience):
             self.add_spectrum(spectrum.intensities)
 
     def set_noise_level(
-            self, window_size: int | float | None = None,
+            self,
+            window_size: int | float | None = None,
             plts: bool = False
     ):
         """
@@ -629,7 +630,7 @@ class Spectra(Convinience):
     ) -> None:
         assert not self._noise_level_subtracted
         ys_min = self.require_noise_level(**kwargs)
-        self._intensities -= ys_min
+        self._intensities -= ys_min * self._n_spectra
         self._noise_level_subtracted = True
 
     def get_mass_shift(
@@ -752,7 +753,7 @@ class Spectra(Convinience):
             reader: ReadBrukerMCF | hdf5Handler,
             calibrants_mz: Iterable[float] = None,
             search_range: float = 5e-3,
-            SNR_threshold: float = 4,
+            calib_SNR_threshold: float = 4,
             max_degree: int = 1,
             min_height: float | int = 10_000,
             **_
@@ -775,11 +776,12 @@ class Spectra(Convinience):
             Exact mass(es) of the calibrants in Da. If not provided, will use
             the calibrant list from Wörmer et al., 2019 (Towards multiproxy,
             ultra-high resolution molecular stratigraphy: Enabling laser-induced
-            mass spectrometry imaging of diverse molecular biomarkers in sediments, Appendix)
+            mass spectrometry imaging of diverse molecular biomarkers in sediments,
+            Appendix)
         search_range : float, optional
             Range in which to look for peaks in Da. The default is 5 mDa.
             This will look in a range of +/- 5 mDa around the theoretical mass.
-        SNR_threshold : float, optional
+        calib_SNR_threshold : float, optional
             Minimal prominence required for a peak to be considered (see
             prominence in set_peaks). By default, an SNR of 4 is used. If a value
             of 0 is provided, the min_height condition is applied instead.
@@ -821,9 +823,9 @@ class Spectra(Convinience):
         def calib_spec(_spectrum: np.ndarray[float]) -> int | tuple[np.ndarray[float], int]:
             """Find the calibration function for a single spectrum."""
             # pick peaks
-            if SNR_threshold > 0:
+            if calib_SNR_threshold > 0:
                 peaks: np.ndarray[int] = find_peaks(
-                    _spectrum, height=self._noise_level * SNR_threshold
+                    _spectrum, height=self._noise_level * calib_SNR_threshold
                 )[0]
             else:
                 peaks: np.ndarray[int] = find_peaks(_spectrum, height=min_height)[0]
@@ -870,11 +872,11 @@ class Spectra(Convinience):
         assert check_attr(reader, 'mzs') and np.allclose(reader.mzs, self.mzs), \
             ('Make sure the mzs of the reader match that of the spectra object '
              '(consider calling reader.set_mzs(spec.mzs))')
-        if SNR_threshold > 0:
+        if calib_SNR_threshold > 0:
             assert check_attr(self, 'noise_level'), \
                 ('This step has to be performed after subtracting the baseline '
                  'to have access to the noise_level, unless you set the '
-                 'SNR_threshold to 0.')
+                 'calib_SNR_threshold to 0.')
         if calibrants_mz is None:
             calibrants_mz = get_calibrants(self.limits)
 
@@ -923,7 +925,7 @@ class Spectra(Convinience):
         self._calibration_settings: dict[str, Any] = {
             'calibrants': calibrants_mz,
             'search_range': search_range,
-            'SNR_threshold': SNR_threshold,
+            'calib_SNR_threshold': calib_SNR_threshold,
             'max_degree': max_degree,
             'presences calibrants': calibrant_matches
         }
@@ -1145,7 +1147,7 @@ class Spectra(Convinience):
         # add flag
         self._peak_setting_parameters['modified'] = {
             'whitelist': whitelist,
-            'SNR_threshold': SNR_threshold,
+            'calib_SNR_threshold': SNR_threshold,
             'remove_sidepeaks': remove_sidepeaks
         }
 
@@ -1446,14 +1448,16 @@ class Spectra(Convinience):
 
         if tolerances is None:
             logger.info('estimating tolerance from summed spectrum ...')
+            self.require_peaks()
+            self.require_kernels()
             tolerances: float = np.median(self.kernel_params[:, -1])
             logger.info(f'found tolerance of {tolerances * 1e3:.1f} mDa')
 
         tolerances_a: np.ndarray[float] = np.array(tolerances)
 
-        if tolerances_a.shape == (1,):
+        if tolerances_a.shape in ((1,), ()):
             tolerances_a: np.ndarray[float] = np.full_like(targets, tolerances)
-        assert len(tolerances_a) == len(targets), \
+        assert tolerances_a.shape == targets.shape, \
             ('If widths is not a scalar, widths and targets must have the same '
              'number of elements.')
 
@@ -1501,11 +1505,14 @@ class Spectra(Convinience):
         # set peaks and kernels artificially from the target mzs and tolerances
         self.reset_peaks()
         self._peaks = [np.argmin(np.abs(self.mzs - target)) for target in targets]
-        self._peak_setting_parameters['method'] = 'targeted'
-        self._peak_setting_parameters['targets'] = np.array(targets)
-        self._peak_setting_parameters['tolerances'] = np.array(tolerances)
+        self._peak_setting_parameters = {
+            'method': 'targeted',
+            'targets': np.array(targets),
+            'tolerance': tolerances
+        }
         # set kernels based on tolerance
-        self._kernel_params = np.zeros((n_peaks, 3 + (self._kernel_shape == 'bigaussian')))  # gaussian
+        self._kernel_shape = 'gaussian'
+        self._kernel_params = np.zeros((n_peaks, 3))
         self._kernel_params[:, 0] = targets  # center
         self._kernel_params[:, 1] = self.intensities[self._peaks]
         self._kernel_params[:, 2] = tolerances
@@ -1683,7 +1690,7 @@ class Spectra(Convinience):
         assert (profile_spectra is not None) or (reader is not None), \
             'provide either a reader or the profile spectra'
         assert method in ('area', 'height', 'max'), \
-            'method must be either "area" or "height" or "max"'
+            f'method must be either "area" or "height" or "max", not {method}'
 
         indices_spectra: np.ndarray[int] = self.indices
         n_spectra: int = self._n_spectra  # number of spectra in mcf file
@@ -1829,7 +1836,7 @@ class Spectra(Convinience):
         return self._feature_table
 
     def require_feature_table(self, **kwargs) -> pd.DataFrame:
-        if not check_attr(self, 'feature_table'):
+        if not check_attr(self, '_feature_table'):
             self.set_feature_table(**kwargs)
         return self._feature_table
 
@@ -2140,7 +2147,7 @@ class Spectra(Convinience):
         self.set_feature_table(**kwargs)
 
     def _post_load(self):
-        if check_attr(self, 'feature_table'):
+        if check_attr(self, '_feature_table'):
             self._line_spectra: np.ndarray[float] = self.feature_table.\
                 drop(columns=['R', 'x', 'y']).\
                 to_numpy()

@@ -49,6 +49,7 @@ from msi_workflow.imaging.register.helpers import Mapper
 
 from msi_workflow.timeSeries.time_series import TimeSeries
 from msi_workflow.timeSeries.proxy import UK37
+from msi_workflow.util.convinience import check_attr
 from msi_workflow.util.read_msi_align import get_teaching_points
 
 PIL_Image.MAX_IMAGE_PIXELS = None
@@ -2507,26 +2508,23 @@ class ProjectMSI(ProjectBaseClass):
 
         if not np.any(self._spectra.intensities.astype(bool)):
             logger.info('spectra object does not have a summed intensity')
-            self._spectra.add_all_spectra(reader)
-            self._spectra.subtract_baseline(plts=plts, **kwargs)
-            self._spectra.require_calibrate_functions(reader=reader, **kwargs)
+            self._spectra.add_calibrated_spectra(reader=reader, **kwargs)
             if plts:
                 self._spectra.plot_calibration_functions(reader, n_plot=3)
             self._spectra.add_all_spectra(reader)
-            self._spectra.subtract_baseline(overwrite=True)
-        if not hasattr(self.spectra, 'peaks'):
+        if not check_attr(self.spectra, '_peaks'):
             logger.info('spectra object does not have peaks')
             self._spectra.set_peaks(**kwargs)
-        if not hasattr(self.spectra, 'kernel_params'):
+        if not check_attr(self.spectra, '_kernel_params'):
             logger.info('spectra object does not have kernels')
             self._spectra.set_kernels(**kwargs)
         if targets is not None:
             self._spectra.set_targets(targets, plts=plts)
-        if (not hasattr(self.spectra, 'line_spectra')) or (not np.any(self._spectra.line_spectra)):
+        if not check_attr(self._spectra, '_line_spectra', True):
             logger.info('spectra object does not have binned spectra')
             self._spectra.bin_spectra(reader, **kwargs)
             self._spectra.filter_line_spectra(SNR_threshold=SNR_threshold, **kwargs)
-        if not hasattr(self.spectra, 'feature_table'):
+        if not check_attr(self.spectra, '_feature_table'):
             self._spectra.set_feature_table(**kwargs)
 
         if plts:
