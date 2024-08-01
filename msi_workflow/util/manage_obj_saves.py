@@ -96,6 +96,7 @@ Spectra_attributes = {
     '_delta_mz',
     '_mzs',
     '_intensities',
+    '_tic',
     '_indices',
     '_limits',
     '_peaks',

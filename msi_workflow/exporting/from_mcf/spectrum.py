@@ -172,6 +172,7 @@ class Spectra(Convinience):
     _mzs: np.ndarray[float] | None = None
     _delta_mz: float | None = None
     _intensities: np.ndarray[float] | None = None
+    _tic: np.ndarray[float] | None = None
     _noise_level: np.ndarray[float] | None = None
     _noise_level_subtracted: bool = False
 
@@ -404,6 +405,7 @@ class Spectra(Convinience):
     def reset_intensities(self) -> None:
         """Reset intensities and everything downstream"""
         self._intensities = np.zeros_like(self.mzs)
+        self._tic = np.zeros(self._n_spectra)
 
         self.reset_noise_level()
 
@@ -490,11 +492,19 @@ class Spectra(Convinience):
             reader.set_mzs(self.mzs)
 
         # iterate over all spectra
-        for index in tqdm(self.indices, desc='Adding spectra', smoothing=50/self._n_spectra):
+        for i, index in tqdm(
+                enumerate(self.indices),
+                desc='Adding spectra',
+                smoothing=50/self._n_spectra
+        ):
             spectrum: np.ndarray[float] = self._get_spectrum(
                 reader=reader, index=index, only_intensity=True
             )
             self.add_spectrum(spectrum)
+            self._tic[i] = np.trapz(spectrum, dx=self.delta_mz)
+
+        # due to floating point precision?
+        self._intensities[self._intensities < 0] = 0
 
         logger.info('done adding up spectra')
 
@@ -515,7 +525,7 @@ class Spectra(Convinience):
 
         for it, index in enumerate(self.indices):
             spectrum: np.ndarray[float] = self._get_spectrum(
-                reader=reader, index=index, only_intensity=True
+                reader=reader, index=index, only_intensity=False
             )
             if it > 0:
                 shift: float = self.get_mass_shift(spectrum)  # shift in Da
@@ -524,6 +534,9 @@ class Spectra(Convinience):
                 self._mzs += shift * weight
                 spectrum.mzs -= shift * (1 - weight)
             self.add_spectrum(spectrum.intensities)
+            self._tic[it] = np.trapz(spectrum, dx=self.delta_mz)
+
+        self._intensities[self._intensities < 0] = 0
 
     def set_noise_level(
             self,
@@ -632,6 +645,8 @@ class Spectra(Convinience):
         ys_min = self.require_noise_level(**kwargs)
         self._intensities -= ys_min * self._n_spectra
         self._noise_level_subtracted = True
+
+        self._intensities[self._intensities < 0] = 0
 
     def get_mass_shift(
             self: Self,
@@ -1593,7 +1608,7 @@ class Spectra(Convinience):
 
     def bin_spectra(
             self,
-            reader: ReadBrukerMCF | None = None,
+            reader: ReadBrukerMCF | hdf5Handler | None = None,
             profile_spectra: np.ndarray[float] | None = None,
             method: str = 'height',
             **_
@@ -1942,15 +1957,14 @@ class Spectra(Convinience):
             self,
             reader: ReadBrukerMCF | hdf5Handler,
             spectrum_idxs: list[int] | None = None,
-            plts: bool = False
     ) -> None:
         """
         Obtain the loss of information for each spectrum from the binning.
 
         Peak areas are integrated based on the assumption that peaks are 
         (bi)gaussian shaped. These assumptions may not always be 
-        true in which case the binning may result in significant information 
-        loss. This function calculates the difference between the original 
+        true in which case the binning may result in information
+        loss. This function calculates the difference between the original
         (processed) signals and the one described by the kernels and gives the
         loss in terms of the integrated difference divided by the area of the 
         original signal.
@@ -1968,8 +1982,8 @@ class Spectra(Convinience):
             spectrum_idxs: np.ndarray[int] = self.indices
 
         if not check_attr(self, 'losses'):
-            self._losses: np.ndarray[float] = np.zeros(len(self.indices))
-        # get sigmas (same for all spectra)
+            self._losses: np.ndarray[float] = np.zeros((self._n_spectra, len(self.mzs)))
+        # get sigmas
         sigma_ls: np.ndarray[float] = self.kernel_params[:, 2]
         if self._kernel_shape == 'bigaussian':
             sigma_rs: np.ndarray[float] = self.kernel_params[:, 3]
@@ -1978,8 +1992,11 @@ class Spectra(Convinience):
         # precompute kernel functions
         kernels: np.ndarray[float] = self._get_kernels(norm_mode='height')
         # loop over spectra
-        for c, spectrum_idx in enumerate(spectrum_idxs):
-            logger.info(f'setting loss for spectrum {c + 1} out of {len(spectrum_idxs)} ...')
+        for c, spectrum_idx in tqdm(
+                enumerate(spectrum_idxs),
+                total=self._n_spectra,
+                desc='Setting losses'
+        ):
             # get index in array corresponding to spectrum index
             array_idx: int = self.spectrum_idx2array_idx(spectrum_idx)
             spec: np.ndarray[float] = self._get_spectrum(
@@ -1992,16 +2009,94 @@ class Spectra(Convinience):
                 sigma_rs
             )
             y_rec: np.ndarray[float] = kernels @ Hs
-            loss: float = np.sum(np.abs(spec - y_rec)) / np.sum(spec)
-            self._losses[c] = loss
+            tic = self._tic[c]
+            self._losses[c, :] = np.abs(y_rec - spec) / tic if tic else 0
 
-            if plts:
-                plt.figure()
-                plt.plot(self.mzs, spec, label='original')
-                plt.plot(self.mzs, y_rec, label='reconstructed')
-                plt.legend()
-                plt.title(f'Reconstruction loss: {loss:.3f}')
-                plt.show()
+    def plot_losses(self, n_max_spectra=1000, n_max_masses=1000):
+        # summed at top
+        # TIC at left side
+        # heat map in middle
+        # spectra-wise loss at right
+        assert check_attr(self, '_losses')
+
+        # Create figure and main axis for the heatmap
+        fig, ax = plt.subplots(layout='compressed', figsize=(15, 12))
+
+        # we can only plot a selection
+        n_spectra = min([n_max_spectra, self._n_spectra])
+        n_masses = min([n_max_masses, len(self.mzs)])
+        every_spectra = round(self._n_spectra/n_spectra)
+        every_masses = round(len(self.mzs) / n_masses)
+
+        losses = self._losses[::every_spectra, ::every_masses]
+
+        # Plot heatmap
+        ax.imshow(
+            np.log(losses),
+            aspect='auto',
+            cmap='viridis',
+            extent=[
+                self.mzs[0],
+                self.mzs[-1],
+                self.indices.max(),
+                self.indices.min()
+            ],
+            origin='upper'
+        )
+
+        # Create additional axes for the functions
+        top_ax = ax.inset_axes([0, 1, 1, 0.2])
+        bottom_ax = ax.inset_axes([0, -0.2, 1, 0.2])
+        left_ax = ax.inset_axes([-0.2, 0, 0.2, 1])
+        right_ax = ax.inset_axes([1, 0, 0.2, 1])
+
+        # Plot the functions on each axis
+        # normalized to total intensity of spectrum
+        spectra_wise_loss = np.trapz(self._losses, dx=self.delta_mz, axis=1)
+        # average loss at masses, normalized to average intensity
+        mass_wise_loss = np.nanmedian(self._losses, axis=0)
+
+        top_ax.plot(self.mzs, self.intensities, color='C0')
+        bottom_ax.plot(self.mzs, mass_wise_loss, color='C1')
+        left_ax.plot(
+            self._tic, self.indices, color='C0'
+        )
+        right_ax.plot(spectra_wise_loss, self.indices, color='C1')
+
+        # Hide x and y ticks for the function plots
+        top_ax.set_xticks([])
+        top_ax.set_title('summed intensities')
+
+        bottom_ax.set_title('mass-wise loss', y=-0.3)
+
+        left_ax.set_title('spectra-wise TIC')
+        left_ax.set_ylabel('index')
+
+        right_ax.set_yticks([])
+        right_ax.set_title('spectra-wise loss')
+
+        # Adjust the limits to match the heatmap extent
+        top_ax.set_xlim(ax.get_xlim())
+        bottom_ax.set_xlim(ax.get_xlim())
+        left_ax.set_ylim(ax.get_ylim())
+        right_ax.set_ylim(ax.get_ylim())
+
+        # Show plot
+        plt.show()
+
+        # distribution
+        plt.hist(
+            self._losses[~np.isnan(self._losses)],
+            bins=np.linspace(
+                np.nanmin(self._losses),
+                np.nanquantile(self._losses, .95),
+                1000
+            )
+        )
+        plt.title(f'Distribution of losses (median = {np.nanmedian(self._losses):.2f})')
+        plt.xlabel('Normed loss')
+        plt.ylabel('Count')
+        plt.show()
 
     def filter_line_spectra(
             self, SNR_threshold: float = 0, intensity_min: float = 0, **_: dict
@@ -2208,6 +2303,13 @@ class Spectra(Convinience):
         plt.ylabel('Intensity')
         if plt_reconstructed:
             plt.title(f'Reconstructed summed intensities (loss: {loss:.1f})')
+        plt.show()
+
+    def plot_tic(self):
+        fig, ax = plt.subplots()
+        ax.plot(self.indices, self._tic)
+        ax.set_xlabel('Index')
+        ax.set_ylabel('TIC')
         plt.show()
 
     def plot_calibration_functions(
