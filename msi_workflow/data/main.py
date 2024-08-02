@@ -382,7 +382,7 @@ class Data(Convinience, DataBaseClass):
             # dpixels/2 x dpixels/2 area to classify point
             image = cv2.medianBlur(image, length_median)
 
-        # zero pad for pixels outside of image extent
+        # zero pad for pixels outside of image _extent
         # number of pixels in the data ROI (in image coordinates)
         y_ROI_max: int = int(np.ceil(self.feature_table.loc[:, y_col].max()))
         x_ROI_max: int = int(np.ceil(self.feature_table.loc[:, x_col].max()))
@@ -1159,7 +1159,7 @@ class Data(Convinience, DataBaseClass):
         kwargs: dict, optional
             Additional keywords for plot_comp and get_comp_as_img
         """
-        comp = self._get_closest_mz(comp, max_deviation=None)
+        comp = self.get_closest_mz(comp, max_deviation=None)
         if check_attr(self, '_distance_pixels'):
             kwargs['distance_pixels'] = self.distance_pixels
 

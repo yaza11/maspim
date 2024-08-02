@@ -9,7 +9,7 @@ from msi_workflow.imaging.util.image_convert_types import ensure_image_is_gray
 
 logger = logging.getLogger("msi_workflow." + __name__)
 
-# assumed extent of the punched holes
+# assumed _extent of the punched holes
 SCALE_HOLE: float = 1 / 5  # cm
 
 # side on which the holes are positioned
@@ -75,7 +75,7 @@ def find_holes_side(
     size: int = round(SCALE_HOLE / depth_section * w)
     size_k: int = size * 3
 
-    # fill value used outside the image extent (same as background)
+    # fill value used outside the image _extent (same as background)
     if obj_color == 'dark':
         fill_value: int = np.unique(image)[1]
     else:

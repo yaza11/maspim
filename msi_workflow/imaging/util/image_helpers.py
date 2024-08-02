@@ -213,7 +213,7 @@ def exclude_missing_pixels_in_feature_table(ft: pd.DataFrame) -> np.ndarray[bool
     """
     assert 'x' in ft.columns, 'ft must have x column'
     assert 'y' in ft.columns, 'ft must have y column'
-    # get extent of feature table
+    # get _extent of feature table
     x_min_FT: int = ft.x.min()
     x_max_FT: int = ft.x.max()
     y_min_FT: int = ft.y.min()

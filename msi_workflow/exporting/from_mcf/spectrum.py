@@ -2347,7 +2347,7 @@ class Spectra(Convinience):
         right_ax.set_yticks([])
         right_ax.set_title('spectra-wise loss')
 
-        # Adjust the limits to match the heatmap extent
+        # Adjust the limits to match the heatmap _extent
         top_ax.set_xlim(ax.get_xlim())
         bottom_ax.set_xlim(ax.get_xlim())
         left_ax.set_ylim(ax.get_ylim())

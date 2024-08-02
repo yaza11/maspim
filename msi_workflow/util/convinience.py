@@ -85,6 +85,12 @@ class Convinience:
 
         return folder, file
 
+    def __repr__(self) -> str:
+        out: list[str] = []
+        for k, v in self.__dict__.items():
+            out.append(f'{k}: {str(v)}')
+        return '\n'.join(out)
+
     def _post_load(self):
         pass
 
@@ -150,7 +156,7 @@ class Convinience:
     def copy(self):
         return deepcopy(self)
 
-    def _get_closest_mz(
+    def get_closest_mz(
             self,
             mz: float | str,
             cols: Iterable | None = None,
@@ -185,8 +191,6 @@ class Convinience:
         if cols is None:
             if check_attr(self, 'feature_table'):
                 cols = np.array(self.feature_table.columns).astype(str)
-            elif check_attr(self, 'feature_table_zone_averages'):
-                cols = np.array(self.feature_table_zone_averages.columns).astype(str)
             else:
                 raise AttributeError('Could not find feature table. Pass cols')
         else:

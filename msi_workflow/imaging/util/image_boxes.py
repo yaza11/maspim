@@ -288,7 +288,7 @@ def test_region_in_box():
     from skimage.data import brick
     import matplotlib.patches as patches  # for drawing box
     image = brick()  # grayscale image with 512 x 512 pixels
-    # define box from center point and extent
+    # define box from center point and _extent
     params_center_extent = region_in_box(image=image, center_box=(image.shape[0] // 2, image.shape[1] // 2),
                                          box_ratio_x=.5, box_ratio_y=.5)
     # define box from point in top-left and bottom-right

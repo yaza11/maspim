@@ -91,7 +91,7 @@ class Proxy(TimeSeries):
         self.mzs: list[str] = []
         self.mzs_theo: list[float] = []
         for mz in sorted(mzs):
-            mz_c, diff = TS._get_closest_mz(mz, return_deviation=True)
+            mz_c, diff = TS.get_closest_mz(mz, return_deviation=True)
             if diff > .1:
                 logger.warning(
                     f'Found large deviation for {mz} ({mz_c}, distance: {diff:.3f}), '

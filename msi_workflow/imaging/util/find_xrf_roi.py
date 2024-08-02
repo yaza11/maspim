@@ -188,7 +188,7 @@ def find_ROI_in_image(
     :param file_image: image file to be used as the source image in
         case image is not provided.
     :param file_image_roi: image file to be used as the template in
-        case image_roi is not provided.
+        case _image_roi is not provided.
     :param image: the image to be used as source image.
     :param image_roi: the template to be searched in the source image.
     :param kwargs: optional keyword arguments to be passed to match_template_scale

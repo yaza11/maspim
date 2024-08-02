@@ -18,7 +18,7 @@ from msi_workflow.imaging.interactive import InteractiveImage
 from msi_workflow.imaging.register.helpers import Mapper
 from msi_workflow.imaging.register.descriptor import Descriptor
 from msi_workflow.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
-from msi_workflow.util.convinience import Convinience
+from msi_workflow.util.convinience import Convinience, check_attr
 from msi_workflow.imaging.misc.fit_distorted_rectangle import find_layers, distorted_rect
 from msi_workflow.imaging.misc.find_punch_holes import find_holes
 
@@ -55,6 +55,20 @@ class Image(Convinience):
 
     Can be used on its own for basic functionality, but generally not recommended.
     """
+    _average_width_yearly_cycle: float | None = None
+    _hw: tuple[int, int] | None = None
+    _image: np.ndarray[int | float] | None = None
+    _image_original: np.ndarray[int | float] | None = None
+    _image_simplified: np.ndarray[int] | None = None
+    _main_contour: np.ndarray[int] | None = None
+    _mask_foreground: np.ndarray[bool] | None = None
+    _thr_background: float | int = None
+
+    age_span: tuple[float, float] | None = None
+    image_file: str | None = None
+    path_folder: str | None = None
+    obj_color: str | None = None
+
     def __init__(
             self,
             obj_color: str,
@@ -107,8 +121,8 @@ class Image(Convinience):
     @property
     def path_image_file(self) -> str:
         """Compose the path of the image file from folder and image file."""
-        assert hasattr(self, 'image_file'), 'image file was not provided'
-        assert hasattr(self, 'path_folder'), 'path_folder was not provided'
+        assert check_attr(self, 'image_file'), 'image file was not provided'
+        assert check_attr(self, 'path_folder'), 'path_folder was not provided'
         return os.path.join(self.path_folder, self.image_file)
 
     def _from_image(self, image: np.ndarray, image_type: str) -> None:
@@ -194,7 +208,7 @@ class Image(Convinience):
             self, **kwargs
     ) -> tuple[float | int, np.ndarray[int]]:
         """Make sure the foreground mask and threshold exists before returning it"""
-        if not hasattr(self, '_mask_foreground'):
+        if not check_attr(self, '_mask_foreground'):
             self.set_foreground_thr_and_pixels(**kwargs)
         return self._thr_background, self._mask_foreground
 
@@ -290,7 +304,7 @@ class Image(Convinience):
 
     def _require_simplified_image(self, **kwargs) -> np.ndarray[int]:
         """Set the simplified image if it does not exist and then return it."""
-        if not hasattr(self, '_image_simplified'):
+        if not check_attr(self, '_image_simplified'):
             self.set_simplified_image(**kwargs)
         return self._image_simplified
 
@@ -386,7 +400,7 @@ class Image(Convinience):
 
     def _require_main_contour(self, **kwargs) -> np.ndarray[int]:
         """Set contour, if necessary and return it."""
-        if not hasattr(self, '_main_contour'):
+        if not check_attr(self, '_main_contour'):
             self.set_main_contour(**kwargs)
         return self._main_contour
 
@@ -424,7 +438,7 @@ class Image(Convinience):
         if pixels is not None:
             self._average_width_yearly_cycle = pixels
             return
-        assert hasattr(self, 'age_span') and (self.age_span is not None), \
+        assert check_attr(self, 'age_span'), \
             'call set_age_span'
         pixels_x: int = self.image.shape[1]
         # calculate the number of expected cycles from the age difference for
@@ -434,8 +448,8 @@ class Image(Convinience):
     @property
     def average_width_yearly_cycle(self) -> float:
         """Set and return the average width of a year in pixels."""
-        if not hasattr(self, '_average_width_yearly_cycle'):
-            assert hasattr(self, 'age_span'), \
+        if not check_attr(self, '_average_width_yearly_cycle'):
+            assert check_attr(self, 'age_span'), \
                 'Define an age span before calculating the average width of annual layers.'
             self.set_average_width_yearly_cycle()
         return self._average_width_yearly_cycle
@@ -467,7 +481,7 @@ class ImageSample(Image):
 
     Example Usage
     -------------
-    >>> from msi_workflow.imaging.main.cImage import ImageSample
+    >>> from msi_workflow import ImageSample
     Create an ImageSample object from an image on disk
     >>> i = ImageSample(path_image_file="/path/to/your/file")
     in this case the object color will be infered, it is adviced to set it manually
@@ -486,7 +500,7 @@ class ImageSample(Image):
     It is recommended to stick to the properties, e.g. image, image_grayscale, image_binary, image_simplified, main_contour.
     The most important property is the image_sample_area which is the final result of performing all the steps of finding
     the sample area, so initiating and checking a new instance could look like this:
-    >>> from msi_workflow.imaging.main.cImage import ImageSample
+    >>> from msi_workflow import ImageSample
     >>> i = ImageSample(path_image_file="/path/to/your/file")
     >>> i.set_sample_area()
     >>> i.plot_overview()
@@ -605,7 +619,7 @@ class ImageSample(Image):
 
         Returns
         -------
-        image_roi, xywh
+        _image_roi, xywh
             The image inside the box and corner as well as width and height of box.
 
         """
@@ -781,7 +795,7 @@ class ImageSample(Image):
 
         Returns
         -------
-        image_roi: np.ndarray
+        _image_roi: np.ndarray
             The image section inside the ROI.
         x, y, w, h: tuple[int, int, int, int]
             The coordinates of the box.
@@ -843,7 +857,7 @@ class ImageSample(Image):
         image_sub: ImageSample = ImageSample(image=image_box, obj_color=self.obj_color)
         # set image simplified for contour to use
         image_sub._mask_foreground = image_sub.image_simplified
-        # find the refined area as the extent of the simplified binary image
+        # find the refined area as the _extent of the simplified binary image
         _, (xc, yc, wc, hc) = image_sub.get_sample_area_from_contour(method='filter_by_size', plts=plts)
 
         # stack the offsets of the two defined ROI's since the second ROI is
@@ -888,7 +902,7 @@ class ImageSample(Image):
 
     def get_sample_area_from_xywh(self):
         """Get the region of the image corresponding to sample area from xywh."""
-        assert hasattr(self, '_xywh_ROI'), 'no roi found, call _require_image_sample_area'
+        assert check_attr(self, '_xywh_ROI'), 'no roi found, call _require_image_sample_area'
         image: np.ndarray = self.image
         x, y, w, h = self._xywh_ROI
         return image[y:y + h, x:x + w].copy()
@@ -898,9 +912,9 @@ class ImageSample(Image):
     ) -> tuple[np.ndarray[np.uint8], tuple[int, ...]]:
         """Set and return area of the sample in the image."""
         # does has _xywh_ROI and _image_ROI
-        if hasattr(self, '_xywh_ROI') and hasattr(self, '_image_roi'):
+        if check_attr(self, '_xywh_ROI') and check_attr(self, '_image_roi'):
             pass
-        elif hasattr(self, '_xywh_ROI'):  # only has _xywh_ROI
+        elif check_attr(self, '_xywh_ROI'):  # only has _xywh_ROI
             self._image_roi: np.ndarray = self.get_sample_area_from_xywh()
         else:  # only has _image_ROI
             self.set_sample_area(**kwargs)
@@ -1058,7 +1072,7 @@ class ImageROI(Image):
             obj_color=parent.obj_color
         )
 
-        if hasattr(parent, 'age_span'):
+        if check_attr(parent, 'age_span'):
             new.age_span = parent.age_span
 
         return new
@@ -1085,7 +1099,7 @@ class ImageROI(Image):
             if key in params:
                 params[key] = kwargs[key]
 
-        if not hasattr(self, 'age_span'):
+        if not check_attr(self, 'age_span'):
             params['estimate_kernel_size_from_age_model'] = False
 
         # update kernel_size to potentially match ROI
@@ -1384,8 +1398,8 @@ class ImageROI(Image):
 
     def require_classification(self, **kwargs) -> np.ndarray[np.uint8]:
         """Create and return the image classification with parameters."""
-        if not hasattr(self, '_image_classification'):
-            if not hasattr(self, 'age_span'):
+        if not check_attr(self, '_image_classification'):
+            if not check_attr(self, 'age_span'):
                 logger.warning('No age span specified, falling back to more general method')
                 self.set_classification_varying_kernel_size(**kwargs)
             else:
@@ -1448,7 +1462,7 @@ class ImageROI(Image):
     def require_punchholes(
             self, *args, **kwargs
     ) -> tuple[list[np.ndarray[int], np.ndarray[int]] | tuple[tuple[int, int]], float]:
-        if not hasattr(self, "_punchholes"):
+        if not check_attr(self, "_punchholes"):
             self.set_punchholes(*args, **kwargs)
         return self._punchholes, self._punchhole_size
 
@@ -1456,7 +1470,7 @@ class ImageROI(Image):
             self, fig: plt.Figure | None = None, axs: Iterable[plt.Axes] | None = None, hold=False
     ) -> None | tuple[plt.Figure, Iterable[plt.Axes]]:
         """Plot the original, preprocessed, classified image and the punchholes."""
-        if not hasattr(self, "_punchholes"):
+        if not check_attr(self, "_punchholes"):
             logger.warning("Punchholes not set with required parameter 'remove_gelatine', this may affect performance.")
         self.require_punchholes(remove_gelatine=True)
         hole_size: int = round(self._punchhole_size)
@@ -1598,7 +1612,7 @@ class ImageClassified(Image):
             **kwargs
         )
 
-        if hasattr(parent, 'age_span'):
+        if check_attr(parent, 'age_span'):
             new.age_span = parent.age_span
 
         return new
@@ -1665,7 +1679,7 @@ class ImageClassified(Image):
             Keyword arguments for initialization and setting the fit of
             desciptor.
         """
-        assert hasattr(self, '_image_classification'), \
+        assert check_attr(self, '_image_classification'), \
             'image_classification has not been provided'
 
         mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
@@ -1719,7 +1733,7 @@ class ImageClassified(Image):
         self._tilt_descriptor: Mapper = mapper
 
     def require_corrected_image(self, **kwargs):
-        if not hasattr(self, '_image_corrected'):
+        if not check_attr(self, '_image_corrected'):
             self.set_corrected_image(**kwargs)
         return self._image_corrected.copy()
 
@@ -1732,7 +1746,7 @@ class ImageClassified(Image):
         return self.image_corrected if self.use_tilt_correction else self._image
 
     def require_corrected_image_classification(self, **kwargs):
-        if not hasattr(self, '_image_classification_corrected'):
+        if not check_attr(self, '_image_classification_corrected'):
             self.set_corrected_image(**kwargs)
         return self._image_classification_corrected.copy()
 
@@ -1788,7 +1802,7 @@ class ImageClassified(Image):
             image_light, mask=self.mask_foreground
         )
 
-        if hasattr(self, 'age_span') and (self.age_span is not None):
+        if check_attr(self, 'age_span') and (self.age_span is not None):
             yearly_thickness: float = self.average_width_yearly_cycle
         else:
             yearly_thickness: float = 12  # results in min distance of 3 pixels
@@ -2306,7 +2320,7 @@ use_age_model, not {height0_mode}')
         image_expanded : np.ndarray[int]
             Image with expanded labels.
         """
-        assert hasattr(self, 'image_seeds'), 'call set_laminae_images_from_params'
+        assert check_attr(self, 'image_seeds'), 'call set_laminae_images_from_params'
         img = self.image_seeds
         img_e = expand_labels(img, distance=np.min(img.shape))
         img_e *= self.mask_foreground
@@ -2321,7 +2335,7 @@ use_age_model, not {height0_mode}')
         image_simplified : np.ndarray[int]
             The image with light, dark and hole pixels.
         """
-        assert hasattr(self, 'image_seeds'), \
+        assert check_attr(self, 'image_seeds'), \
             'call set_laminae_images_from_params'
 
         isc: np.ndarray[int] = np.sign(self.image_seeds)
@@ -2348,17 +2362,17 @@ use_age_model, not {height0_mode}')
         kwargs : dict, optional
             Additional keyword arguments passed on to set_laminae_images
         """
-        if (not hasattr(self, 'age_span') or (self.age_span is None)) and (n_expected is None):
+        if (not check_attr(self, 'age_span')) and (n_expected is None):
             logger.warning(
                 f'reduce_laminae requires either an age_span ' +
                 'or the number of expected layers, exiting method'
             )
             return
-        assert hasattr(self, 'params_laminae_simplified'), \
+        assert check_attr(self, 'params_laminae_simplified'), \
             'call _set_params_laminae_simplified'
         assert 'quality' in self.params_laminae_simplified.columns, \
             'internal error: quality criterion missing'
-        assert hasattr(self, 'age_span'), 'no age span set, call set_age_span'
+        assert check_attr(self, 'age_span'), 'no age span set, call set_age_span'
 
         def reduce(df_: pd.DataFrame) -> pd.DataFrame:
             """

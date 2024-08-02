@@ -287,7 +287,7 @@ that before using this option'
 
         """
         # https://stackoverflow.com/questions/34235530/how-to-get-high-and-low-envelope-of-a-signal
-        comp = self._get_closest_mz(comp)
+        comp = self.get_closest_mz(comp)
         v = self.get_contrasts_table().loc[:, comp]
         idxs_local_mins = (np.diff(np.sign(np.diff(v))) > 0).nonzero()[0] + 1
         idxs_local_maxs = (np.diff(np.sign(np.diff(v))) < 0).nonzero()[0] + 1
@@ -299,7 +299,7 @@ that before using this option'
         return envelope_min, envelope_max
 
     def get_seasonality(self, comp, window_size, dt=.5, plts=False):
-        comp = self._get_closest_mz(comp)
+        comp = self.get_closest_mz(comp)
         v = self.get_contrasts_table().loc[:, comp]
         t = self.age
         # get upper and lower envelope
@@ -448,7 +448,7 @@ that before using this option'
         assert type(comp) is list, 'pass comps as list type'
 
         # find closest mz for comps in feature table
-        comp: list = [self._get_closest_mz(comp)
+        comp: list = [self.get_closest_mz(comp)
                        if (comp not in self.get_feature_table().columns)
                        else comp
                       for comp in comp]
@@ -555,7 +555,7 @@ that before using this option'
         assert type(comps) is list, 'pass comps as list type'
 
         # find closest mz for comps in feature table
-        comps: list = [self._get_closest_mz(comp)
+        comps: list = [self.get_closest_mz(comp)
                        if (comp not in self.get_feature_table().columns)
                        else comp
                        for comp in comps]

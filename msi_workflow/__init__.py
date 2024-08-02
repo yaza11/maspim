@@ -1,4 +1,8 @@
-from msi_workflow.project.main import get_project, ProjectXRF, ProjectMSI
+from msi_workflow.project.main import (
+    get_project, get_image_handler,
+    ProjectXRF, ProjectMSI,
+    SampleImageHandlerMSI, SampleImageHandlerXRF
+)
 from msi_workflow.project.file_helpers import ImagingInfoXML
 
 from msi_workflow.imaging.xray.main import XRay

@@ -16,6 +16,7 @@ from typing import Iterable, Self, Any
 from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 
 from msi_workflow.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image
+from msi_workflow.exporting.legacy.data_analysis_export import DataAnalysisExport
 from msi_workflow.exporting.legacy.ion_image import (get_da_export_ion_image,
                                                      get_da_export_data)
 from msi_workflow.imaging.util.image_boxes import region_in_box
@@ -82,6 +83,15 @@ class SampleImageHandlerMSI(Convinience):
     i_handler.load()
 
     """
+    path_folder: str | None = None
+    d_folder: str | None = None
+    image_file: str | None = None
+    mis_file: str | None = None
+
+    image: PIL_Image.Image | None = None
+    _extent_spots: tuple[int, int, int, int] | None = None
+    _data_roi_xywh: tuple[int, int, int, int] | None = None
+    _photo_roi_xywh: tuple[int, int, int, int] | None = None
 
     def __init__(
             self,
@@ -119,6 +129,7 @@ class SampleImageHandlerMSI(Convinience):
 
         self.image_file = get_image_file(self.path_folder)
 
+
     @property
     def path_d_folder(self):
         return os.path.join(self.path_folder, self.d_folder)
@@ -140,7 +151,7 @@ class SampleImageHandlerMSI(Convinience):
         None.
 
         """
-        self.image: PIL_Image = PIL_Image.open(self.path_image_file)
+        self.image: PIL_Image.Image = PIL_Image.open(self.path_image_file)
 
     def set_extent_data(
             self,
@@ -163,7 +174,7 @@ class SampleImageHandlerMSI(Convinience):
         None.
 
         """
-        if (reader is None) or (not hasattr(reader, 'spots')):  # no reader specified or reader does not have spots
+        if (reader is None) or (not check_attr(reader, 'spots')):  # no reader specified or reader does not have spots
             if imaging_xml is None:  # create new instance
                 imaging_xml: ImagingInfoXML = ImagingInfoXML(
                     path_d_folder=self.path_d_folder
@@ -171,7 +182,7 @@ class SampleImageHandlerMSI(Convinience):
             pixel_names = imaging_xml.spotName  # get pixel names from reader
         else:
             pixel_names = reader.spots.names  # get pixel names from reader
-        # initialize the extent
+        # initialize the _extent
         xmin: int = 65536
         xmax: int = 0
         ymin: int = 65536
@@ -193,7 +204,7 @@ class SampleImageHandlerMSI(Convinience):
 
     @property
     def extent_spots(self):
-        if not hasattr(self, '_extent_spots'):
+        if not check_attr(self, '_extent_spots'):
             self.set_extent_data()
         return self._extent_spots
 
@@ -219,8 +230,8 @@ class SampleImageHandlerMSI(Convinience):
         None
 
         """
-        assert hasattr(self, 'extent_spots'), 'call set_extent_data'
-        if not hasattr(self, 'image'):
+        assert check_attr(self, '_extent_spots'), 'call set_extent_data'
+        if not check_attr(self, 'image'):
             self.set_photo()
         # search the mis file for the point data and image file
         mis_dict: dict = search_keys_in_xml(self.path_mis_file, ['Point'])
@@ -260,17 +271,17 @@ class SampleImageHandlerMSI(Convinience):
             plt.imshow(img_rect, interpolation='None')
             plt.show()
 
-        # get the extent of the image
+        # get the _extent of the image
         points_x: list[int] = [p[0] for p in points]
         points_y: list[int] = [p[1] for p in points]
 
-        # the extent of measurement area in pixel coordinates
+        # the _extent of measurement area in pixel coordinates
         x_min_area: int = np.min(points_x)
         x_max_area: int = np.max(points_x)
         y_min_area: int = np.min(points_y)
         y_max_area: int = np.max(points_y)
 
-        # get extent of data points in txt-file
+        # get _extent of data points in txt-file
         x_min_FT, x_max_FT, y_min_FT, y_max_FT = self.extent_spots
 
         # resize region in photo to match data points
@@ -300,20 +311,20 @@ class SampleImageHandlerMSI(Convinience):
 
     @property
     def photo_ROI_xywh(self) -> tuple[int, ...]:
-        if not hasattr(self, '_photo_roi_xywh'):
+        if not check_attr(self, '_photo_roi_xywh'):
             self.set_photo_ROI()
         return self._photo_roi_xywh
 
     @property
     def data_ROI_xywh(self) -> tuple[int, ...]:
-        if not hasattr(self, '_data_roi_xywh'):
+        if not check_attr(self, '_data_roi_xywh'):
             self.set_photo_ROI()
         return self._data_roi_xywh
 
     @property
     def image_ROI(self):
         """Uses grayscale values resampled at data points."""
-        if hasattr(self, '_image_roi'):
+        if check_attr(self, '_image_roi'):
             return self._image_roi
         x_min_FT, x_max_FT, y_min_FT, y_max_FT = self.extent_spots
         x_min_area, y_min_area, wp, hp = self.photo_ROI_xywh
@@ -370,7 +381,7 @@ class SampleImageHandlerXRF(Convinience):
     )
     # make sure to call set_photo before set_extent_data()
     # set the photo of the sample and the ROI
-    # if path_image_roi_file is not specified, image will be the same as image_roi
+    # if path_image_roi_file is not specified, image will be the same as _image_roi
     i_handler.set_photo()
 
     # read the extent of the data
@@ -388,6 +399,17 @@ class SampleImageHandlerXRF(Convinience):
     i_handler = SampleImageHandlerMSI(path_folder='path/to/your/msi/folder')
     i_handler.load()
     """
+    path_folder: str | None = None
+    image_file: str | None = None
+    image_roi_file: str | None = None
+    roi_is_image: bool | None = None
+
+    image: PIL_Image.Image | None = None
+    _extent: tuple[int, int, int, int] | None = None
+    _extent_spots: tuple[int, int, int, int] | None = None
+    _data_roi_xywh: tuple[int, int, int, int] | None = None
+    _photo_roi_xywh: tuple[int, int, int, int] | None = None
+    _scale_conversion: float | None = None
 
     def __init__(
             self,
@@ -421,7 +443,7 @@ class SampleImageHandlerXRF(Convinience):
         if path_image_roi_file is None:
             path_image_roi_file: str = path_image_file
 
-        self.ROI_is_image: bool = path_image_file == path_image_roi_file
+        self.roi_is_image: bool = path_image_file == path_image_roi_file
         if path_image_file is not None:
             self.image_file: str = os.path.basename(path_image_file)
             self.image_roi_file: str = os.path.basename(path_image_roi_file)
@@ -446,15 +468,15 @@ class SampleImageHandlerXRF(Convinience):
 
         if os.path.splitext(self.path_image_file)[1] == '.txt':
             arr: np.ndarray[np.uint8] = txt2uint8(self.path_image_file)
-            self.image: PIL_Image = PIL_Image.fromarray(arr, 'L')
+            self.image: PIL_Image.Image = PIL_Image.fromarray(arr, 'L')
         else:
-            self.image: PIL_Image = PIL_Image.open(self.path_image_file)
+            self.image: PIL_Image.Image = PIL_Image.open(self.path_image_file)
 
-        if self.ROI_is_image:
-            self.image_roi: PIL_Image = self.image.copy()
+        if self.roi_is_image:
+            self._image_roi: PIL_Image.Image = self.image.copy()
         else:
             arr: np.ndarray[np.uint8] = txt2uint8(self.path_image_roi_file)
-            self.image_roi: PIL_Image = PIL_Image.fromarray(arr, 'L')
+            self._image_roi: PIL_Image.Image = PIL_Image.fromarray(arr, 'L')
 
     def set_extent_data(self, **kwargs: dict) -> None:
         """
@@ -474,33 +496,33 @@ class SampleImageHandlerXRF(Convinience):
         -------
         None
         """
-        assert hasattr(self, 'image'), 'call set_photo first'
+        assert check_attr(self, 'image'), 'call set_photo first'
 
-        if self.ROI_is_image:
+        if self.roi_is_image:
             # xmin, xmax, ymin, ymax
-            self.extent_spots: tuple[int, ...] = (
+            self._extent_spots: tuple[int, ...] = (
                 0, self.image._size[1], 0, self.image._size[0]
             )
         else:
             # function expects arrays, not PIL_Images
             loc, scale = find_ROI_in_image(
                 image=PIL_to_np(self.image),
-                image_roi=PIL_to_np(self.image_roi),
+                image_roi=PIL_to_np(self._image_roi),
                 **kwargs
             )
 
             # convert image_ROI resolution to image resolution
-            self.scale_conversion: float = scale
+            self._scale_conversion: float = scale
             # xmin, xmax, ymin, ymax
-            self.extent = (
+            self._extent = (
                 loc[0],
-                loc[0] + round(scale * self.image_roi.size[0]),  # size is (width, height)
+                loc[0] + round(scale * self._image_roi.size[0]),  # size is (width, height)
                 loc[1],
-                loc[1] + round(scale * self.image_roi.size[1])
+                loc[1] + round(scale * self._image_roi.size[1])
             )
-            self.extent_spots = tuple(round(p / scale) for p in self.extent)
+            self._extent_spots = tuple(round(p / scale) for p in self._extent)
         logger.info(
-            f'found the extent of the data to be {self.extent} (pixel coordinates)'
+            f'found the extent of the data to be {self._extent} (pixel coordinates)'
         )
 
     def plot_extent_data(self):
@@ -510,14 +532,14 @@ class SampleImageHandlerXRF(Convinience):
         This function can only be used after set_extent_data
 
         """
-        assert hasattr(self, 'scale_conversion'), 'call set_extent_data'
+        assert check_attr(self, '_scale_conversion'), 'call set_extent_data'
 
-        scale: float = self.scale_conversion
-        loc: tuple[int, int] = (self.extent[0], self.extent[2])
+        scale: float = self._scale_conversion
+        loc: tuple[int, int] = (self._extent[0], self._extent[2])
 
         plt_match_template_scale(
             image=ensure_image_is_gray(PIL_to_np(self.image)),
-            template=PIL_to_np(self.image_roi),
+            template=PIL_to_np(self._image_roi),
             loc=loc,
             scale=scale
         )
@@ -537,39 +559,39 @@ class SampleImageHandlerXRF(Convinience):
         image_ROI : PIL_Image
             The image ROI corresponding to the measurement area.
         """
-        assert hasattr(self, 'extent_spots'), 'call set_extent_data first'
-        # get extent of data points in txt-file
-        x_min_area, x_max_area, y_min_area, y_max_area = self.extent
-        x_min_meas, x_max_meas, y_min_meas, y_max_meas = self.extent_spots
+        assert check_attr(self, '_extent_spots'), 'call set_extent_data first'
+        # get _extent of data points in txt-file
+        x_min_area, x_max_area, y_min_area, y_max_area = self._extent
+        x_min_meas, x_max_meas, y_min_meas, y_max_meas = self._extent_spots
 
         # resize region in photo to match data points
         if match_pxls:
-            img_resized = self.image_roi
+            img_resized = self._image_roi
         else:
             img_resized = self.image.crop(
                 (x_min_area, y_min_area, x_max_area, y_max_area)
             )
 
-        self.photo_ROI_xywh = [  # photo units
+        self._photo_roi_xywh = (  # photo units
             x_min_area,
             y_min_area,
             abs(x_max_area - x_min_area),
             abs(y_max_area - y_min_area)
-        ]
-        self.data_ROI_xywh = [  # data units
+        )
+        self._data_roi_xywh = (  # data units
             0,  # XRF coordinates always start at 0
             0,  # XRF coordinates always start at 0
             abs(x_max_meas - x_min_meas),
             abs(y_max_meas - y_min_meas)
-        ]
-        self.image_roi = img_resized
+        )
+        self._image_roi = img_resized
 
     def plot_overview(
             self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False
     ) -> None | tuple[plt.Figure, plt.Axes]:
         img = PIL_to_np(self.image)
 
-        x, y, w, h = self.photo_ROI_xywh
+        x, y, w, h = self._photo_roi_xywh
         rect_photo = patches.Rectangle((x, y), w, h, fill=False, edgecolor='g')
 
         if fig is None:
@@ -652,7 +674,7 @@ class ProjectBaseClass:
         if (self._age_model is not None) and (not overwrite):
             return self._age_model
         # if an age model save is located in the folder, load it
-        elif hasattr(self, 'AgeModel_file') and (not overwrite):
+        elif check_attr(self, 'AgeModel_file') and (not overwrite):
             self._age_model: AgeModel = AgeModel(self.path_d_folder)
         # if a file is provided, load it from the file provided
         elif (not overwrite) and (path_file is not None):
@@ -748,6 +770,7 @@ class ProjectBaseClass:
     def set_image_sample(
             self,
             obj_color: str | None = None,
+            use_extent_from_mis: bool = True,
             **kwargs_area: dict
     ) -> None:
         """
@@ -758,8 +781,12 @@ class ProjectBaseClass:
         Parameters
         ----------
         obj_color: str, optional
-            The color of the sample relative to the background (either 'dark' or 'light'). If not specified,
-            this parameter will be determined automatically or loaded from the saved object, if available.
+            The color of the sample relative to the background (either 'dark'
+            or 'light'). If not specified, this parameter will be determined \
+            automatically or loaded from the saved object, if available.
+        use_extent_from_mis: bool, optional
+            If True, will determine the image extent from the measurement area
+            defined in the mis file and the optimizer otherwise.
         kwargs_area: dict, optional
             keyword arguments passed on to ImageSample.sget_sample_area
 
@@ -774,18 +801,21 @@ class ProjectBaseClass:
             image_type='pil',
             obj_color=obj_color
         )
-        if not hasattr(self._image_sample, '_xywh_ROI'):
+        if not check_attr(self._image_sample, '_xywh_ROI'):
             try:
                 self.image_handler.set_photo_ROI()
             except Exception as e:
                 logger.error(e)
                 logger.info('Could not set photo ROI, continuing with fitting box')
-            if hasattr(self.image_handler, 'photo_ROI_xywh'):
-                x_start: int = self.image_handler.photo_ROI_xywh[0]
-                x_end: int = x_start + self.image_handler.photo_ROI_xywh[2]
+            if use_extent_from_mis:
+                assert check_attr(self.image_handler, '_photo_roi_xywh'), \
+                    'Need an image handler with photo ROI'
+                x_start: int = self.image_handler._photo_roi_xywh[0]
+                x_end: int = x_start + self.image_handler._photo_roi_xywh[2]
                 extent_x: tuple[int, int] = (x_start, x_end)
             else:
                 extent_x: None = None
+
             self._image_sample.set_sample_area(extent_x=extent_x, **kwargs_area)
             self._image_sample.save()
 
@@ -802,7 +832,7 @@ class ProjectBaseClass:
             return self._image_sample
         # this will only be overwritten with false, if the loaded instance has
         # the _xywh_ROI attribute
-        elif hasattr(self, 'ImageSample_file') and (not overwrite):
+        elif check_attr(self, 'ImageSample_file') and (not overwrite):
             logger.info('loading ImageSample')
             self._image_sample: ImageSample = ImageSample(
                 path_folder=self.path_folder,
@@ -812,7 +842,7 @@ class ProjectBaseClass:
             )
             self._image_sample.load()
             call_set = False
-            if not hasattr(self._image_sample, '_xywh_ROI'):
+            if not check_attr(self._image_sample, '_xywh_ROI'):
                 logger.warning(
                     'loaded partially initialized ImageSample, overwriting '
                     'loaded ImageSample with fully initialized object'
@@ -837,7 +867,7 @@ class ProjectBaseClass:
 
         This function can only be called after set_image_sample has been called.
         """
-        # create image_roi using image from image_sample
+        # create _image_roi using image from image_sample
         self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
         self._image_roi.require_classification(**kwargs)
         self._image_roi.set_punchholes(**kwargs)
@@ -851,7 +881,7 @@ class ProjectBaseClass:
     def require_image_roi(self, overwrite: bool = False, **kwargs) -> ImageROI:
         if (self._image_roi is not None) and (not overwrite):
             return self._image_roi
-        elif hasattr(self, 'ImageROI_file') and (not overwrite):
+        elif check_attr(self, 'ImageROI_file') and (not overwrite):
             logger.info('loading ImageROI')
             self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
             self._image_roi.load()
@@ -915,7 +945,7 @@ class ProjectBaseClass:
     ) -> ImageClassified:
         if (self._image_classified is not None) and (not overwrite):
             return self._image_classified
-        elif hasattr(self, 'ImageClassified_file') and (not overwrite):
+        elif check_attr(self, 'ImageClassified_file') and (not overwrite):
             logger.info('loading ImageClassified ...')
             self._image_classified: ImageClassified = ImageClassified.from_parent(
                 self.image_roi, **kwargs
@@ -923,7 +953,7 @@ class ProjectBaseClass:
             self._image_classified.load()
             self._image_classified.age_span = self.age_span
 
-        if (not hasattr(self._image_classified, 'params_laminae_simplified')) or overwrite:
+        if (not check_attr(self._image_classified, 'params_laminae_simplified')) or overwrite:
             self.set_image_classified(**kwargs)
 
         return self._image_classified
@@ -999,12 +1029,12 @@ class ProjectBaseClass:
         assert self._image_sample is not None, 'call set_image_sample first'
         assert self._data_object is not None, 'call set_data_object'
 
-        attrs: tuple[str, ...] = ('image_roi', 'photo_ROI_xywh', 'data_ROI_xywh')
-        if not all([hasattr(self.image_handler, attr) for attr in attrs]):
+        attrs: tuple[str, ...] = ('_image_roi', '_photo_roi_xywh', '_data_roi_xywh')
+        if not all([check_attr(self.image_handler, attr) for attr in attrs]):
             self.image_handler.set_photo_ROI()
         image_ROI_xywh: tuple[int, ...] = self.image_sample.xywh_ROI
-        data_ROI_xywh: tuple[int, ...] = self.image_handler.data_ROI_xywh
-        photo_ROI_xywh: tuple[int, ...] = self.image_handler.photo_ROI_xywh
+        data_ROI_xywh: tuple[int, ...] = self.image_handler._data_roi_xywh
+        photo_ROI_xywh: tuple[int, ...] = self.image_handler._photo_roi_xywh
 
         self.data_object._pixels_get_photo_ROI_to_ROI(
             data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh
@@ -1048,7 +1078,7 @@ class ProjectBaseClass:
         -------
         None
         """
-        assert self._image_roi is not None, 'set image_roi first'
+        assert self._image_roi is not None, 'set _image_roi first'
         assert self._data_object is not None, 'set data_object first'
         image = self.image_roi.image_binary
         self.data_object.add_attribute_from_image(image, 'valid', median=False, **kwargs)
@@ -1167,7 +1197,7 @@ class ProjectBaseClass:
         """
         assert self._age_model is not None, 'set age model first'
         assert self._data_object is not None, f'did not set data_object yet'
-        assert hasattr(self.data_object, 'feature_table'), 'must have data_object'
+        assert check_attr(self.data_object, 'feature_table'), 'must have data_object'
         if use_corrected:
             depth_col = 'depth_corrected'
         else:
@@ -1389,7 +1419,7 @@ class ProjectBaseClass:
             section_start=self.depth_span
         )
         img_xray.set_punchholes(remove_gelatine=False, side=side_xray, plts=plts, **kwargs)
-        if not hasattr(self.image_roi, 'punchholes'):
+        if not check_attr(self.image_roi, 'punchholes'):
             self.image_roi.set_punchholes(
                 remove_gelatine=True, side=side_data, plts=plts, **kwargs
             )
@@ -1502,7 +1532,7 @@ class ProjectBaseClass:
         """
         Add the X-Ray measurement as a new column to the feature table of the data object.
 
-        This function may only be called if a data, image_roi and xray object have been set, the depth span specified
+        This function may only be called if a data, _image_roi and xray object have been set, the depth span specified
         and the punchholes been added to the feature table.
 
         This method will use the punchchole positions and, depending on the method, the top and bottom of the sample
@@ -1686,7 +1716,7 @@ class ProjectBaseClass:
         x_ROI = project.data_object.feature_table.x_ROI
         y_ROI = project.data_object.feature_table.y_ROI
         points = np.c_[x_ROI, y_ROI]
-        _, _, w_ROI, h_ROI = project.image_handler.photo_ROI_xywh
+        _, _, w_ROI, h_ROI = project.image_handler._photo_roi_xywh
         grid_x, grid_y = np.meshgrid(
             np.arange(w_ROI),
             np.arange(h_ROI)
@@ -1743,7 +1773,7 @@ class ProjectBaseClass:
             'add the ages to data_object with add_age_column first'
 
         assert self._image_classified is not None, 'call set_image_classified'
-        assert hasattr(self.image_classified, 'params_laminae_simplified'), \
+        assert check_attr(self.image_classified, 'params_laminae_simplified'), \
             ('could not find params table in classified image object, call '
              'set_image_classified')
 
@@ -1851,10 +1881,10 @@ class ProjectBaseClass:
     def require_time_series(self, overwrite: bool = False, **kwargs) -> TimeSeries:
         if (self._time_series is not None) and (not overwrite):
             return self._time_series
-        elif hasattr(self, 'TimeSeries_file') and (not overwrite):
+        elif check_attr(self, 'TimeSeries_file') and (not overwrite):
             self._time_series = TimeSeries(self.path_d_folder)
             self._time_series.load()
-        if (not hasattr(self._time_series, 'feature_table')) or overwrite:
+        if (not check_attr(self._time_series, 'feature_table')) or overwrite:
             self.set_time_series(**kwargs)
 
         return self._time_series
@@ -1867,169 +1897,24 @@ class ProjectBaseClass:
             self,
             comp: str | float | int,
             source: str,
-            tolerance: float = 3e-3,
-            title: str | None = None,
+            tolerance: float,
             da_export_file: str | None = None,
             plot_on_background: bool = False,
+            title: str | None = None,
             **kwargs
     ):
-        def pixel_table_from_xml() -> pd.DataFrame:
-            """Construct a feature table from the xml file."""
-            imaging_info: ImagingInfoXML = ImagingInfoXML(
-                path_d_folder=self.path_d_folder
-            )
-            names: np.ndarray[str] = imaging_info.spotName
-            rxys: np.ndarray[int] = get_rxy(names)
-            cols: list = [comp, 'R', 'x', 'y']
-            df_: pd.DataFrame = pd.DataFrame(
-                data=np.zeros((len(names), len(cols))),
-                columns=cols
-            )
-            # put R, x and y in feature table
-            df_.iloc[:, 1:] = rxys
-            return df_
-
-        def reader_setup() -> tuple[ReadBrukerMCF | hdf5Handler, pd.DataFrame]:
-            """Get a reader and the feature table."""
-            reader_: ReadBrukerMCF | hdf5Handler = self.get_reader()
-            reader_.create_reader()
-            reader_.create_indices()
-            df_: pd.DataFrame = pixel_table_from_xml()
-            return reader_, df_
-
-        def spectra_iterator(
-                obj: Spectra | ReadBrukerMCF | hdf5Handler,
-                reader_: ReadBrukerMCF | hdf5Handler, df_: pd.DataFrame
-        ) -> pd.DataFrame:
-            """Iterate over spectra and extract intensity of target."""
-            comp_f: float = float(comp)
-            # iterate over spectra and extract intensity
-            n: int = len(reader_.indices)
-            for it, idx in tqdm(
-                    enumerate(reader_.indices),
-                    desc=f'Fetching intensities from {obj.__class__.__name__}',
-                    total=n
-            ):
-                if isinstance(obj, (ReadBrukerMCF, hdf5Handler)):
-                    spec: Spectrum = obj.get_spectrum(idx)
-                elif isinstance(obj, Spectra):
-                    spec: Spectrum = obj._get_spectrum(
-                        reader_, idx, only_intensity=False
-                    )
-                else:
-                    raise NotImplementedError(
-                        f'internal error for object of type {type(obj)}'
-                    )
-                # window
-                df_.loc[it, comp] = max_window_spec(spec, comp_f)
-            return df_
-
-        def max_window_spec(spec: Spectrum, comp_f: float) -> float:
-            """Get the maximum intensity of a spectrum within the specified tolerance."""
-            mask: np.ndarray[bool] = (
-                    (spec.mzs > comp_f - tolerance)
-                    & (spec.mzs < comp_f + tolerance)
-            )
-            return spec.intensities[mask].max()
-
-        def find_compound(
-                obj: Spectra | TimeSeries,
-                comp_: str | float
-        ) -> str:
-            """
-            Find the target compound in the feature table (closest).
-
-            Raises a value error if the tolerance is exceeded
-            """
-            comp_, distance = obj._get_closest_mz(
-                comp_,
-                max_deviation=tolerance,
-                return_deviation=True
-            )
-            if comp_ is None:
-                raise ValueError(
-                    f'No compound found within the tolerance ({tolerance*1e3:.0f} '
-                    f'mDa), next compound is {distance*1e3:.0f} mDa away'
-                )
-            return comp_
-
-        sources = ('reader', 'spectra', 'data_object', 'time_series', 'da_export')
-        assert source in sources, f'No source named {source}, must be one of {sources}'
-
-        if source in ('reader', 'spectra', 'da_export') and (not self._is_MSI):
-            raise KeyError(f'{source} is not a valid source for XRF')
-
-        if plot_on_background:
-            background_image = convert('cv', 'np', self.image_roi.image)
-
-        if source in ('reader', 'spectra'):
-            reader, df = reader_setup()
-            obj = self.spectra if source == 'spectra' else reader
-            df: pd.DataFrame = spectra_iterator(obj, reader, df)
-
-            if plot_on_background:
-                plot_comp_on_image(
-                    comp=comp,
-                    background_image=background_image,
-                    data_frame=df, **kwargs
-                )
-            else:
-                plot_comp(data_frame=df, title=title, comp=comp, **kwargs)
-        elif source == 'da_export':
-            assert da_export_file is not None, \
-                'if method da_export is used, the da_export_file must be specified'
-            pixel_names, spectra_mzs, spectra_intensities, _ = get_da_export_data(
-                da_export_file
-            )
-            df: pd.DataFrame = get_da_export_ion_image(
-                mz=comp,
-                pixel_names=pixel_names,
-                spectra_mzs=spectra_mzs,
-                data=spectra_intensities,
-                tolerance=tolerance
-            )
-            da = self._data_object.copy() if self._data_object is not None else None
-            self._data_object = MSI(self.path_d_folder)
-            self.data_object.feature_table = df
-            self.add_pixels_ROI()
-            self.add_holes()
-            if (
-                    ('distance_pixels' not in kwargs) and
-                    (self.data_object is not None) and
-                    hasattr(self.data_object, 'distance_pixels')
-            ):
-                kwargs['distance_pixels'] = self.data_object.distance_pixels
-            if plot_on_background:
-                plot_comp_on_image(
-                    comp=comp,
-                    background_image=background_image,
-                    data_frame=self.data_object.feature_table,
-                    title=title,
-                    **kwargs
-                )
-            else:
-                plot_comp(
-                    data_frame=self.data_object.feature_table,
-                    title=title,
-                    comp=comp,
-                    **kwargs
-                )
-            self._data_object = da
-        elif source in ('data_object', 'time_series'):
-            assert self.__getattribute__(source) is not None,\
-                f'make sure to set the {source} before selecting it as source'
-            obj = self.data_object if source == 'data_object' else self.time_series
-            comp: str = find_compound(obj, comp)
-            if plot_on_background:
-                plot_comp_on_image(
-                    comp=comp,
-                    background_image=self.image_classified.image if self._corrected_tilt else background_image,
-                    data_frame=self.data_object.feature_table,
-                    title=title,
-                    **kwargs
-                )
-            else:
-                obj.plot_comp(title=title, comp=comp, **kwargs)
+        plotter: IonImagePlotter = IonImagePlotter(
+            project=self,
+            source=source,
+            tolerance=tolerance,
+            da_export_file=da_export_file
+        )
+        plotter.plot_comp(
+            comp=comp,
+            plot_on_background=plot_on_background,
+            title=title,
+            **kwargs
+        )
 
     def plot_overview(self):
         """Plot figures representing the current state of the project."""
@@ -2193,20 +2078,20 @@ class ProjectXRF(ProjectBaseClass):
         None.
 
         """
-        assert (self.image_file is not None) and hasattr(self, 'image_roi_file'), \
+        assert (self.image_file is not None) and check_attr(self, 'image_roi_file'), \
             'ensure the image files have good names (matching measurement name)'
         self._image_handler: SampleImageHandlerXRF = SampleImageHandlerXRF(
             path_folder=self.path_folder,
             path_image_file=self.path_image_file,
             path_image_roi_file=self.path_image_roi_file
         )
-        if not hasattr(self.image_handler, 'extent_spots'):
+        if not check_attr(self.image_handler, '_extent_spots'):
             self._image_handler.set_photo()
             self._image_handler.set_extent_data()
             self._image_handler.save()
         if (
-                (not hasattr(self._image_handler, 'image_roi'))
-                or (not hasattr(self._image_handler, 'data_ROI_xywh'))
+                (not check_attr(self._image_handler, '_image_roi'))
+                or (not check_attr(self._image_handler, '_data_roi_xywh'))
         ):
             self._image_handler.set_photo_ROI()
             self._image_handler.save()
@@ -2217,7 +2102,7 @@ class ProjectXRF(ProjectBaseClass):
         call_set: bool = True
         if (self._image_handler is not None) and (not overwrite):
             return self._image_handler
-        elif hasattr(self, 'SampleImageHandlerXRF_file') and (not overwrite):
+        elif check_attr(self, 'SampleImageHandlerXRF_file') and (not overwrite):
             self._image_handler: SampleImageHandlerXRF = SampleImageHandlerXRF(
                 path_folder=self.path_folder,
                 path_image_file=self.path_image_file,
@@ -2227,8 +2112,8 @@ class ProjectXRF(ProjectBaseClass):
             self._image_handler.set_photo()
             call_set = False
             if not all([
-                hasattr(self._image_handler, attr)
-                for attr in ('extent_spots', 'image_roi', 'data_ROI_xywh')
+                check_attr(self._image_handler, attr)
+                for attr in ('_extent_spots', '_image_roi', '_data_roi_xywh')
             ]):
                 logger.warning(
                     'found partially initialized SampleImageHandler, calling '
@@ -2253,7 +2138,7 @@ class ProjectXRF(ProjectBaseClass):
         call_set: bool = True
         if (self._data_object is not None) and (not overwrite):
             return self._data_object
-        elif hasattr(self, 'XRF_file') and (not overwrite):
+        elif check_attr(self, 'XRF_file') and (not overwrite):
             self._data_object = XRF(
                 path_folder=self.path_folder,
                 measurement_name=self.measurement_name,
@@ -2261,7 +2146,7 @@ class ProjectXRF(ProjectBaseClass):
             )
             self._data_object.load()
             call_set = False
-            if not hasattr(self._data_object, 'feature_table'):
+            if not check_attr(self._data_object, 'feature_table'):
                 logger.info('loaded object does not have feature table, setting new one')
                 call_set = True
         if call_set or overwrite:
@@ -2362,6 +2247,7 @@ class ProjectMSI(ProjectBaseClass):
             'ImageROI.pickle',
             'ImageClassified.pickle',
             'SampleImageHandlerMSI.pickle',
+            'DataAnalysisExport.pickle'
         ]
 
         # get d_folder
@@ -2428,7 +2314,7 @@ class ProjectMSI(ProjectBaseClass):
     def require_image_handler(self, overwrite: bool = False) -> SampleImageHandlerMSI:
         if (self._image_handler is not None) and (not overwrite):  # return existing
             return self._image_handler
-        elif hasattr(self, 'SampleImageHandlerMSI_file') and (not overwrite):  # load and set image
+        elif check_attr(self, 'SampleImageHandlerMSI_file') and (not overwrite):  # load and set image
             logger.info(f'loading SampleHandler from {self.path_folder}')
             self._image_handler = SampleImageHandlerMSI(
                 path_folder=self.path_folder,
@@ -2437,7 +2323,7 @@ class ProjectMSI(ProjectBaseClass):
             )
             self._image_handler.load()
             self._image_handler.set_photo()
-        if (not hasattr(self._image_handler, 'extent_spots')) or overwrite:  # make sure it has extent_spots
+        if (not check_attr(self._image_handler, '_extent_spots')) or overwrite:  # make sure it has _extent_spots
             self.set_image_handler()
 
         return self._image_handler
@@ -2471,7 +2357,7 @@ class ProjectMSI(ProjectBaseClass):
         return reader
 
     def require_hdf_reader(self, overwrite: bool = False) -> hdf5Handler:
-        if (not hasattr(self, 'Spectra_file')) or overwrite:
+        if (not check_attr(self, 'Spectra_file')) or overwrite:
             reader: ReadBrukerMCF = self.get_mcf_reader()
             reader: hdf5Handler = self.set_hdf_file(reader)
         else:
@@ -2479,7 +2365,7 @@ class ProjectMSI(ProjectBaseClass):
         return reader
 
     def get_reader(self, prefer_hdf: bool = True) -> ReadBrukerMCF | hdf5Handler:
-        if hasattr(self, 'Spectra_file') and prefer_hdf:
+        if check_attr(self, 'Spectra_file') and prefer_hdf:
             reader = self.get_hdf_reader()
         else:
             reader = self.get_mcf_reader()
@@ -2539,8 +2425,8 @@ class ProjectMSI(ProjectBaseClass):
             return self._spectra
         elif (
             (
-                hasattr(self, 'spectra_object_file')
-                or hasattr(self, 'Spectra_file')
+                check_attr(self, 'spectra_object_file')
+                or check_attr(self, 'Spectra_file')
             ) and (not overwrite)
         ):
             self._spectra: Spectra = Spectra(
@@ -2548,9 +2434,9 @@ class ProjectMSI(ProjectBaseClass):
             )
             self._spectra.load()
             call_set = False
-            if hasattr(self._spectra, 'feature_table'):
+            if check_attr(self._spectra, 'feature_table'):
                 logger.info('loaded fully initialized spectra object')
-            elif hasattr(self._spectra, 'line_spectra'):
+            elif check_attr(self._spectra, 'line_spectra'):
                 logger.info('loaded fully initialized spectra object')
                 self._spectra.set_feature_table()
                 call_set = True
@@ -2565,19 +2451,56 @@ class ProjectMSI(ProjectBaseClass):
     def spectra(self) -> Spectra:
         return self.require_spectra()
 
+    def set_da_export(self, path_file: str, **kwargs):
+        self._da_export = DataAnalysisExport(path_file=path_file, **kwargs)
+        self._da_export.set_feature_table()
+
+    def require_da_export(self, overwrite=False, **kwargs):
+        call_set: bool = True
+        if (self._da_export is not None) and (not overwrite):
+            return self._da_export
+        elif (
+            (
+                check_attr(self, 'DataAnalysisExport_file')
+            ) and (not overwrite)
+        ):
+            self._da_export: DataAnalysisExport = DataAnalysisExport(
+                path_file=''
+            )
+            self._da_export.load()
+            call_set = False
+            if check_attr(self._da_export, 'feature_table'):
+                logger.info('loaded fully initialized spectra object')
+            elif check_attr(self._da_export, 'line_spectra'):
+                logger.info('loaded fully initialized spectra object')
+                self._spectra.set_feature_table()
+                call_set = True
+        if call_set or overwrite:
+            self.set_da_export(**kwargs)
+        return self._da_export
+
+    @property
+    def da_export(self):
+        return self.require_da_export()
+
     def set_data_object(self, source='spectra'):
-        assert (
-            hasattr(self.spectra, 'feature_table')
-            or hasattr(self.spectra, 'line_spectra')
-        ), 'set spectra object first'
         self._data_object: MSI = MSI(
             self.path_d_folder, path_mis_file=self.path_mis_file
         )
         self._data_object.set_distance_pixels()
         if source == 'spectra':
+            assert (
+                    check_attr(self.spectra, 'feature_table')
+                    or check_attr(self.spectra, 'line_spectra')
+            ), 'set spectra object first'
             self._data_object.set_feature_table_from_spectra(self.spectra)
         elif source == 'da_export':
-            raise NotImplementedError()
+            assert (
+                    check_attr(self.spectra, 'feature_table')
+                    or check_attr(self.spectra, 'line_spectra')
+            ), 'set spectra object first'
+            # use msi_feature_extraction
+            self._data_object._feature_table = get
         else:
             raise NotImplementedError()
 
@@ -2585,13 +2508,13 @@ class ProjectMSI(ProjectBaseClass):
         call_set = True
         if (self._data_object is not None) and (not overwrite):
             return self._data_object
-        if hasattr(self, 'MSI_file') and (not overwrite):
+        if check_attr(self, 'MSI_file') and (not overwrite):
             self._data_object: MSI = MSI(
                 self.path_d_folder, path_mis_file=self.path_mis_file
             )
             self._data_object.load()
             call_set = False
-            if hasattr(self.data_object, 'feature_table'):
+            if check_attr(self.data_object, 'feature_table'):
                 call_set = True
         if call_set:
             self.set_data_object()
@@ -2615,10 +2538,241 @@ class ProjectMSI(ProjectBaseClass):
         self.UK37_proxy.add_SST(method=method_SST, prior_std=prior_std_bayspline)
 
 
+class IonImagePlotter:
+    def __init__(
+            self,
+            project: ProjectMSI | ProjectXRF | ProjectBaseClass,
+            source: str,
+            tolerance: float,
+            da_export_file: str | None = None,
+    ) -> None:
+        sources = (
+            'reader',
+            'spectra',
+            'data_object',
+            'time_series',
+            'da_export',
+            'da_export_file'
+        )
+        self._is_MSI = isinstance(project, ProjectMSI)
+
+        assert source in sources, \
+            f'No source named {source}, must be one of {sources}'
+        if source not in ('data_object', 'time_series'):
+            assert self._is_MSI, \
+                f'{source} is not a valid source for XRF'
+        if source == 'da_export_file':
+            assert da_export_file is not None, \
+                ('if method da_export_file is used, '
+                 'the da_export_file must be specified')
+        if source in ('data_object', 'time_series', 'da_export'):
+            assert check_attr(project, source), \
+                f'make sure to set the {source} before selecting it as source'
+        self._source = source
+
+        self._tolerance: float = float(tolerance)
+
+        assert (da_export_file is None) or os.path.exists(da_export_file), \
+            f'provided {da_export_file=} does not exist'
+        self._da_export_file = da_export_file
+
+        self._project = project
+        self._set_object()
+
+    def _set_object(self):
+        if self._source != 'da_export_file':
+            self._object = self._project.__getattribute__(self._source)
+
+    def _set_compound(
+            self,
+            comp,
+    ) -> None:
+        """
+        Find the target compound in the feature table (closest).
+
+        Raises a value error if the tolerance is exceeded
+        """
+        if self._source == 'da_export_file':
+            self._comp = str(round(comp, 4))
+            return
+        comp_, distance = self._object.get_closest_mz(
+            comp,
+            max_deviation=self._tolerance,
+            return_deviation=True
+        )
+        if comp_ is None:
+            raise ValueError(
+                f'No compound found within the tolerance ({self._tolerance * 1e3:.0f} '
+                f'mDa), next compound is {distance * 1e3:.0f} mDa away'
+            )
+        self._comp: str = comp_
+
+    def _pixel_table_from_xml(self) -> pd.DataFrame:
+        """Construct a feature table from the xml file."""
+        imaging_info: ImagingInfoXML = ImagingInfoXML(
+            path_d_folder=self._project.path_d_folder
+        )
+        names: np.ndarray[str] = imaging_info.spotName
+        rxys: np.ndarray[int] = get_rxy(names)
+        cols: list = [self._comp, 'R', 'x', 'y']
+        df_: pd.DataFrame = pd.DataFrame(
+            data=np.zeros((len(names), len(cols))),
+            columns=cols
+        )
+        # put R, x and y in feature table
+        df_.iloc[:, 1:] = rxys
+        return df_
+
+    def _reader_setup(self) -> tuple[ReadBrukerMCF | hdf5Handler, pd.DataFrame]:
+        """Get a reader and the feature table."""
+        reader_: ReadBrukerMCF | hdf5Handler = self._project.get_reader()
+        reader_.create_reader()
+        reader_.create_indices()
+        df_: pd.DataFrame = self._pixel_table_from_xml()
+        return reader_, df_
+
+    def _max_window_spec(self, spec: Spectrum) -> float:
+        """Get the maximum intensity of a spectrum within the specified tolerance."""
+        mask: np.ndarray[bool] = (
+                (spec.mzs > float(self._comp) - self._tolerance)
+                & (spec.mzs < float(self._comp) + self._tolerance)
+        )
+        return spec.intensities[mask].max()
+
+    def _spectra_iterator(
+            self,
+            obj: Spectra | ReadBrukerMCF | hdf5Handler,
+            reader_: ReadBrukerMCF | hdf5Handler, df_: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Iterate over spectra and extract intensity of target."""
+        # iterate over spectra and extract intensity
+        n: int = len(reader_.indices)
+        for it, idx in tqdm(
+                enumerate(reader_.indices),
+                desc=f'Fetching intensities from {obj.__class__.__name__}',
+                total=n
+        ):
+            if isinstance(obj, (ReadBrukerMCF, hdf5Handler)):
+                spec: Spectrum = obj.get_spectrum(idx)
+            elif isinstance(obj, Spectra):
+                spec: Spectrum = obj._get_spectrum(
+                    reader_, idx, only_intensity=False
+                )
+            else:
+                raise NotImplementedError(
+                    f'internal error for object of type {type(obj)}'
+                )
+            # window
+            df_.loc[it, self._comp] = self._max_window_spec(spec)
+        return df_
+
+    def _get_df(self) -> pd.DataFrame:
+        if self._source == 'reader':
+            reader, df = self._reader_setup()
+            df: pd.DataFrame = self._spectra_iterator(reader, reader, df)
+        elif self._source == 'spectra':
+            reader, df = self._reader_setup()
+            df: pd.DataFrame = self._spectra_iterator(self._object, reader, df)
+        elif self._source == 'da_export_file':
+            pixel_names, spectra_mzs, spectra_intensities, _ = get_da_export_data(
+                self._da_export_file
+            )
+            df: pd.DataFrame = get_da_export_ion_image(
+                mz=self._comp,
+                pixel_names=pixel_names,
+                spectra_mzs=spectra_mzs,
+                data=spectra_intensities,
+                tolerance=self._tolerance
+            )
+        elif self._source == 'data_object':
+            df = self._project.data_object.feature_table
+        elif self._source == 'time_series':
+            df = self._project.data_object.feature_table
+        elif self._source == 'da_export':
+            df = self._project.da_export.feature_table
+        else:
+            raise NotImplementedError(f'{self._source} is not implemented')
+
+        return df
+
+    def _get_distance_pixels(self, **kwargs):
+        if 'distance_pixels' in kwargs:
+            return kwargs
+        if not check_attr(
+                self._data_object, '_distance_pixels'
+        ):
+            return kwargs
+        kwargs['distance_pixels'] = self._data_object.distance_pixels
+        return kwargs
+
+    def _set_data_object(self, df):
+        if self._is_MSI:
+            self._data_object = MSI(
+                self._project.path_d_folder,
+                path_mis_file=self._project.path_mis_file
+            )
+        else:
+            self._data_object = XRF(
+                self._project.path_folder
+            )
+
+        self._data_object._feature_table = df
+        self._data_object._feature_table.columns = self._data_object._feature_table.columns.astype(str)
+        if not check_attr(self._project, '_data_object'):
+            return
+
+        if 'x_ROI' in self._project.data_object.columns:
+            self._data_object.feature_table.loc[:, ['x_ROI', 'y_ROI']] = \
+                self._project.data_object.loc[:, ['x_ROI', 'y_ROI']]
+        if 'valid' in self._project.data_object.columns:
+            self._data_object.feature_table.loc[:, 'valid'] = \
+                self._project.data_object.loc[:, 'valid']
+
+    def plot_comp(
+            self,
+            comp: str | float | int,
+            plot_on_background: bool = False,
+            title: str | None = None,
+            **kwargs
+    ):
+        self._set_compound(comp)
+
+        df = self._get_df()
+        self._set_data_object(df)
+
+        # try to fetch distance_pixels
+        kwargs = self._get_distance_pixels(**kwargs)
+
+        if plot_on_background:
+            background_image = convert(
+                'cv', 'np', self._project.image_roi.image
+            )
+            plot_comp_on_image(
+                comp=self._comp,
+                background_image=background_image,
+                data_frame=self._data_object.feature_table,
+                title=title,
+                **kwargs
+            )
+        else:
+            plot_comp(
+                data_frame=self._data_object.feature_table,
+                title=title,
+                comp=self._comp,
+                **kwargs
+            )
+
+
 def get_project(is_MSI: bool, *args, **kwargs) -> ProjectMSI | ProjectXRF:
     if is_MSI:
         return ProjectMSI(*args, **kwargs)
     return ProjectXRF(*args, **kwargs)
+
+
+def get_image_handler(is_MSI: bool, *args, **kwargs) -> SampleImageHandlerMSI | SampleImageHandlerXRF:
+    if is_MSI:
+        return SampleImageHandlerMSI(*args, **kwargs)
+    return SampleImageHandlerXRF(*args, **kwargs)
 
 
 class MultiMassWindowProject(ProjectBaseClass):
@@ -2646,8 +2800,8 @@ class MultiMassWindowProject(ProjectBaseClass):
             ...
             raise NotImplementedError()
 
-        assert hasattr(p_other, 'image_roi') and hasattr(p_main, 'image_roi'), \
-            'projects must have image_roi objects'
+        assert check_attr(p_other, '_image_roi') and check_attr(p_main, '_image_roi'), \
+            'projects must have _image_roi objects'
         t = Transformation(source=p_other.image_roi, target=p_main.image_roi)
 
         # use bounding box first, image flow second
@@ -2693,9 +2847,9 @@ class MultiSectionProject:
     def _combine_feature_tables(self, *projects):
         # TODO: assertions
         # self.data_object = MultiSectionData(*folders)
-        if hasattr(self.spectra, 'line_spectra') and not hasattr(self.spectra, 'feature_table'):
+        if check_attr(self.spectra, 'line_spectra') and not check_attr(self.spectra, 'feature_table'):
             self.spectra.feature_table = self.spectra.set_feature_table()
-        if hasattr(self.spectra, 'feature_table'):
+        if check_attr(self.spectra, 'feature_table'):
             self.data_object.feature_table = self.spectra.feature_table
         else:
             # TODO: this

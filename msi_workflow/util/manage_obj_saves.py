@@ -21,7 +21,11 @@ ImageSample_disc_attributes = Image_disc_attributes | {
     'obj_color', '_xywh_ROI', '_hw'}
 
 ImageROI_disc_attributes = ImageSample_disc_attributes | {
-    '_image_classification', '_params', '_punchholes', '_punchhole_size', '_image_original'
+    '_image_classification',
+    '_params',
+    '_punchholes',
+    '_punchhole_size',
+    '_image_original'
 }
 
 ImageClassified_disc_attributes = ImageSample_disc_attributes | {
@@ -35,24 +39,9 @@ ImageTransformation_disc_attributes = {}
 
 Data_disc_attributes = {
     'distance_pixels',
-    '_feature_table',
+    '_feature_table',  # it could be processed, so not necessarily redundant information
     'depth_section',
     'age_span'
-}
-
-Data_nondata_columns = {
-    'L',
-    'x_ROI',
-    'y_ROI',
-    'valid',
-    'classification',
-    'classification_s',
-    'classification_se',
-    'seed',
-    'depth',
-    'age',
-    'x',
-    'y'
 }
 
 MSI_disc_attributes = Data_disc_attributes | {'d_folder', 'mis_file'}
@@ -85,10 +74,10 @@ SampleImageHandlerMSI_attributes = {
 SampleImageHandlerXRF_attributes = {
     'image_file',
     'image_roi_file',
-    'ROI_is_image',
-    'extent_spots',
-    'extent',
-    'scale_conversion'
+    'roi_is_image',
+    '_extent_spots',
+    '_extent',
+    '_scale_conversion'
 }
 
 Spectra_attributes = {

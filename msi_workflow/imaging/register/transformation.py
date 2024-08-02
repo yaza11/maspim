@@ -456,7 +456,7 @@ class Transformation:
             self, image_roi: ImageROI, keep_ratio: bool, **kwargs
     ) -> ImageROI:
         """
-        Match the shape of an image to the target and turn into image_roi.
+        Match the shape of an image to the target and turn into _image_roi.
 
         Parameters
         ----------

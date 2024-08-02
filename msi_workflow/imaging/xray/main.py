@@ -344,7 +344,7 @@ class XRay(ImageSample):
         lower_new = int(np.max(lower_bound) + 1)  # ceil
         y_new = y + upper_new
         h_new = lower_new - upper_new
-        # update extent of ROI
+        # update _extent of ROI
         self._xywh_ROI = (x, y_new, w, h_new)
         self._image[y:y + h, x:x + w] = temp_roi
         self._bars_removed: bool = True

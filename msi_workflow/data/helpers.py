@@ -50,7 +50,7 @@ def get_comp_as_img(
         The feature image (without holes, depending on the inputs).
     """
     if (idx_x not in data_frame.columns) and (idx_x != 'x'):
-        logger.warning(
+        logger.info(
             f'did not find {idx_x} in {data_frame.columns}, ' +
             f'attempting to find "x" and "y"'
         )
