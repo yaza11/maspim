@@ -7,7 +7,8 @@ import logging
 
 from msi_workflow.exporting.from_mcf.spectrum import Spectra
 from msi_workflow.data.main import Data
-from msi_workflow.project.file_helpers import get_mis_file, search_keys_in_xml
+from msi_workflow.project.file_helpers import search_keys_in_xml
+from msi_workflow.util.convinience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +21,13 @@ class MSI(Data):
     (plus the x and y coordiantes of the data pixels). Each row corresponds to a data pixel. The
     recommended way is to use the set_feature_table_from_spectra method, but it is always possible
     to inject the data by
-    >>> msi.feature_table = ft
+    >>> msi._feature_table = ft
     where msi is the MSI instance and ft is a pandas dataframe with data, x and y columns.
 
     Example Usage
     -------------
     Import
-    >>> from data.cMSI import MSI
+    >>> from msi_workflow import MSI
     Initialize
     >>> msi = MSI(path_d_folder='path/to/your/d_folder.d')
     If there are multiple mis files in the parent folder, it is recommended to provide
@@ -35,13 +36,14 @@ class MSI(Data):
     In that case the object will infere the data pixel resolution from the mis file.
 
     Set the feature table (here assuming that a spectra object has been saved to disk before):
-    >>> from exporting.from_mcf.cSpectrum import Spectra
+    >>> from msi_workflow import Spectra
     >>> spec = Spectra(path_d_folder='path/to/your/d_folder.d', load=True)
     >>> msi.set_feature_table_from_spectra(spec)
 
     Now we are ready to do some analysis, e.g. nonnegative matrix factorization
-    >>> msi.plt_NMF(k=5)
+    >>> msi.plot_nmf(k=5)
     """
+
     def __init__(
             self,
             path_d_folder: str,
@@ -64,9 +66,9 @@ class MSI(Data):
         self._set_files(path_d_folder, path_mis_file)
         
         if distance_pixels is not None:
-            self.distance_pixels = distance_pixels
+            self._distance_pixels = distance_pixels
 
-    def _set_files(self, path_d_folder, path_mis_file):
+    def _set_files(self, path_d_folder: str, path_mis_file: str) -> None:
         path_folder1, d_folder = os.path.split(path_d_folder)
         if path_mis_file is not None:
             path_folder2, mis_file = os.path.split(path_mis_file)
@@ -89,13 +91,8 @@ class MSI(Data):
     ):
         """Set distance of pixels in micrometers either directly or from mis."""
         if distance_pixels is not None:
-            self.distance_pixels = distance_pixels
-            return 
-
-        if not hasattr(self, 'mis_file'):
-            # move up one folder
-            path_folder = os.path.dirname(self.path_d_folder)
-            self.path_mis_file = os.path.join(path_folder, get_mis_file(path_folder))
+            self._distance_pixels = distance_pixels
+            return
 
         logger.info(f"reading pixel distance from {self.path_mis_file}")
 
@@ -106,27 +103,22 @@ class MSI(Data):
         if type(distances) is list:
             distance: str = distances[0]
             assert all([d == distance for d in distances]), \
-            "found different raster sizes in mis file, cannot handle this"
+                "found different raster sizes in mis file, cannot handle this"
         else:
             distance: str = distances
         distance_t: list[str] = distance.split(',')
         assert (d := distance_t[0]) == distance_t[1], \
             'cant handle grid with different distances in x and y'
-        self.distance_pixels = float(d)
+        self._distance_pixels = float(d)
     
     def set_feature_table_from_spectra(self, spectra: Spectra):
         """
         Set the feature table from a spectra object.
         """
-        has_df = hasattr(spectra, 'feature_table')
-        assert has_df or hasattr(spectra, 'line_spectra'), \
-            'spectra object must have a feature table'
-        if has_df:
-            self.feature_table: pd.DataFrame = spectra.feature_table.copy()
-        else:
-            self.feature_table: pd.DataFrame = spectra.set_feature_table().copy()
+        assert check_attr(spectra, 'feature_table')
+
+        self._feature_table: pd.DataFrame = spectra.feature_table.copy()
     
 
 if __name__ == '__main__':
-    msi = MSI
-    print(msi._get_disc_folder_and_file)
+    pass

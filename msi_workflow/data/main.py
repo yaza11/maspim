@@ -1,6 +1,6 @@
 """Superclass for cMSI, cXRF, cXRay."""
 import os
-import pickle
+
 import cv2
 import scipy
 import numpy as np
@@ -13,14 +13,13 @@ from collections.abc import Iterable
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA, NMF
 from sklearn.preprocessing import StandardScaler, MaxAbsScaler
+from tqdm import tqdm
 
 from msi_workflow.data.helpers import plot_comp, plt_comps
-from msi_workflow.util.manage_obj_saves import class_to_attributes, Data_nondata_columns
 from msi_workflow.res.constants import elements
 from msi_workflow.res.constants import dict_labels
-from msi_workflow.util.convinience import Convinience
+from msi_workflow.util.convinience import Convinience, check_attr
 from msi_workflow.imaging.util.image_plotting import plt_cv2_image
-from msi_workflow.exporting.from_mcf.spectrum import Spectra
 
 
 logger = logging.getLogger('msi_workflow.' + __name__)
@@ -41,8 +40,6 @@ def estimate_probability_distribution(
     ----------
     I : ndarray
         The image for which to calculate the prob dist.
-    log : bool, optional
-        If True, will use log scale for the bin edges. The default is True.
     bin_edges : list[float] | None, optional
         Option to specify the bin_edges. The default is None.
 
@@ -157,15 +154,1086 @@ def PCA_biplot(
         return fig, axs
 
 
-class Lamination:
+class DataBaseClass:
+    _feature_table: pd.DataFrame | None
+
+    @property
+    def feature_table(self) -> pd.DataFrame:
+        """Feature table is read-only"""
+        assert check_attr(self, '_feature_table')
+        return self._feature_table
+
+    @property
+    def data_columns(self) -> pd.Series:
+        """Overwritten by children."""
+        raise NotImplementedError()
+
+    @property
+    def data(self) -> pd.DataFrame:
+        return self.feature_table.loc[:, self.data_columns]
+
+    @property
+    def nondata_columns(self) -> pd.Series:
+        """Overwritten by children."""
+        raise NotImplementedError()
+
+    @property
+    def nondata(self) -> pd.DataFrame:
+        return self.feature_table.loc[:, self.nondata_columns]
+
+    @property
+    def xy(self) -> pd.DataFrame:
+        return self.feature_table.loc[:, ['x', 'y']]
+
+    @property
+    def x(self) -> pd.Series:
+        return self.feature_table.x
+
+    @property
+    def y(self) -> pd.Series:
+        return self.feature_table.y
+
+    @property
+    def R(self) -> pd.Series:
+        return self.feature_table.R
+
+    @property
+    def columns(self) -> pd.Index:
+        return self.feature_table.columns
+
+
+class Data(Convinience, DataBaseClass):
+    """
+    Class to manipulate and analyze MSI or XRF data.
+
+    For application take a look at the MSI or XRF class. The Data class is not
+    ment to be used directly.
+    """
+    path_folder: str | None = None
+    d_folder: str | None = None
+
+    _distance_pixels: int | float | None = None
+
+    _pca_xy: pd.DataFrame | None = None
+    _pca: PCA | None = None
+    _pcs: np.ndarray[float] | None = None
+    _pca_columns: pd.Series | None = None
+
+    _nmf_columns: Iterable | None = None
+    _nmf_xy: pd.DataFrame | None = None
+    _W: np.ndarray[float] | None = None
+    _H: np.ndarray[float] | None = None
+
+    _kmeans: KMeans | None = None
+
+    @property
+    def path_d_folder(self):
+        """Overwritten by children"""
+        raise NotImplementedError()
+
+    def _get_data_columns_xrf(self) -> np.ndarray[str]:
+        """Return columns corresponding to data."""
+        columns: pd.Index = self.columns
+
+        # data columns are elements
+        columns_valid: list[bool] = [
+            col
+            for col in columns
+            if col in list(elements.Abbreviation)
+        ]
+
+        data_columns = np.array(columns_valid)
+        return data_columns
+
+    def _get_data_columns_msi(self) -> np.ndarray[str]:
+        """Return columns corresponding to data."""
+        columns = self.feature_table.columns
+        # only return cols with masses
+        columns_valid: list[str] = [
+            col for col in columns if str(col).replace(
+                '.', '', 1
+            ).isdigit()
+        ]
+
+        data_columns: np.ndarray[str] = np.array(columns_valid)
+        return data_columns
+
+    @property
+    def data_columns(self) -> pd.Series:
+        return pd.Series(np.concatenate([
+            self._get_data_columns_msi(), self._get_data_columns_xrf()
+        ]))
+
+    @property
+    def nondata_columns(self) -> pd.Series:
+        """Return all columns of the feature table that are not data."""
+        # cols to check against
+        dcols: set = set(self.data_columns)
+        nondata_columns: set = set(self.columns) - dcols
+        return pd.Series(nondata_columns)
+
+    def get_data_for_columns(self, columns: Iterable[str | float]) -> pd.DataFrame:
+        """Return part of the feature table specified by columns."""
+        return self.feature_table.loc[:, columns]
+
+    @property
+    def data_mean(self) -> pd.Series:
+        """Get the mean values for each feature in the feature table."""
+        return self.data.mean(axis=0)
+
+    def add_graylevel_from_data_frame(self, overwrite: bool = False) -> None:
+        """
+        Apply grayscale conversion in feature table.
+
+        Using the R, G and B channel inside the feature table, add grayscale values.
+        """
+        assert check_attr(self, 'feature_table'), \
+            'need to set a feature table'
+        # https://docs.opencv.org/3.4/de/d25/imgproc_color_conversions.html
+        if ('L' in self.feature_table.columns) and (not overwrite):
+            return
+        self._feature_table['L'] = self.feature_table.apply(
+            lambda row:
+            round(0.299 * row.R + 0.587 * row.G + 0.114 * row.B),
+            axis=1
+        )
+
+    def _pixels_get_photo_ROI_to_ROI(
+            self,
+            data_ROI_xywh: tuple[int, ...],
+            photo_ROI_xywh: tuple[int, ...],
+            image_ROI_xywh: tuple[int, ...]
+    ) -> None:
+        """
+        Add x_ROI, y_ROI columns.
+        """
+        # pixel coords of data, set by set_photo_ROI
+        (xd, yd, wd, hd) = data_ROI_xywh  # data units
+        # corner and dimensions of data ROI in original image
+        (xp, yp, wp, hp) = photo_ROI_xywh  # photo units
+        # region of ROI defined by find_sample_region in pixel coords of
+        # original image
+        (xr, yr, wr, hr) = image_ROI_xywh
+        # fit the pixel coords in the feature table to ROI pixel
+        # coordinates by
+        #   1. get values
+        x_ft = self.x.to_numpy()
+        y_ft = self.y.to_numpy()
+        #   2. shift to 0
+        x_ft -= xd
+        y_ft -= yd
+        #   3. scale so that coordinates are in terms of photo
+        x_ft *= wp / wd
+        y_ft *= hp / hd
+        # --> coordinates in terms of photo_ROI
+        #   4. shift accordingly in detected ROI
+        # first add the corners defined in photo_ROI, then subtract the
+        # offset of the detected ROI
+        # --> pixel coordinates in photo-units
+        x_ft += xp
+        y_ft += yp
+        # shift relative to origin of image ROI
+        x_ft -= xr
+        y_ft -= yr
+        # append to feature_table, so now each (x, y) has an according
+        # (x_ROI, y_ROI) corresponding to pixels in the ROI
+        self._feature_table['x_ROI'] = np.around(x_ft).astype(int)
+        self._feature_table['y_ROI'] = np.around(y_ft).astype(int)
+
+    def add_attribute_from_image(
+            self,
+            image: np.ndarray,
+            column_name: str,
+            median: bool = False,
+            coordinate_name: str = '_ROI',
+            fill_value=0,
+            plts: bool = False
+    ) -> None:
+        """
+        Add a column to the feature table from an image (ROI of sample)
+
+        Parameters
+        ----------
+        image : np.ndarray
+            The image to add to the feature table, must be grayscale and in the
+            region of interest.
+        column_name : str
+            Name of the new column in the dataframe.
+        median : bool, optional
+            Whether to average out values around measurement points.
+            The default is False.
+
+        Returns
+        -------
+        None.
+
+        """
+        x_col = f'x{coordinate_name}'
+        y_col = f'y{coordinate_name}'
+        assert len(image.shape) == 2, 'image must be single channel'
+        if median:
+            # footprint of area to average out for classification
+            length_median: int = int(
+                np.median(np.diff(self.feature_table.loc[:, x_col])) / 2
+            )
+            if not length_median % 2:
+                length_median += 1
+            # for each point in feature table, take the median of an
+            # dpixels/2 x dpixels/2 area to classify point
+            image = cv2.medianBlur(image, length_median)
+
+        # zero pad for pixels outside of image extent
+        # number of pixels in the data ROI (in image coordinates)
+        y_ROI_max: int = int(np.ceil(self.feature_table.loc[:, y_col].max()))
+        x_ROI_max: int = int(np.ceil(self.feature_table.loc[:, x_col].max()))
+        image_zeropad = np.full(
+            (
+                np.max([y_ROI_max, image.shape[0]]) + 1,
+                np.max([x_ROI_max, image.shape[1]]) + 1
+            ), fill_value, dtype=image.dtype
+        )
+
+        # set values in zeropadded array
+        image_zeropad[:image.shape[0], :image.shape[1]] = image
+        # add values for each row according to pixels in image
+        # 0 + to avoid bug???
+        self._feature_table[column_name] = self.feature_table.apply(
+            # iterate over rows of df and fill image_zeropad with corresponding values
+            # (gets values in image at x_ROI, y_ROI)
+            lambda row: 0 + image_zeropad[int(row.loc[y_col]), int(row.loc[x_col])],
+            axis='columns'
+        )
+
+        if plts:
+            idxs = np.c_[
+                self.feature_table.loc[:, y_col],
+                self.feature_table.loc[:, x_col]
+            ]
+            plt.figure()
+            plt.imshow(image)
+            plt.plot(idxs[:, 1], idxs[:, 0], '-')
+            plt.show()
+
+            plt_cv2_image(image_zeropad,'zeropaded')
+
+            if median:
+                plt_cv2_image(
+                    image,
+                    'classification after blurring according to data points'
+                )
+
+            plt_cv2_image(image_zeropad, 'final classification')
+
+            plt.figure()
+            plt.imshow(
+                self.feature_table.pivot(
+                    index=y_col, columns=x_col, values=column_name),
+                cmap='rainbow')
+            plt.title('classification in feature table')
+            plt.show()
+
+    def combine_with(self, other: Self) -> None:
+        """Combine two Data objects based on the depth column."""
+
+        def both_have(attr: str, obj1=self, obj2=other) -> bool:
+            return check_attr(obj1, attr) & check_attr(obj2, attr)
+
+        assert type(self) is type(other), 'objects must be of the same type'
+        assert 'depth' in self.feature_table.columns, \
+            'found no depth column in first object'
+        assert 'depth' in other.feature_table.columns, \
+            'found no depth column in second object'
+        assert self.feature_table.depth.max() <= other.feature_table.depth.min(), \
+            'first object must have smaller depths and depth intervals cannot overlap'
+
+        # determine the new folder
+        paths: list[str] = [self.path_folder, other.path_folder]
+        new_path: str = os.path.commonpath(paths)
+        logger.info(f'found common path: {new_path}')
+
+        self_df: pd.DataFrame = self.feature_table.copy()
+        other_df: pd.DataFrame = other.feature_table.copy()
+
+        # set min to 0
+        other_df.loc[:, 'x'] -= other_df.x.min()
+        # shift by last value of this df
+        other_df.loc[:, 'x'] += self_df.x.max()
+        if both_have('x_ROI', self_df, other_df):
+            # set min to 0
+            other_df.loc[:, 'x_ROI'] -= other_df.x_ROI.min()
+            # shift by last value of this df
+            other_df.loc[:, 'x_ROI'] += self_df.x_ROI.max()
+
+        new_df: pd.DataFrame = pd.concat(
+            [self_df, other_df],
+            axis=0
+        ).reset_index(drop=True)
+        self._feature_table = new_df
+
+    def split_at_depth(self, depth: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Split feature table at depth [cm] and return upper and lower section."""
+        assert 'depth' in self.columns
+
+        idxs_u = np.argwhere(self.feature_table.depth < depth)[:, 0]
+        idxs_l = np.argwhere(self.feature_table.depth >= depth)[:, 0]
+
+        Du = self.feature_table.iloc[idxs_u, :]
+        Dl = self.feature_table.loc[idxs_l, :]
+        return Du, Dl
+
+    def estimate_pca(self, columns=None, th_pca=.95, exclude_holes=False):
+        """Perform PCA analysis on the ion images."""
+        if columns is None:
+            columns: pd.Series = self.data_columns
+        data: pd.DataFrame = self.get_data_for_columns(columns)
+        # exclude rows containing only nans, mask is True for valid rows
+        mask_nonnans: pd.Series = ~np.isnan(data).all(axis=1)
+        # exclude holes, mask is True for valid rows
+        if exclude_holes:
+            mask_nonholes: pd.Series = (self.feature_table.classification != 0)
+        else:
+            mask_nonholes: np.ndarray[bool] = np.ones_like(mask_nonnans, dtype=bool)
+        mask_valid_rows: pd.Series = mask_nonnans & mask_nonholes
+        data_valid: pd.DataFrame = data.loc[mask_valid_rows, :].copy()
+        # fill remaining nans with zeros
+        data_valid: pd.DataFrame = data_valid.fillna(0)
+        self._pca_xy: pd.DataFrame = self.xy[mask_valid_rows]
+        FT_s = StandardScaler().fit_transform(data_valid)
+        # do PCA:
+        self._pca: PCA = PCA(n_components=th_pca)
+        self._pcs: np.ndarray[float] = self._pca.fit_transform(FT_s)
+        self._pca_columns: pd.Series = columns
+
+    @property
+    def distance_pixels(self) -> int | float:
+        assert check_attr(self, '_distance_pixels')
+        return self._distance_pixels
+
+    def estimate_nmf(
+            self,
+            k: int,
+            columns: Iterable[float | str] | None = None,
+            exclude_holes: bool = False,
+            use_repeated_NMF: bool = False,
+            N_rep: int = 30,
+            return_summary: bool = False
+    ) -> tuple[np.ndarray[float], np.ndarray[float]] | tuple[np.ndarray[float], np.ndarray[float] | type]:
+        """Perform NMF analysis on the ion images"""
+        if columns is None:
+            columns: pd.Series = self.data_columns
+        self._nmf_columns: Iterable = columns
+        data: pd.DataFrame = self.get_data_for_columns(columns)
+        # exclude rows containing only nans, mask is True for valid rows
+        mask_nonnans: pd.Series = ~np.isnan(data).all(axis=1)
+        # exclude holes, mask is True for valid rows
+        if exclude_holes:
+            mask_nonholes: pd.DataFrame = (self.feature_table.classification != 0)
+        else:
+            mask_nonholes: np.ndarray[bool] = np.ones_like(mask_nonnans, dtype=bool)
+        mask_valid_rows: pd.Series = mask_nonnans & mask_nonholes
+        data_valid: pd.DataFrame = data.loc[mask_valid_rows, :].copy()
+        if np.any(data_valid.to_numpy() < 0):
+            logger.warning(f'Found values smaller than 0 in NMF: '
+                           f'{np.min(np.min(data_valid))}. '
+                           f'Clipping negative values to 0.')
+            data_valid[data_valid < 0] = 0
+        # fill remaining nans with zeros
+        data_valid: pd.DataFrame = data_valid.fillna(0)
+        self._nmf_xy: pd.DataFrame = self.xy[mask_valid_rows]
+        feature_table_scaled = MaxAbsScaler().fit_transform(data_valid)
+
+        if use_repeated_NMF:
+            from mfe.feature import repeated_nmf
+            S: type = repeated_nmf(feature_table_scaled, k, N_rep, max_iter=10_000)
+            self._W: np.ndarray[float] = S.matrix_w_accum
+            self._H: np.ndarray[float] = S.matrix_h_accum
+        else:
+            model: NMF = NMF(n_components=k, max_iter=10_000, init='nndsvd')
+
+            self._W: np.ndarray[float] = model.fit_transform(feature_table_scaled)
+            self._H: np.ndarray[float] = model.components_
+        # store result in dict to be accessible by other functions such as
+        # plot_nmf
+        if return_summary and use_repeated_NMF:
+            return self._W, self._H, S
+        return self._W, self._H
+
+    def nmf_find_k(
+            self,
+            k_min: int = 2,
+            k_max: int = 10,
+            dk: int = 1,
+            plts: bool = True,
+            **kwargs
+    ) -> list[type]:
+        """Helper method to determine the inner dimensions k for the NMF."""
+        k_vec: np.ndarray[int] = np.arange(k_min, k_max + dk, dk)
+        summary: list[type] = []
+        k_plt: list[int] = []
+
+        if plts:
+            plt.figure()
+        for k in k_vec:
+            _, _, s = self.estimate_nmf(
+                k, return_summary=True, use_repeated_NMF=True, **kwargs
+            )
+            summary.append(s)
+            k_plt.append(k)
+            if plts:
+                coph: list[float] = [
+                    summary[i].cophcor
+                    for i in range(len(k_plt))
+                ]
+                plt.figure()
+                plt.plot(k_plt, coph,
+                         'o-',
+                         label='Cophenetic correlation',
+                         linewidth=2)
+                plt.legend(loc='upper center',
+                           bbox_to_anchor=(0.5, -0.05),
+                           ncol=3,
+                           numpoints=1)
+                plt.xlabel('number of inner dimensions k')
+                plt.ylabel('cophenetic correlation coefficient')
+                plt.show()
+        return summary
+
+    def estimate_kmeans(self, n_clusters: int, columns: Iterable | None = None, **kwargs):
+        """Perform k-means clustering on the ion images."""
+        if columns is None:
+            columns = self.data_columns
+        kmeans: KMeans = KMeans(n_clusters=n_clusters, **kwargs) \
+            .fit(self.get_data_for_columns(columns))
+        self._feature_table[f'kmeans'] = kmeans.labels_
+        self._kmeans: KMeans = kmeans
+
+    def get_sparsed(self, th_nonzero: float, plts=False):
+        """
+        Drop compounds that fall below the threshold.
+
+        The threshold determines what fraction of pixels has to be successful
+        in order to be kept. For example, setting th_nonzero to .1 will drop
+        all compounds that have less than 10% successful spectra (meaning more
+        than 90% of the pixels have a value of 0).
+        """
+        # sparsity before:
+        logger.info('sparsity before:',
+                    sum((self.data == 0).astype(int).sum()) /
+                    self.data.size)
+
+        N = self.data.shape[0]
+        sparsed_feature_table = self.data.copy()
+        ratio_nonzero = sparsed_feature_table.astype(bool).sum(axis=0) / N
+
+        if plts:
+            plt.hist(ratio_nonzero, bins=len(self.data_columns) // 10)
+            plt.xlabel('ratio not zero')
+            plt.ylabel('count')
+            plt.show()
+
+        logger.info(
+            'percent compounds removed: '
+            + str((1 - (ratio_nonzero >= th_nonzero).sum() / len(ratio_nonzero)) * 100))
+        # set rows for compounds that fall below threshold to 0
+        sparsed_feature_table.loc[:, ratio_nonzero < th_nonzero] = 0
+
+        # sparsity after:
+        FT_c = sparsed_feature_table.loc[
+               :, self.data_columns]
+        logger.info(
+            f'sparsity after: {sum((FT_c == 0).astype(int).sum()) / FT_c.size}'
+        )
+
+        # drop all zero columns
+        logger.info(
+            f'dropping columns with too many zeros: '
+            f'{sparsed_feature_table.shape[1] - np.sum((sparsed_feature_table != 0).any(axis=0)):.2f}'
+        )
+        sparsed_feature_table = \
+            sparsed_feature_table.loc[:, (sparsed_feature_table != 0).any(axis=0)]
+
+        sparsed_feature_table[['x', 'y']] = self.xy
+        sparsed_feature_table = sparsed_feature_table.sort_values(
+            by=['y', 'x']).reset_index(drop=True)
+
+        return sparsed_feature_table
+
+    def get_filled_feature_table(
+            self,
+            data: pd.DataFrame = None,
+            fill_value: float = 0
+    ) -> tuple[pd.DataFrame, tuple[int, int, int], pd.Index]:
+        """
+        Data pixels may not fill a rectangular region.
+
+        Applying this function assures that all pixels within a rectangular
+        region are inside the feature table.
+        """
+        if data is None:
+            data: pd.DataFrame = self.data.copy()
+
+        columns: list = list(data.columns)
+        # add p = (x, y) (will be dropped again later)
+        data['p'] = self.xy.apply(lambda row: (row.x, row.y), axis=1)
+
+        # convert the data in ft to stacked image
+        x_unique: np.ndarray[int] = self.x.unique()
+        y_unique: np.ndarray[int] = self.y.unique()
+        # determine dimensions of the cube
+        Nx: int = len(x_unique)
+        Ny: int = len(y_unique)
+        Ndims: int = len(columns)
+        shape_filled: tuple[int, int, int] = (Nx, Ny, Ndims)
+
+        # data may not be in rectangular region, those x, y will be missing
+        # add zero columns for those pixels and put them in a mask
+        x_all, y_all = np.meshgrid(x_unique, y_unique)  # all x and y values
+        p: set = set(zip(x_all.ravel(), y_all.ravel()))  # all points
+        p_missing: list = list(p.difference(set(data.p)))  # missing points
+        df_zero_pixels: pd.DataFrame = pd.DataFrame(
+            data=np.full((len(p_missing), Ndims), np.nan),
+            columns=columns
+        )
+        df_zero_pixels['p'] = p_missing
+        data_filled: pd.DataFrame = pd.concat([data, df_zero_pixels]) \
+            .sort_values(by=['p']) \
+            .reset_index(drop=True)
+        # idx_inserted_pixels = [data_filled.index[data_filled.p == val][0]
+        #                        for val in p_missing]
+        idx_inserted_pixels: pd.Index = data_filled[
+            data_filled['p'].isin(p_missing)
+        ].index
+        data_filled['x'] = data_filled.apply(lambda row: row.p[0], axis=1)
+        data_filled['y'] = data_filled.apply(lambda row: row.p[1], axis=1)
+        data_filled.drop(columns=['p'], inplace=True)
+        # fill nans
+        data_filled.fillna(fill_value, inplace=True)
+
+        return data_filled, shape_filled, idx_inserted_pixels
+
+    def get_data_cube(self, data: pd.DataFrame | None = None) -> np.ndarray:
+        if data is None:
+            data: pd.DataFrame = self.data
+        data_rect, shape_filled, _ = self.get_filled_feature_table(data)
+
+        Nx, Ny, Ndims = shape_filled
+
+        # reshape
+        data_cube: np.ndarray[float] = data_rect.to_numpy().reshape(
+            (Nx, Ny, Ndims + 2)  # +2 because x and y are not taken into Ndims
+        )
+
+        return data_cube
+
+    def perform_on_stacked_image(
+            self, data: pd.DataFrame, func: Callable, **kwargs
+    ) -> pd.DataFrame:
+        """
+        Apply a function to a stacked view of the feature table.
+
+        Certain filters are quicker to apply on a multi-channel image.
+        """
+
+        # assumes that feature table contains pixels on rectangular grid,
+        # no nans
+        if ('x' not in data.columns) or ('y' not in data.columns):
+            raise ValueError('data must contain x and y column')
+        if data.shape[0] != len(data.x.unique()) * len(data.y.unique()):
+            raise ValueError('pixels in feature table must be a \
+    rectangular grid. You may have to use get_filled_feature_table')
+        if data.isna().any(axis=None):
+            raise ValueError('feature table cannot contain nans')
+
+        # convert to cube
+        columns = list(data.columns)
+
+        # convert the data in ft to stacked image
+        x_unique = self.feature_table.x.unique()
+        y_unique = self.feature_table.y.unique()
+        Nx = len(x_unique)
+        Ny = len(y_unique)
+        # exclude x and y column
+        Ndims = len(columns) - 2
+
+        # reshape
+        data_cube = data.to_numpy().reshape((Nx, Ny, Ndims + 2))
+        # apply function
+        data_cube_processed = func(data_cube, **kwargs)
+
+        # put back into feature table
+        # copy over x, y
+        data_cube_processed[:, :, -2] = data_cube[:, :, -2]
+        data_cube_processed[:, :, -1] = data_cube[:, :, -1]
+        data_processed = data_cube_processed.reshape(Nx * Ny, Ndims + 2)
+        processed_feature_table = pd.DataFrame(
+            data=data_processed,
+            columns=columns)
+        return processed_feature_table
+
+    def processing_perform_smoothing(
+            self,
+            columns: Iterable | None = None,
+            kernel_size: int = 3,
+            sigma: float | int = 1,
+            use_mask_for_holes: bool = True,
+            classification_column: str = 'classification',
+            key_holes: int = 0
+    ):
+        """Iterate over features and apply smoothing function."""
+        # https://answers.opencv.org/question/3031/smoothing-with-a-mask/ --> not well explained
+        # https://stackoverflow.com/questions/59685140/python-perform-blur-only-within-a-mask-of-image
+
+        if columns is None:
+            columns = self.data_columns
+
+        data = self.get_data_for_columns(columns).copy()
+
+        # pixels where data is nan
+        mask_nans = data.isna()
+
+        # fill values to complete rectangular grid
+        logger.info('filling missing values')
+        data_filled, shape_filled, idx_inserted_pixels = \
+            self.get_filled_feature_table(data)
+        Nx, Ny, Ndims = shape_filled
+
+        # create mask for hole cells
+        if use_mask_for_holes:
+            logger.info('creating mask')
+            # grap classification column, x and y
+            df_mask = self.get_data_for_columns([
+                classification_column, 'x', 'y']
+            )
+            # fill missing values in df
+            df_mask, _, _ = self.get_filled_feature_table(df_mask)
+            # identify hole cells
+            mask_holes = (df_mask[classification_column]).to_numpy() == key_holes
+            # create nonhole cell with mathcing shape
+            # False --> missing value
+            # True --> available value
+            mask_nonholes = (~mask_holes.reshape(Nx, Ny)).astype(float)
+            # extend to Ndims
+            mask_nonholes = np.repeat(
+                mask_nonholes[:, :, np.newaxis], Ndims + 2, axis=2)
+        else:
+            mask_nonholes = 1
+
+        data_cube = data_filled.to_numpy().reshape((Nx, Ny, Ndims + 2))
+
+        # apply gaussian blur
+        logger.info('smooting cube')
+        data_cube_smoothed = scipy.ndimage.filters.gaussian_filter(
+            data_cube * mask_nonholes,
+            sigma=sigma, radius=kernel_size, axes=(0, 1)
+        )
+
+        # calcualte weights
+        if use_mask_for_holes:
+            logger.info('calculating weights')
+            weights = scipy.ndimage.filters.gaussian_filter(
+                mask_nonholes, sigma=sigma, radius=kernel_size, axes=(0, 1)
+            )
+        else:
+            weights = 1
+
+        # normalize smoothed by weights
+        mask_valid_weights = weights > 0
+        data_cube_smoothed[mask_valid_weights] /= weights[mask_valid_weights]
+        # set data in invalid pixels to 0
+        data_cube_smoothed *= mask_nonholes
+
+        # put back into feature table
+        # copy over x, y
+        logger.info('writing smoothed feature table')
+        data_cube_smoothed[:, :, -2] = data_cube[:, :, -2]
+        data_cube_smoothed[:, :, -1] = data_cube[:, :, -1]
+        data_smoothed = data_cube_smoothed.reshape(Nx * Ny, Ndims + 2)
+        smoothed_feature_table = pd.DataFrame(
+            data=data_smoothed,
+            columns=data_filled.columns)
+
+        # drop columns that were put in artificially
+        smoothed_feature_table = smoothed_feature_table.drop(
+            idx_inserted_pixels)
+        smoothed_feature_table = smoothed_feature_table.sort_values(
+            by=['y', 'x'])
+        smoothed_feature_table.x = smoothed_feature_table.x.astype(int)
+        smoothed_feature_table.y = smoothed_feature_table.y.astype(int)
+        smoothed_feature_table = smoothed_feature_table.reset_index(drop=True)
+
+        # set back original nans
+        smoothed_feature_table[mask_nans] = np.nan
+        logger.info('done smoothing')
+
+        self.smoothed_feature_table = smoothed_feature_table
+        return self.smoothed_feature_table
+
+    def processing_zone_wise_average(
+            self,
+            zones_key: str | float | None = None,
+            astype=float,
+            columns: Iterable | None = None,
+            exclude_zeros: bool = False,
+            correct_zeros: bool = False,
+            calc_std: bool = False,
+            **_
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | pd.DataFrame:
+        """
+        Return dataframe of zone-wise averages.
+
+        Nans will not be included in the calculation. Optionally also return
+        the standard deviations.
+
+        Parameters
+        ----------
+        zones_key : TYPE, optional
+            Column in feature table that define the zones. Rows with the same
+            value in the zones_key-column will be averaged. The returned
+            feature table contains a row for each unique value in zones-key.
+            The default is None and defaults to column-wise averages of the
+            image.
+        astype : dtype, optional
+            Convert the values in the columns to a specific type. The default
+            is float. This can be used to count certain quantites. For example,
+            setting astype to bool will calculate the nonzero density.
+        columns : Iterable | None, optional
+            The columns to include in the calculation. The default is None.
+            This defaults to the data_columns.
+        exclude_zeros: bool, optional
+            If this is True, only those pixels within each zone will be taken
+            that are not zero.
+        correct_zeros: bool, optional
+            If this option is set to True, zeros will be shifted to slightly
+            higher values for calculating the average to account for the
+            uncertainty induced by the SNR.
+        calc_std : bool, optional
+            If this is True, calculate also the standard deviation in each zone.
+            The default is False. In that case only the averaged feature table
+            will be returned. If this is True, a tuple of dataframes will be
+            returned.
+
+        Returns
+        -------
+        feature_table_averages : pd.DataFrame
+            The averaged values. Contains a row for each unique value in the
+            zones-key column and a column for each item in the passed columns
+            (or the data columns).
+        feature_table_stds : pd.DataFrame
+            The table of standard deviations for each zone for each comp.
+            Will only be returned if calc_std is True.
+        feature_table_Ns: pd.DataFrame
+            The number of nonzero entries in each zone for each comp.
+            Will only be returned if calc_std is True.
+
+        """
+        if columns is None:
+            columns: Iterable = self.data_columns
+        # column-wise if no key is given
+        if zones_key is None:
+            zones_key: str = 'zones_row_wise'
+            # set zones as x-val starting with 0
+            self._feature_table[zones_key] = self.x - self.x.min()
+
+        # get zones
+        zones: np.ndarray = np.unique(self.feature_table[zones_key])
+        # remove nan key
+        mask_keys: np.ndarray[bool] = ~np.isnan(zones)
+        zones: np.ndarray = zones[mask_keys]
+
+        # calculate zone wise averages
+        averages: np.ndarray = np.zeros_like(zones, dtype=object)
+        if calc_std:
+            stds: np.ndarray = np.zeros_like(zones, dtype=object)
+            Ns: np.ndarray = np.zeros_like(zones, dtype=object)
+        average_x_idx: np.ndarray[float] = np.zeros_like(zones, dtype=float)
+
+        data_table: pd.DataFrame = self.get_data_for_columns(columns).copy().astype(astype)
+        zones_column: pd.Series = self.feature_table.loc[:, zones_key].copy()
+        x_column = self.x.copy()
+        if exclude_zeros and correct_zeros:
+            raise KeyError('exclude zeros and correct zeros are mutually exclusive.')
+        elif exclude_zeros:
+            # nans will not be respected in mean and std
+            data_table[data_table == 0] = np.nan
+        elif correct_zeros:
+            data_table = self.get_data_zeros_corrected().loc[:, columns]
+
+        # iterate over zones
+        for idx, zone in tqdm(
+                enumerate(zones),
+                total=len(zones),
+                desc='averaging values for zones'
+        ):
+            # average of each component in that zone
+            # pixel mask: where entry in zones_key matches key
+            mask_pixels_in_zone: np.ndarray[bool] = zones_column == zone
+            # sub dataframe of data_table only containing pixels in zone
+            pixels_in_zone: pd.DataFrame = data_table.loc[mask_pixels_in_zone, :]
+            # pd.Series, averages for each compound in that zone
+            averages[idx] = pixels_in_zone.mean(axis=0, skipna=True)
+            if calc_std:
+                # sigma = sqrt(1/N * sum(x_i - mu))
+                stds[idx] = pixels_in_zone.std(axis=0, skipna=True, ddof=1)
+                Ns[idx] = (pixels_in_zone > 0).sum(axis=0, skipna=True)
+            # average depth
+            average_x_idx[idx] = x_column.loc[mask_pixels_in_zone].mean()
+        # put in feature_table
+        feature_table_averages: pd.DataFrame = pd.DataFrame(
+            data=np.vstack(averages),
+            columns=columns,
+            index=zones)
+        # add the mean x-value to data frame
+        feature_table_averages['x'] = average_x_idx
+        if calc_std:
+            feature_table_stds: pd.DataFrame = pd.DataFrame(
+                data=np.vstack(stds),
+                columns=columns,
+                index=zones)
+            feature_table_stds['x'] = average_x_idx
+            feature_table_Ns: pd.DataFrame = pd.DataFrame(
+                data=np.vstack(Ns),
+                columns=columns,
+                index=zones)
+            feature_table_Ns['x'] = average_x_idx
+
+            return feature_table_averages, feature_table_stds, feature_table_Ns
+        return feature_table_averages
+
+    def get_data_zeros_corrected(self) -> pd.DataFrame:
+        """
+        Return copy of current ft with corrected zeros.
+
+        Zeros are shifted by 1/2 the lowest value in each spectrum.
+        Since 0 could be anything between 0 and the SNR, this is on average
+        closer to the real value if equal likelyhood is assumed.
+
+        Returns
+        -------
+        pd.DataFrame
+            The feature table with shifted zeros.
+
+        """
+        # nonzero mask
+        nonzero: pd.DataFrame = self.data > 0
+        # the lowest nonzero value for each pixel
+        mins: np.ndarray[float] = (self.feature_table[nonzero]
+                                   .min(axis=1).to_numpy())
+
+        def replace_zeros(col: pd.Series) -> np.ndarray[float]:
+            col: np.ndarray[float] = col.to_numpy()
+            mask_zero: np.ndarray[bool] = col == 0
+            col[mask_zero] = mins[mask_zero] / 2
+            return col
+
+        ft: pd.DataFrame = self.feature_table.copy()
+        # add 1/2 of min to each nonzero
+        ft.apply(lambda col: replace_zeros(col), axis=0, inplace=True)
+        return ft
+
+    def plot_pca(self, n_top: int = 10) -> None:
+        """
+        Perform and plot PCA results.
+
+        Parameters
+        ----------
+        n_top : int, optional
+            Plots the top N eigen-images with the highest explained variance.
+        """
+        assert check_attr(self, '_pca')
+        # calculate loadings
+        loadings: pd.DataFrame = pd.DataFrame(
+            self._pca.components_.T,
+            columns=['PC' + str(i) for i in range(np.shape(self._pcs)[1])],
+            index=self._pca_columns)
+        pc_mode = self._pca_xy.copy()
+        top_compounds: np.ndarray[float] = self._pca.explained_variance_ratio_.cumsum()
+
+        plt.figure()
+        plt.plot(top_compounds)
+        plt.grid(True)
+        plt.xlabel('modes')
+        plt.ylabel('cumulative explained variance')
+        plt.show()
+
+        fig, axs = plt.subplots(
+            nrows=n_top,
+            ncols=2,
+            sharex='col',
+            layout='constrained'
+        )
+        # df with x, y like original FT
+        for i in range(n_top):
+            pc_mode[i] = self._pcs[:, i]
+            axs[i, 0].imshow(pc_mode.pivot(index='y', columns='x', values=i),
+                             aspect='equal',
+                             interpolation='none')
+            labels = [
+                float(loading)
+                if str(loading).replace('.', '').isnumeric()
+                else str(loading)
+                for loading in loadings.index
+            ]
+            axs[i, 1].stem(labels,
+                           loadings['PC' + str(i)],
+                           markerfmt=' ')
+
+    def plot_nmf(self, plot_log_scale: bool = False, hold: bool = False):
+        """
+        Perform and plot the results of NMF.
+
+        Parameters
+        ----------
+        plot_log_scale : bool, optional
+            If True, intensities of the images will be scaled logarithmicly.
+        hold : bool, optional
+            If True, will return the fig and axs objects for further modification.
+        """
+        assert check_attr(self, '_W'), 'call estimate_nmf first'
+
+        W, H = self._W.copy(), self._H.copy()
+        k: int = W.shape[1]
+
+        if plot_log_scale:
+            W: np.ndarray[float] = np.log(W)
+        # put in df
+        W_df: pd.DataFrame = pd.DataFrame(W, index=self._nmf_xy.index)
+
+        W_df[['x', 'y']] = self._nmf_xy
+
+        fig, axs = plt.subplots(
+            nrows=k,
+            ncols=2,
+            figsize=(10, 2 * k),
+            sharex='col', layout='constrained'
+        )
+
+        x_vals: np.ndarray = np.array(self._nmf_columns)
+        if all([x_val.replace('.', '').isnumeric() for x_val in x_vals]):
+            x_vals = x_vals.astype(float)
+
+        for i in range(k):
+            values = W_df.pivot(index='y', columns='x', values=i)
+
+            axs[i, 0].imshow(values,
+                             aspect='equal',
+                             interpolation='none')
+            axs[i, 1].stem(x_vals,
+                           H[i, :],
+                           markerfmt=' ',
+                           linefmt='blue')
+
+        if hold:
+            return fig, axs
+        plt.show()
+
+    def plot_kmeans(self):
+        assert check_attr(self, '_kmeans'), \
+            'call estimate_kmeans first'
+        fig, axs = plt.subplots(nrows=2)
+        axs[0].imshow(
+            self.feature_table.pivot(
+                index='y', columns='x', values=f'kmeans'),
+            interpolation='none',
+            cmap='Set1')
+
+        # plot corresponding centers
+        colors: list[str] = ['red', 'orange', 'gray']
+        centers = self._kmeans.cluster_centers_
+        for center, color in zip(centers, colors):
+            labels = self.data_columns.astype(float)
+            axs[1].plot(labels, center, color=color)
+        plt.show()
+
+    def plot_comp(
+            self,
+            comp: str | float | int,
+            **kwargs
+    ) -> None:
+        """
+        Plot the ion image of a compound or feature.
+
+        Parameters
+        ----------
+        comp: str | float | int
+            The compound to plot.
+        kwargs: dict, optional
+            Additional keywords for plot_comp and get_comp_as_img
+        """
+        comp = self._get_closest_mz(comp, max_deviation=None)
+        if check_attr(self, '_distance_pixels'):
+            kwargs['distance_pixels'] = self.distance_pixels
+
+        plot_comp(comp, data_frame=self.feature_table, **kwargs)
+
+    def plot_intensity_histograms(
+            self,
+            cols: Iterable = None,
+            legend: bool = False,
+            plt_log_x: bool = False,
+            plt_log_y: bool = False,
+            ignore_zeros: bool = False
+    ) -> None:
+        """
+        Plot the intensity distributions for certain compounds.
+
+        This function is useful to verify wether compound abundances follow a certain distribution.
+
+        Parameters
+        ----------
+        cols: list, optional
+            The columns for which to create the plot. Defaults to all data columns.
+        legend: bool, optional
+            Whether to add a legend for the compounds. Defaults to True.
+        plt_log_x: bool, optional
+            Whether to make the x-axis logarithmic. Default is False.
+        plt_log_y: bool, optional
+            Whether to make the x-axis logarithmic. Default is False.
+        ignore_zeros: bool, optional
+            Whether to exclude zero values from the plot. The default is False.
+        """
+        if cols is None:
+            cols: pd.Series = self.data_columns
+
+        plt.figure()
+        for col in tqdm(cols, total=len(cols), desc='plotting distributions'):
+            # exclude nans
+            mask_nonzero: pd.Series = self.feature_table[:, col] >= 0
+            intensities: pd.Series = self.feature_table[mask_nonzero, col]
+            prob, bin_edges, bin_centers = estimate_probability_distribution(
+                intensities
+            )
+            if ignore_zeros:
+                prob = prob[1:]
+                bin_centers = bin_centers[1:]
+
+            if plt_log_x and plt_log_y:
+                plt.loglog(bin_centers, prob, label=str(col))
+            elif plt_log_x:
+                plt.semilogx(bin_centers, prob, label=str(col))
+            elif plt_log_y:
+                plt.semilogy(bin_centers, prob, label=str(col))
+            else:
+                plt.plot(bin_centers, prob, label=str(col))
+            if legend:
+                plt.legend()
+        plt.show()
+
+
+class ZoneAnalyzer(DataBaseClass):
     """
     Special functionality for laminated samples.
 
     Is inherited by Data class
     """
+    def __init__(self, feature_table: pd.DataFrame | None = None):
+        self._feature_table = feature_table
 
     def calculate_KL_div(
-            self, col: str | int) -> tuple[float]:
+            self,
+            col: str | int,
+            column_classification: str = 'classification',
+            plts: bool = False
+    ) -> tuple[float]:
         """
         Calculate KL divergence for an image in the feature table.
 
@@ -178,8 +1246,6 @@ class Lamination:
         ----------
         col : str | int
             The column in the feature table for which to calculate the KL div.
-        bin_log: bool. The default is True.
-            If True, will use log scale for bin edges.
 
         Returns
         -------
@@ -188,11 +1254,12 @@ class Lamination:
             KL of light pixels, KL of dark pixels.
 
         """
-        I = self.feature_table[col].loc[
-            (self.feature_table.classification != 0) &
-            (self.feature_table[col] >= 0)]
-        I_light = I.loc[self.feature_table.classification == 255]
-        I_dark = I.loc[self.feature_table.classification == 127]
+        classification_image = self.feature_table.loc[:, column_classification]
+        I = self.feature_table[:, col].loc[
+            (classification_image != 0) &
+            (self.feature_table[:, col] >= 0)]
+        I_light = I.loc[classification_image == 255]
+        I_dark = I.loc[classification_image == 127]
         # estimate the probability distribution in the entire image
         prob, bin_edges, bin_centers = estimate_probability_distribution(I)
         # estimate the probability distribution in the light/dark pixels of the image
@@ -202,7 +1269,16 @@ class Lamination:
         prob_dark, _, _ = estimate_probability_distribution(
             I_dark, bin_edges=bin_edges)
 
-        if self.plts:
+        # calculate entropy, relative entropy
+        d_light = scipy.stats.entropy(prob_light, prob)
+        d_dark = scipy.stats.entropy(prob_dark, prob)
+
+        logger.info(
+            f'Kullback-Leibler divergence for light pixels {d_light:.4f}')
+        logger.info(
+            f'Kullback-Leibler divergence for dark pixels {d_dark:.4f}')
+
+        if plts:
             fig, axs = plt.subplots(nrows=1, ncols=2)
             axs[0].loglog(bin_centers, prob, label='pdf img')
             axs[0].plot(bin_centers, prob_light, label='pdf light')
@@ -220,17 +1296,7 @@ class Lamination:
 
             plt.show()
 
-        D_light = scipy.stats.entropy(prob_light, prob)
-        D_dark = scipy.stats.entropy(prob_dark, prob)
-
-        # calculate entropy, relative entropy
-        if self.verbose:
-            print(
-                f'Kullback-Leibler divergence for light pixels {D_light:.4f}')
-            print(
-                f'Kullback-Leibler divergence for dark pixels {D_dark:.4f}')
-
-        return D_light, D_dark
+        return d_light, d_dark
 
     def calculate_lightdark_rankings(
             self,
@@ -251,15 +1317,19 @@ class Lamination:
         use_intensities : bool, optional
             Whether to use intensities for ranking calculation (default is True).
         use_successes : bool, optional
-            Whether to consider successful spectra for ranking calculation (default is False).
+            Whether to consider successful spectra for ranking calculation
+            (default is False).
         use_KL_div : bool, optional
-            Whether to use Kullback-Leibler divergence for ranking calculation (default is False).
+            Whether to use Kullback-Leibler divergence for ranking calculation
+            (default is False).
         scale : bool, optional
             Whether to scale the rankings (default is False).
         columns : None or list of str, optional
-            List of column names to consider for ranking calculation. If None, uses all available columns (default is None).
+            List of column names to consider for ranking calculation. If None,
+             uses all available columns (default is None).
         classification_column : str, optional
-            Name of the column containing classification information (default is 'classification').
+            Name of the column containing classification information (default
+            is 'classification').
         calc_corrs : bool, optional
             Whether to calculate correlations (default is False).
         **_
@@ -484,1058 +1554,3 @@ class Lamination:
             suptitle=f'comps with highest {round(q * 100)}th quantile seasonality in \
 {self._window} window'
         )
-
-
-class ProcessingData:
-    """Functionality to clean and decompose data."""
-
-    def analyzing_PCA(self, columns=None, TH_PCA=.95, exclude_holes=False):
-        """Perform PCA analysis on the ion images."""
-        if columns is None:
-            columns = self.get_data_columns()
-        data = self.get_data_for_columns(columns)
-        # exclude rows containing only nans, mask is True for valid rows
-        mask_nonnans = ~np.isnan(data).all(axis=1)
-        # exclude holes, mask is True for valid rows
-        if exclude_holes:
-            mask_nonholes = (self.feature_table.classification != 0)
-        else:
-            mask_nonholes = np.ones_like(mask_nonnans, dtype=bool)
-        mask_valid_rows = mask_nonnans & mask_nonholes
-        data_valid = data.loc[mask_valid_rows, :].copy()
-        # fill remaining nans with zeros
-        data_valid = data_valid.fillna(0)
-        self.pca_xy = self.get_xy()[mask_valid_rows]
-        FT_s = StandardScaler().fit_transform(data_valid)
-        # do PCA:
-        self.pca = PCA(n_components=TH_PCA)
-        self.pcs = self.pca.fit_transform(FT_s)
-        return self.pca, self.pcs, self.pca_xy
-
-    def analyzing_NMF(self, k, columns=None, exclude_holes=False,
-                      use_repeated_NMF=False, N_rep=30, return_summary=False):
-        """Perform NMF analysis on the ion images"""
-        if columns is None:
-            columns = self.get_data_columns()
-        data = self.get_data_for_columns(columns)
-        # exclude rows containing only nans, mask is True for valid rows
-        mask_nonnans = ~np.isnan(data).all(axis=1)
-        # exclude holes, mask is True for valid rows
-        if exclude_holes:
-            mask_nonholes = (self.feature_table.classification != 0)
-        else:
-            mask_nonholes = np.ones_like(mask_nonnans, dtype=bool)
-        mask_valid_rows = mask_nonnans & mask_nonholes
-        data_valid = data.loc[mask_valid_rows, :].copy()
-        if np.any(data_valid.to_numpy() < 0):
-            print(f'Warning: found values smaller than 0 in NMF: \
-{np.min(np.min(data_valid))}. Clipping negative values to 0.')
-            data_valid[data_valid < 0] = 0
-        # fill remaining nans with zeros
-        data_valid = data_valid.fillna(0)
-        self.nmf_xy = self.get_xy()[mask_valid_rows]
-        FT_s = MaxAbsScaler().fit_transform(data_valid)
-
-        if use_repeated_NMF:
-            from mfe.feature import repeated_nmf
-            S = repeated_nmf(FT_s, k, N_rep, max_iter=10_000)
-            self.W = S.matrix_w_accum
-            self.H = S.matrix_h_accum
-        else:
-            model = NMF(n_components=k, max_iter=10_000, init='nndsvd')
-
-            self.W = model.fit_transform(FT_s)
-            self.H = model.components_
-        # store result in dict to be accessable by other functions such as
-        # plt_NMF
-        if not hasattr(self, 'results_NMF'):
-            self.results_NMF = {}
-        self.results_NMF[k] = (self.W, self.H)
-        if return_summary and use_repeated_NMF:
-            return self.W, self.H, S
-        return self.W, self.H
-
-    def analyzing_NMF_find_k(self, k_min=2, k_max=10, dk=1, plts=True, **kwargs):
-        """Helper method to determine the inner dimensions k for the NMF."""
-        k_vec = np.arange(k_min, k_max + dk, dk)
-        summary = []
-        k_plt = []
-
-        if plts:
-            plt.figure()
-        for k in k_vec:
-            _, _, s = self.analyzing_NMF(k, use_repeated_NMF=True,
-                                         return_summary=True, **kwargs)
-            # self.results_NMF[k] = (s.matrix_w_accum, s.matrix_h_accum)
-            summary.append(s)
-            k_plt.append(k)
-            if plts:
-                coph = [summary[i].cophcor for i in range(len(k_plt))]
-                plt.plot(k_plt, coph,
-                         'o-',
-                         label='Cophenetic correlation',
-                         linewidth=2)
-                plt.legend(loc='upper center',
-                           bbox_to_anchor=(0.5, -0.05),
-                           ncol=3,
-                           numpoints=1)
-                plt.show()
-        return summary
-
-    def analyzing_kmeans(self, n_clusters, columns=None, **kwargs):
-        """Perform k-means clustering on the ion images."""
-        if columns is None:
-            columns = self.get_data_columns()
-        kmeans = KMeans(n_clusters=n_clusters, **kwargs) \
-            .fit(self.get_data_for_columns(columns))
-        self.feature_table[f'kmeans{n_clusters}'] = kmeans.labels_
-        self.results_kmeans[n_clusters] = kmeans
-        return kmeans
-
-    def processing_sparsify(self, th_nonzero):
-        """
-        Drop compounds that fall below the threshold.
-
-        The threshold determines what fraction of pixels has to be successful in order to be kept. For example, setting
-        th_nonzero to .1 will drop all compounds that have less than 10% successful spectra
-        (meaning more than 90% of the pixels have a value of 0).
-        """
-        # sparsity before:
-        print('sparsity before:',
-              sum((self.data == 0).astype(int).sum()) /
-              self.data.size)
-
-        N = self.data.shape[0]
-        sparsed_feature_table = self.data.copy()
-        ratio_nonzero = sparsed_feature_table.astype(bool).sum(axis=0) / N
-        plt.hist(ratio_nonzero, bins=len(self.get_data_columns()) // 10)
-        print('percent compounds removed: '
-              + str((1 - (ratio_nonzero >= th_nonzero).sum() / len(ratio_nonzero)) * 100))
-        # set rows for compounds that fall below threshold to 0
-        sparsed_feature_table.loc[:, ratio_nonzero < th_nonzero] = 0
-
-        # sparsity after:
-        FT_c = sparsed_feature_table.loc[
-               :, self.get_data_columns()]
-        print('sparsity after:', sum((FT_c == 0).astype(int).sum()) / FT_c.size)
-
-        # drop all zero columns
-        print('dropping columns with too many zeros:',
-              sparsed_feature_table.shape[1] - np.sum((sparsed_feature_table != 0).any(axis=0)))
-        sparsed_feature_table = sparsed_feature_table.loc[:, (sparsed_feature_table != 0).any(
-            axis=0)]
-
-        sparsed_feature_table[['x', 'y']] = self.get_xy()
-        sparsed_feature_table = sparsed_feature_table.sort_values(
-            by=['y', 'x']).reset_index(drop=True)
-
-        return sparsed_feature_table
-
-    def processing_fill_missing(self, data: pd.DataFrame):
-        """
-        Data pixels may not fill a rectangular region.
-
-        Applying this function assures that all pixels within a rectangular region are inside the
-        feature table.
-        """
-        columns = list(data.columns)
-        # add p = (x, y) (will be droppped again later)
-        data['p'] = self.get_xy().apply(lambda row: (row.x, row.y), axis=1)
-
-        # convert the data in ft to stacked image
-        x_unique = self.feature_table.x.unique()
-        y_unique = self.feature_table.y.unique()
-        Nx = len(x_unique)
-        Ny = len(y_unique)
-        Ndims = len(columns)
-        shape_filled = (Nx, Ny, Ndims)
-
-        # data may not be in rectangular region, those x, y will be missing
-        # add zero columns for those pixels and put them in a mask
-        x_all, y_all = np.meshgrid(x_unique, y_unique)  # all x and y values
-        p = set(zip(x_all.ravel(), y_all.ravel()))  # all points
-        p_missing = list(p.difference(set(data.p)))  # missing points
-        df_zero_pixels = pd.DataFrame(
-            data=np.zeros((len(p_missing), Ndims), dtype=float) * np.nan,
-            columns=columns)
-        df_zero_pixels['p'] = p_missing
-        data_filled = pd.concat([data, df_zero_pixels]) \
-            .sort_values(by=['p']) \
-            .reset_index(drop=True)
-        # idx_inserted_pixels = [data_filled.index[data_filled.p == val][0]
-        #                        for val in p_missing]
-        idx_inserted_pixels = data_filled[data_filled['p'].isin(p_missing)].index
-        data_filled['x'] = data_filled.apply(lambda row: row.p[0], axis=1)
-        data_filled['y'] = data_filled.apply(lambda row: row.p[1], axis=1)
-        data_filled = data_filled.drop(columns=['p'])
-        # fill nans
-        data_filled = data_filled.fillna(0)
-
-        print(data_filled.shape)
-
-        return data_filled, shape_filled, idx_inserted_pixels
-
-    def get_data_cube(self, data: pd.DataFrame | None = None) -> np.ndarray:
-        if data is None:
-            data: pd.DataFrame = self.data
-        data_rect, shape_filled, _ = self.processing_fill_missing(data)
-
-        Nx, Ny, Ndims = shape_filled
-
-        print(data_rect.shape)
-        print(shape_filled)
-
-        # reshape
-        data_cube = data_rect.to_numpy().reshape((Nx, Ny, Ndims + 2))
-
-        return data_cube
-
-    def perform_on_stacked_image(self, data: pd.DataFrame, func: Callable, **kwargs):
-        """
-        Apply a function to a stacked view of the feature table.
-
-        Certain filters are quicker to apply on a multi-channel image.
-        """
-
-        # assumes that feature table contains pixels on rectangular grid,
-        # no nans
-        if ('x' not in data.columns) or ('y' not in data.columns):
-            raise ValueError('data must contain x and y column')
-        if data.shape[0] != len(data.x.unique()) * len(data.y.unique()):
-            raise ValueError('pixels in feature table must be a \
-rectangular grid. You may have to use processing_fill_missing')
-        if data.isna().any(axis=None):
-            raise ValueError('feature table cannot contain nans')
-
-        # convert to cube
-        columns = list(data.columns)
-
-        # convert the data in ft to stacked image
-        x_unique = self.feature_table.x.unique()
-        y_unique = self.feature_table.y.unique()
-        Nx = len(x_unique)
-        Ny = len(y_unique)
-        # exclude x and y column
-        Ndims = len(columns) - 2
-
-        # reshape
-        data_cube = data.to_numpy().reshape((Nx, Ny, Ndims + 2))
-        # apply function
-        data_cube_processed = func(data_cube, **kwargs)
-
-        # put back into feature table
-        # copy over x, y
-        data_cube_processed[:, :, -2] = data_cube[:, :, -2]
-        data_cube_processed[:, :, -1] = data_cube[:, :, -1]
-        data_processed = data_cube_processed.reshape(Nx * Ny, Ndims + 2)
-        processed_feature_table = pd.DataFrame(
-            data=data_processed,
-            columns=columns)
-        return processed_feature_table
-
-    def processing_perform_smoothing(
-            self, columns=None, kernel_size=3, sigma=1,
-            use_mask_for_holes=True, classification_column='classification',
-            key_holes=0
-    ):
-        """Iterate over features and apply smoothing function."""
-        # https://answers.opencv.org/question/3031/smoothing-with-a-mask/ --> not well explained
-        # https://stackoverflow.com/questions/59685140/python-perform-blur-only-within-a-mask-of-image
-
-        if columns is None:
-            columns = self.get_data_columns()
-
-        data = self.get_data_for_columns(columns).copy()
-
-        # pixels where data is nan
-        mask_nans = data.isna()
-
-        # fill values to complete rectangular grid
-        print('filling missing values')
-        data_filled, shape_filled, idx_inserted_pixels = \
-            self.processing_fill_missing(data)
-        Nx, Ny, Ndims = shape_filled
-
-        # create mask for hole cells
-        if use_mask_for_holes:
-            print('creating mask')
-            # grap classification column, x and y
-            df_mask = self.get_data_for_columns([
-                classification_column, 'x', 'y']
-            )
-            # fill missing values in df
-            df_mask, _, _ = self.processing_fill_missing(df_mask)
-            # identify hole cells
-            mask_holes = (df_mask[classification_column]).to_numpy() == key_holes
-            # create nonhole cell with mathcing shape
-            # False --> missing value
-            # True --> available value
-            mask_nonholes = (~mask_holes.reshape(Nx, Ny)).astype(float)
-            # extend to Ndims
-            mask_nonholes = np.repeat(
-                mask_nonholes[:, :, np.newaxis], Ndims + 2, axis=2)
-        else:
-            mask_nonholes = 1
-
-        data_cube = data_filled.to_numpy().reshape((Nx, Ny, Ndims + 2))
-
-        # apply gaussian blur
-        print('smooting cube')
-        data_cube_smoothed = scipy.ndimage.filters.gaussian_filter(
-            data_cube * mask_nonholes,
-            sigma=sigma, radius=kernel_size, axes=(0, 1)
-        )
-
-        # calcualte weights
-        if use_mask_for_holes:
-            print('calculating weights')
-            weights = scipy.ndimage.filters.gaussian_filter(
-                mask_nonholes, sigma=sigma, radius=kernel_size, axes=(0, 1)
-            )
-        else:
-            weights = 1
-
-        # normalize smoothed by weights
-        mask_valid_weights = weights > 0
-        data_cube_smoothed[mask_valid_weights] /= weights[mask_valid_weights]
-        # set data in invalid pixels to 0
-        data_cube_smoothed *= mask_nonholes
-
-        # put back into feature table
-        # copy over x, y
-        print('writing smoothed feature table')
-        data_cube_smoothed[:, :, -2] = data_cube[:, :, -2]
-        data_cube_smoothed[:, :, -1] = data_cube[:, :, -1]
-        data_smoothed = data_cube_smoothed.reshape(Nx * Ny, Ndims + 2)
-        smoothed_feature_table = pd.DataFrame(
-            data=data_smoothed,
-            columns=data_filled.columns)
-
-        # drop columns that were put in artificially
-        smoothed_feature_table = smoothed_feature_table.drop(
-            idx_inserted_pixels)
-        smoothed_feature_table = smoothed_feature_table.sort_values(
-            by=['y', 'x'])
-        smoothed_feature_table.x = smoothed_feature_table.x.astype(int)
-        smoothed_feature_table.y = smoothed_feature_table.y.astype(int)
-        smoothed_feature_table = smoothed_feature_table.reset_index(drop=True)
-
-        # set back original nans
-        smoothed_feature_table[mask_nans] = np.nan
-        print('done smoothing')
-
-        self.smoothed_feature_table = smoothed_feature_table
-        return self.smoothed_feature_table
-
-    def processing_reduce_noise(self):
-        pass
-
-    def processing_zone_wise_average(
-            self,
-            zones_key: str | float | None = None,
-            astype=float,
-            columns: Iterable | None = None,
-            exclude_zeros: bool = False,
-            correct_zeros: bool = False,
-            calc_std: bool = False,
-            **_
-    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | pd.DataFrame:
-        """
-        Return dataframe of zone-wise averages.
-
-        Nans will not be included in the calculation. Optionally also return
-        the standard deviations.
-
-        Parameters
-        ----------
-        zones_key : TYPE, optional
-            Column in feature table that define the zones. Rows with the same
-            value in the zones_key-column will be averaged. The returned
-            feature table contains a row for each unique value in zones-key.
-            The default is None and defaults to column-wise averages of the
-            image.
-        astype : dtype, optional
-            Convert the values in the columns to a specific type. The default
-            is float. This can be used to count certain quantites. For example,
-            setting astype to bool will calculate the nonzero density.
-        columns : Iterable | None, optional
-            The columns to include in the calculation. The default is None.
-            This defaults to the data_columns.
-        exclude_zeros: bool, optional
-            If this is True, only those pixels within each zone will be taken
-            that are not zero.
-        correct_zeros: bool, optional
-            If this option is set to True, zeros will be shifted to slightly
-            higher values for calculating the average to account for the
-            uncertainty induced by the SNR.
-        calc_std : bool, optional
-            If this is True, calculate also the standard deviation in each zone.
-            The default is False. In that case only the averaged feature table
-            will be returned. If this is True, a tuple of dataframes will be
-            returned.
-        kwargs : dict
-            Will be ingored.
-
-        Returns
-        -------
-        feature_table_averages : pd.DataFrame
-            The averaged values. Contains a row for each unique value in the
-            zones-key column and a column for each item in the passed columns
-            (or the data columns).
-        feature_table_stds : pd.DataFrame
-            The table of standard deviations for each zone for each comp.
-            Will only be returned if calc_std is True.
-        feature_table_Ns: pd.DataFrame
-            The number of nonzero entries in each zone for each comp.
-            Will only be returned if calc_std is True.
-
-        """
-        if columns is None:
-            columns = self.get_data_columns()
-        # column-wise if no key is given
-        if zones_key is None:
-            zones_key = 'zones_row_wise'
-            # set zones as x-val starting with 0
-            self.feature_table[zones_key] = \
-                self.get_x() - self.get_x().min()
-
-        # get zones
-        zones = np.unique(self.feature_table[zones_key])
-        # remove nan key
-        mask_keys = ~np.isnan(zones)
-        zones = zones[mask_keys]
-
-        # calculate zone wise averages
-        averages = np.zeros_like(zones, dtype=object)
-        if calc_std:
-            stds = np.zeros_like(zones, dtype=object)
-            Ns = np.zeros_like(zones, dtype=object)
-        average_x_idx = np.zeros_like(zones, dtype=int)
-
-        data_table = self.feature_table.loc[:, columns].copy().astype(astype)
-        zones_column = self.feature_table.loc[:, zones_key].copy()
-        x_column = self.feature_table.loc[:, 'x'].copy()
-        if exclude_zeros and correct_zeros:
-            raise KeyError('exclude zeros and correct zeros are mutually exclusive.')
-        elif exclude_zeros:
-            # nans will not be respected in mean and std
-            data_table[data_table == 0] = np.nan
-        elif correct_zeros:
-            data_table = self.get_data_zeros_corrected().loc[:, columns]
-        # iterate over zones
-        for idx, zone in enumerate(zones):
-            # average of each component in that zone
-            # pixel mask: where entry in zones_key matches key
-            mask_pixels_in_zone = zones_column == zone
-            # sub dataframe of data_table only containing pixels in zone
-            pixels_in_zone = data_table.loc[mask_pixels_in_zone, :]
-            averages[idx] = pixels_in_zone.mean(axis=0, skipna=True)
-            if calc_std:
-                # sigma = sqrt(1/N * sum(x_i - mu))
-                stds[idx] = pixels_in_zone.std(axis=0, skipna=True, ddof=1)
-                Ns[idx] = (pixels_in_zone > 0).sum(axis=0, skipna=True)
-            # average depth
-            average_x_idx[idx] = x_column.loc[mask_pixels_in_zone].mean()
-        # put in feature_table
-        feature_table_averages = pd.DataFrame(
-            data=np.vstack(averages),
-            columns=columns,
-            index=zones)
-        # add the mean x-value to data frame
-        feature_table_averages['x'] = average_x_idx
-        if calc_std:
-            feature_table_stds = pd.DataFrame(
-                data=np.vstack(stds),
-                columns=columns,
-                index=zones)
-            feature_table_stds['x'] = average_x_idx
-            feature_table_Ns = pd.DataFrame(
-                data=np.vstack(Ns),
-                columns=columns,
-                index=zones)
-            feature_table_Ns['x'] = average_x_idx
-            return feature_table_averages, feature_table_stds, feature_table_Ns
-
-        return feature_table_averages
-
-    def get_data_zeros_corrected(self):
-        """
-        Return copy of current ft with corrected zeros.
-
-        Zeros are shifted by 1/2 the lowest value in each spectrum.
-        Since 0 could be anything between 0 and the SNR, this is on average
-        closer to the real value if equal likelyhood is assumed.
-
-        Returns
-        -------
-        pd.DataFrame
-            The feature table with shifted zeros.
-
-        """
-        # data columns
-        cols = self.get_data_columns()
-        # nonzero mask
-        nonzero = self.feature_table.loc[:, cols] > 0
-        # the lowest nonzero value for each pixel
-        mins = (self.feature_table[nonzero].loc[:, cols].min(axis=1)).to_numpy()
-
-        # add 1/2 of min to each nonzero
-
-        def replace_zeros(col):
-            col = col.to_numpy()
-            col[col == 0] = mins[col == 0] / 2
-            return col
-
-        ft = self.feature_table.copy()
-        ft.loc[:, cols] = ft.loc[:, cols].apply(lambda col: replace_zeros(col), axis=0)
-        return ft
-
-    def plt_PCA(self, N_top: int = 10, title_appendix: str = '', **kwargs) -> None:
-        """
-        Perform and plot PCA results.
-
-        Parameters
-        ----------
-        N_top : int, optional
-            Plots the top N eigen-images with the highest explained variance.
-        title_appendix : str, optional
-            Optional string to append to the titel.
-        kwargs: dict
-           Optional parameters to be passed on to analyzing_PCA.
-        """
-        if self.pca is None:
-            self.analyzing_PCA(**kwargs)
-        # calculate loadings
-        if ('columns' not in kwargs) or ((index_loadings := kwargs['columns']) is None):
-            index_loadings = self.get_data_columns()
-        loadings = pd.DataFrame(
-            self.pca.components_.T,
-            columns=['PC' + str(i) for i in range(np.shape(self.pcs)[1])],
-            index=index_loadings)
-
-        top_compounds = self.pca.explained_variance_ratio_.cumsum()
-        plt.figure()
-        plt.plot(top_compounds)
-        plt.grid('on')
-        plt.xlabel('modes')
-        plt.ylabel('cumulative explained variance')
-        plt.show()
-
-        fig, axs = plt.subplots(nrows=N_top,
-                                ncols=2,
-                                sharex='col',
-                                figsize=(20, 20))
-        # df with x, y like original FT
-        pc_mode = self.pca_xy.copy()
-        for i in range(N_top):
-            pc_mode[i] = self.pcs[:, i]
-            axs[i, 0].imshow(pc_mode.pivot(index='y', columns='x', values=i),
-                             aspect='equal',
-                             interpolation='none')
-            if self._data_type == 'xrf':
-                labels = list(loadings.index)
-            else:
-                labels = [float(loading) for loading in loadings.index]
-            axs[i, 1].stem(labels,
-                           loadings['PC' + str(i)],
-                           markerfmt=' ')
-        if self._data_type == 'msi':
-            title = f'PCA on {self._section}cm, {self._window} in \
-{self._mass_window} Da, th_ref={self.peak_th_ref_peak},\n' + title_appendix
-        elif self._data_type == 'xrf':
-            title = f'PCA on {self._section}cm' + title_appendix
-        elif self._data_type == 'combined':
-            title = f'PCA on {self._section}cm' + title_appendix
-        plt.tight_layout()
-        fig.suptitle(title)
-
-    def plt_NMF(self, k,
-                plot_log_scale=False, hold=False, **kwargs):
-        """
-        Perform and plot the results of NMF.
-
-        Parameters
-        ----------
-        plot_log_scale : bool, optional
-            If True, intensities of the images will be scaled logarithmicly.
-        hold : bool, optional
-            If True, will return the fig and axs objects for further modification.
-        kwargs : dict, optional
-            kwargs passed on to analyzing_NMF. Also allows providing W and H directly.
-
-        """
-        if ('W' in kwargs.keys()) and ('H' in kwargs.keys()):
-            W = kwargs['W']
-            H = kwargs['H']
-        elif k in self.results_NMF.keys():
-            W, H = self.results_NMF[k]
-        else:
-            W, H = self.analyzing_NMF(k, **kwargs)
-
-        # put in df
-        W_df = pd.DataFrame(W, index=self.nmf_xy.index)
-
-        W_df[['x', 'y']] = self.nmf_xy
-
-        fig, axs = plt.subplots(nrows=k,
-                                ncols=2,
-                                figsize=(10, 2 * k),
-                                sharex='col')
-
-        for i in range(k):
-            values = W_df.pivot(index='y', columns='x', values=i)
-            if plot_log_scale:
-                values = np.log(values)
-            axs[i, 0].imshow(values,
-                             aspect='equal',
-                             interpolation='none')
-
-            if ('columns' not in kwargs) or (x_vals := kwargs['columns']) is None:
-                x_vals = self.get_data_columns()
-
-            if all([x_val.replace('.', '').isnumeric() for x_val in x_vals]):
-                x_vals = np.array(x_vals).astype(float)
-
-            elif H.shape[1] == len(x_vals):
-                axs[i, 1].stem(np.array(x_vals),
-                               H[i, :],
-                               markerfmt=' ',
-                               linefmt='blue')
-            else:
-                axs[i, 1].stem(range(H.shape[1]),
-                               H[i, :],
-                               markerfmt=' ',
-                               linefmt='blue')
-        plt.tight_layout(pad=1.1)
-
-        if not hold:
-            plt.show()
-        else:
-            return fig, axs
-
-    def plt_kmeans(self, n_clusters: int, **kwargs):
-        raise NotImplementedError("Deprecated")
-
-        if f'kmeans{n_clusters}' not in self.feature_table.columns:
-            self.analyzing_kmeans(n_clusters, **kwargs)
-        fig, axs = plt.subplots(nrows=2)
-        axs[0].imshow(
-            self.feature_table.pivot(
-                index='y', columns='x', values=f'kmeans{n_clusters}'),
-            interpolation='none',
-            cmap='Set1')
-
-        # plot corresponding centers
-        colors = ['red', 'orange', 'gray']
-        centers = self.results_kmeans[n_clusters].cluster_centers_
-        for center, color in zip(centers, colors):
-            if self._data_type == 'msi':
-                labels = self.get_data_columns().astype(float)
-            elif self._data_type == 'xrf':
-                labels = self.get_data_columns()
-            axs[1].plot(labels, center, color=color)
-        plt.show()
-
-
-class Data(Convinience, Lamination, ProcessingData):
-    """
-    Class to manipulate and analyze MSI or XRF data.
-
-    For application take a look at the MSI or XRF class. The Data class is not
-    ment to be used directly.
-    """
-    def save(self, save_only_relevant_cols: bool = False) -> None:
-        """Custom save function. Only nondata columns will be saved to limit disk space usage."""
-        # Actions to perform before saving to disc.
-        dict_backup = self.__dict__.copy()
-        # delete all attributes that are not flagged as relevant
-        existent_attributes = list(self.__dict__.keys())
-        keep_attributes = set(existent_attributes) & class_to_attributes(self)
-        nondata_columns_to_keep = list(Data_nondata_columns & set(self.feature_table.columns))
-        for attribute in existent_attributes:
-            if attribute not in keep_attributes:
-                self.__delattr__(attribute)
-        # drop data columns from current feature table
-        if hasattr(self, 'feature_table') and save_only_relevant_cols:
-            # make sure feature table is sorted
-            self.feature_table = self.feature_table \
-                .sort_values(by=['y', 'x']).reset_index(drop=True)
-            self.feature_table = self.feature_table.loc[
-                                 :, self.get_data_columns() + nondata_columns_to_keep
-                                 ].copy()
-
-        name = str(self.__class__).split('.')[-1][:-2] + '.pickle'
-        with open(os.path.join(self.path_d_folder, name), 'wb') as f:
-            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
-        self.__dict__ = dict_backup
-
-    def add_graylevel_from_data_frame(self, overwrite: bool = False) -> None:
-        """
-        Apply grayscale conversion in feature table.
-
-        Using the R, G and B channel inside the feature table, add grayscale values.
-        """
-        # https://docs.opencv.org/3.4/de/d25/imgproc_color_conversions.html
-        if ('L' in self.require_feature_table().columns) and (not overwrite):
-            return
-        self.feature_table['L'] = self.require_feature_table().apply(
-            lambda row:
-            round(0.299 * row.R + 0.587 * row.G + 0.114 * row.B),
-            axis=1
-        )
-
-    def require_feature_table(self) -> pd.DataFrame:
-        """
-        Return the feature table attribute if it exists and try to create it
-        from a saved spectra object if not.
-        """
-        if hasattr(self, 'feature_table'):
-            return self.feature_table
-        # enter d-folder, locate spectra file
-        spectra: Spectra = Spectra(path_d_folder=self.path_d_folder, load=True)
-        assert hasattr(spectra, 'feature_table'), 'properly save spectra object'
-        self.feature_table: pd.DataFrame = spectra.feature_table
-        return self.feature_table
-
-    def _pixels_get_photo_ROI_to_ROI(
-            self,
-            data_ROI_xywh: tuple[int, ...],
-            photo_ROI_xywh: tuple[int, ...],
-            image_ROI_xywh: tuple[int, ...]
-    ) -> None:
-        """
-        Add x_ROI, y_ROI columns.
-        """
-        # pixel coords of data, set by set_photo_ROI
-        (xd, yd, wd, hd) = data_ROI_xywh  # data units
-        # corner and dimensions of data ROI in original image
-        (xp, yp, wp, hp) = photo_ROI_xywh  # photo units
-        # region of ROI defined by find_sample_region in pixel coords of
-        # original image
-        (xr, yr, wr, hr) = image_ROI_xywh
-        # fit the pixel coords in the feature table to ROI pixel
-        # coordinates by
-        #   1. get values
-        x_ft = self.get_xy()['x'].to_numpy()
-        y_ft = self.get_xy()['y'].to_numpy()
-        #   2. shift to 0
-        x_ft = x_ft - xd
-        y_ft = y_ft - yd
-        #   3. scale so that coordinates are in terms of photo
-        x_ft = x_ft / wd * wp
-        y_ft = y_ft / hd * hp
-        # --> coordinates in terms of photo_ROI
-        #   4. shift accordingly in detected ROI
-        # first add the corners defined in photo_ROI, then subtract the
-        # offset of the detected ROI
-        # --> pixel coordinates in photo-units
-        x_ft += xp
-        y_ft += yp
-        # shift relative to origin of image ROI
-        x_ft -= xr
-        y_ft -= yr
-        # append to feature_table, so now each (x, y) has an according
-        # (x_ROI, y_ROI) corresponding to pixels in the ROI
-        self.feature_table['x_ROI'] = (x_ft + .5).astype(int)
-        self.feature_table['y_ROI'] = (y_ft + .5).astype(int)
-
-    def add_attribute_from_image(
-            self,
-            image: np.ndarray,
-            column_name: str,
-            median: bool = False,
-            coordinate_name: str = '_ROI',
-            fill_value=0,
-            plts: bool = False
-    ) -> None:
-        """
-        Add a column to the feature table from an image (ROI of sample)
-
-        Parameters
-        ----------
-        image : np.ndarray
-            The image to add to the feature table, must be grayscale and in the 
-            region of interest.
-        column_name : str
-            Name of the new column in the dataframe.
-        median : bool, optional
-            Whether to average out values around measurement points.
-            The default is False.
-
-        Returns
-        -------
-        None.
-
-        """
-        x_col = f'x{coordinate_name}'
-        y_col = f'y{coordinate_name}'
-        assert len(image.shape) == 2, 'image must be single channel'
-        if median:
-            # footprint of area to average out for classification
-            length_median = int(
-                np.median(np.diff(self.feature_table.loc[:, x_col])) / 2
-            )
-            if not length_median % 2:
-                length_median += 1
-            # for each point in feature table, take the median of an
-            # dpixels/2 x dpixels/2 area to classify point
-            image = cv2.medianBlur(image, length_median)
-
-        # zero pad for pixels outside of image extent
-        # number of pixels in the data ROI (in image coordinates)
-        y_ROI_max: int = int(np.ceil(self.feature_table.loc[:, y_col].max()))
-        x_ROI_max: int = int(np.ceil(self.feature_table.loc[:, x_col].max()))
-        image_zeropad = np.full(
-            (
-                np.max([y_ROI_max, image.shape[0]]) + 1,
-                np.max([x_ROI_max, image.shape[1]]) + 1
-            ), fill_value, dtype=image.dtype
-        )
-
-        # set values in zeropadded array
-        image_zeropad[:image.shape[0], :image.shape[1]] = image
-        # add values for each row according to pixels in image
-        # 0 + to avoid bug???
-        self.feature_table[column_name] = self.feature_table.apply(
-            # iterate over rows of df and fill image_zeropad with corresponding values
-            # (gets values in image at x_ROI, y_ROI)
-            lambda row: 0 + image_zeropad[int(row.loc[y_col]), int(row.loc[x_col])],
-            axis='columns'
-        )
-
-        if plts:
-            idxs = np.c_[self.feature_table.loc[:, y_col], self.feature_table.loc[:, x_col]]
-            plt.figure()
-            plt.imshow(image)
-            plt.plot(idxs[:, 1], idxs[:, 0], '-')
-            plt.show()
-
-            plt_cv2_image(image_zeropad,'zeropaded')
-
-            if median:
-                plt_cv2_image(
-                    image,
-                    'classification after blurring according to data points')
-
-            plt_cv2_image(image_zeropad, 'final classification')
-
-            plt.figure()
-            plt.imshow(
-                self.feature_table.pivot(
-                    index=y_col, columns=x_col, values=column_name),
-                cmap='rainbow')
-            plt.title('classification in feature table')
-            plt.show()
-
-    def combine_with(self, other: Self) -> Self:
-        """Combine two XRF objects based on the depth column."""
-
-        def both_have(attr: str, obj1=self, obj2=other) -> bool:
-            return hasattr(obj1, attr) & hasattr(obj2, attr)
-
-        assert type(self) == type(other), 'objects must be of the same type'
-        assert 'depth' in self.feature_table.columns, \
-            'found no depth column in first object'
-        assert 'depth' in other.feature_table.columns, \
-            'found no depth column in second object'
-        assert self.feature_table.depth.max() <= other.feature_table.depth.min(), \
-            'first object must have smaller depths and depth intervals cannot overlap'
-
-        # determine the new folder
-        paths: list[str] = [self.path_folder, other.path_folder]
-        new_path: str = os.path.commonpath(paths)
-        print(f'found common path: {new_path}')
-
-        Data_new: Self = self.__class__(
-            path_folder=new_path,
-            distance_pixels=self.distance_pixels
-        )
-
-        self_df: pd.DataFrame = self.feature_table.copy()
-        other_df: pd.DataFrame = other.feature_table.copy()
-
-        # set min to 0
-        other_df.loc[:, 'x'] -= other_df.x.min()
-        # shift by last value of this df
-        other_df.loc[:, 'x'] += self_df.x.max()
-        if both_have('x_ROI', self_df, other_df):
-            # set min to 0
-            other_df.loc[:, 'x_ROI'] -= other_df.x_ROI.min()
-            # shift by last value of this df
-            other_df.loc[:, 'x_ROI'] += self_df.x_ROI.max()
-
-        new_df: pd.DataFrame = pd.concat(
-            [self_df, other_df],
-            axis=0
-        ).reset_index(drop=True)
-        Data_new.feature_table = new_df
-
-        return Data_new
-
-    def correct_depths_by_angle(self):
-        # TODO: this
-        ...
-        raise NotImplementedError()
-
-    def split_at_depth(self, depth: float):
-        """Split feature table at depth [cm] and return upper and lower section."""
-        assert 'depth' in self.feature_table.columns
-
-        idxs_u = np.argwhere(self.feature_table.depth < depth)[:, 0]
-        idxs_l = np.argwhere(self.feature_table.depth >= depth)[:, 0]
-
-        Du = self.feature_table.iloc[idxs_u, :]
-        Dl = self.feature_table.loc[idxs_l, :]
-        return Du, Dl
-
-    def _get_data_columns_xrf(self) -> np.ndarray[str] | None:
-        """Return columns corresponding to data."""
-        if ('feature_table' not in self.__dict__) or (self.feature_table is None):
-            return None
-        columns = self.feature_table.columns
-
-        # data columns are elements
-        columns_valid = [col for col in columns if
-                         col in list(elements.Abbreviation)]
-
-        data_columns = np.array(columns_valid)
-        return data_columns
-
-    def _get_data_columns_msi(self) -> np.ndarray[str] | None:
-        """Return columns corresponding to data."""
-        if ('feature_table' not in self.__dict__) or (self.feature_table is None):
-            return None
-        columns = self.feature_table.columns
-        # only return cols with masses
-        columns_valid: list[str] = [
-            col for col in columns if str(col).replace(
-                '.', '', 1
-            ).isdigit()
-        ]
-
-        data_columns: np.ndarray[str] = np.array(columns_valid)
-        return data_columns
-
-    def get_data_columns(self, which: str | None = None) -> list[str] | None:
-        if which is None:
-            return np.concatenate((
-                self._get_data_columns_msi(), self._get_data_columns_xrf()
-            ))
-        elif which == 'xrf':
-            return np.array(self._get_data_columns_xrf())
-        elif which == 'msi':
-            return np.array(self._get_data_columns_msi())
-        else:
-            raise KeyError('which must be "xrf", "msi" or None')
-
-    @property
-    def data(self):
-        """Return only that part of the feature table that corresponds to data."""
-        return self.feature_table.loc[:, self.get_data_columns()]
-
-    def get_xy(self):
-        """Return the x and y column of the feature table."""
-        return self.feature_table.loc[:, ['x', 'y']]
-
-    def get_x(self):
-        """Return the x column of the feature table."""
-        return self.feature_table.loc[:, ['x']]
-
-    def get_y(self):
-        """Return the y column of the feature table."""
-        return self.feature_table.loc[:, ['y']]
-
-    def get_nondata_columns(self):
-        """Return all columns of the feature table that are not data."""
-        # cols to check against
-        dcols = set(self.get_data_columns())
-        nondata_columns = [
-            col for col in self.feature_table.columns
-            if col not in dcols]
-        return nondata_columns
-
-    def get_nondata(self):
-        """Return that part of the feature table that does not corresponds to data."""
-        nondata = self.feature_table.loc[
-                  :, self.get_nondata_columns()]
-        return nondata
-
-    def get_data_for_columns(self, columns: list):
-        """Return part of the feature table specified by columns."""
-        return self.feature_table.loc[:, columns]
-
-    def get_data_mean(self):
-        """Get the mean values for each feature in the feature table."""
-        return self.data.mean(axis=0)
-
-    def plot_comp(
-            self,
-            comp: str | float | int,
-            **kwargs
-    ):
-        """
-        Plot the ion image of a compound or feature.
-
-        Parameters
-        ----------
-        comp: str | float | int
-            The compound to plot.
-        kwargs: dict, optional
-            Additional keywords for plot_comp and get_comp_as_img
-        """
-        comp = self._get_closest_mz(comp, max_deviation=None)
-        if hasattr(self, 'distance_pixels'):
-            kwargs['distance_pixels'] = self.distance_pixels
-
-        plot_comp(comp, data_frame=self.feature_table, **kwargs)
-
-    def plt_intensity_distributions(
-            self, cols=None, bin_log=True, legend=False,
-            plt_log_x=False, plt_log_y=False, ignore_zeros=False):
-        """
-        Plot the intensity distributions for certain compounds.
-
-        This function is useful to verify wether compound abundances follow a certain distribution.
-
-        Parameters
-        ----------
-        cols: list, optional
-            The columns for which to create the plot. Defaults to all data columns.
-        bin_log: bool, optional
-            Whether to bin the intensities on a log scale. Defaults to True.
-        legend: bool, optional
-            Whether to add a legend for the compounds. Defaults to True.
-        plt_log_x: bool, optional
-            Whether to make the x-axis logarithmic. Default is False.
-        plt_log_y: bool, optional
-            Whether to make the x-axis logarithmic. Default is False.
-        ignore_zeros: bool, optional
-            Whether to exclude zero values from the plot. The default is False.
-        """
-        if cols is None:
-            cols = self.get_data_columns()
-        plt.figure()
-        for col in cols:
-            # exclude nans
-            intensities = self.feature_table[col].loc[
-                self.feature_table[col] >= 0]
-            prob, bin_edges = estimate_probability_distribution(
-                intensities, log=bin_log
-            )
-            bin_centers = bin_edges[:-1] + np.diff(bin_edges) / 2
-            bin_centers /= bin_centers.max()
-            if ignore_zeros:
-                prob = prob[1:]
-                bin_centers = bin_centers[1:]
-
-            if plt_log_x and plt_log_y:
-                plt.loglog(bin_centers, prob, label=str(col))
-            elif plt_log_x:
-                plt.semilogx(bin_centers, prob, label=str(col))
-            elif plt_log_y:
-                plt.semilogy(bin_centers, prob, label=str(col))
-            else:
-                plt.plot(bin_centers, prob, label=str(col))
-            if legend:
-                plt.legend()
-        plt.show()

@@ -67,17 +67,17 @@ def get_comp_as_img(
             (classification_column is not None) and
             (classification_column not in data_frame.columns)
     ):
-        logger.warning(
+        logger.info(
             f'did not find the column {classification_column} in '
             f'the feature table classifying the holes, so not excluding pixels'
         )
         exclude_holes: bool = False
 
     img_mz: np.ndarray[float] = data_frame.pivot(
-        index=idx_x, columns=idx_y, values=comp).to_numpy().astype(float)
+        index=idx_y, columns=idx_x, values=comp).to_numpy().astype(float)
     if exclude_holes and (classification_column is not None):
         mask_holes: np.ndarray[bool] = data_frame.pivot(
-            index=idx_x, columns=idx_y, values=classification_column
+            index=idx_y, columns=idx_x, values=classification_column
         ).to_numpy() == key_hole_pixels
         img_mz[mask_holes] = np.nan
     return img_mz, idx_x, idx_y
@@ -244,8 +244,8 @@ def plot_comp(
         keywords for get_comp_as_img
     """
     if img_mz is None:
-        assert data_frame is not None
-        assert comp in data_frame.columns
+        assert data_frame is not None, 'if no image is provided, provide a dataframe'
+        assert comp in data_frame.columns, f'{comp=} is not in the dataframe'
     img_mz, idx_x, idx_y = get_comp_as_img(
         data_frame=data_frame, comp=comp, flip=flip, **kwargs
     )
@@ -332,9 +332,19 @@ def plot_comp(
         ticklabels[0] = r'$\leq$' + ticklabels[0]
     if vmax < np.nanmax(img_mz):
         ticklabels[-1] = r'$\geq$' + ticklabels[-1]
-    cbar = plt.colorbar(im, cax=cax, ticks=ticks)
-    cbar.ax.set_yticklabels(ticklabels)
-    cbar.ax.set_ylabel('Intensity', rotation=270 if portait_mode else 0)
+    cbar = plt.colorbar(
+        im,
+        cax=cax,
+        ticks=ticks,
+        orientation='vertical' if portait_mode else 'horizontal'
+    )
+
+    if portait_mode:
+        cbar.ax.set_yticklabels(ticklabels)
+        cbar.ax.set_ylabel('Intensity', rotation=270)
+    else:
+        cbar.ax.set_xticklabels(ticklabels)
+        cbar.ax.set_xlabel('Intensity')
     if save_png is not None:
         plt.savefig(save_png, dpi=300)
     if hold:

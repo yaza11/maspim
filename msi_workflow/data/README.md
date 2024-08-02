@@ -86,8 +86,9 @@ msi.set_feature_table_from_spectra(spec)
 ```
 
 Now we are ready to do some analysis, e.g. nonnegative matrix factorization
+
 ```python
-msi.plt_NMF(k=5)
+msi.plot_nmf(k=5)
 ```
 
 ### XRF Data
@@ -121,6 +122,7 @@ Set the feature table.
 xrf.set_feature_table_from_txts()
 ```
 Now we are ready to do some analysis, e.g. nonnegative matrix factorization
+
 ```python
-xrf.plt_NMF(k=5)
+xrf.plot_nmf(k=5)
 ```

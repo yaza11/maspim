@@ -541,7 +541,8 @@ class Spectra(Convinience):
     def set_noise_level(
             self,
             window_size: int | float | None = None,
-            plts: bool = False
+            plts: bool = False,
+            **_
     ):
         """
         Estimate and remove the noise level from the summed intensities.
@@ -1267,7 +1268,11 @@ class Spectra(Convinience):
         return mz_c, H, sigma_l, sigma_r
 
     def _kernel_fit_from_peak(
-            self, peak_idx: int, sigma_max: float = 5e-3, **ignore
+            self,
+            peak_idx: int,
+            sigma_max: float = 5e-3,
+            suppress_warnings: bool = False,
+            **ignore
     ) -> np.ndarray | None:
         """
         Fine-tune kernel parameters for a peak with the shape of a (bi)gaussian.
@@ -1282,9 +1287,13 @@ class Spectra(Convinience):
         sigma_max: float, optional
             The maximum allowed value for sigma. Defaults to 5 mDa. Larger
             peaks are likely coelutions.
+        suppress_warnings: bool, optional
+            If this is set to True, will not throw a warning if parameters
+            can not be determined.
         """
         assert check_attr(self, '_peaks'), 'call set_peaks first'
-        assert check_attr(self, '_kernel_params'), 'call set_kernel_params first'
+        assert check_attr(self, '_kernel_params'), \
+            'call set_kernel_params first'
 
         if len(ignore) > 0:
             logger.info(f'unused kwargs in set_kernels: {ignore}')
@@ -1302,7 +1311,7 @@ class Spectra(Convinience):
             return None
 
         mz_c, H, sigma, *sigma_r = self._kernel_params[peak_idx, :]
-        if sigma > sigma_max:
+        if (sigma > sigma_max) and not suppress_warnings:
             logger.warning(
                 f'sigma of kernel ({sigma * 1e3:.1f} mDa) with index {peak_idx} '
                 f'is bigger than max ({sigma_max * 1e3:.1f} mDa), halfing sigma.'
@@ -1339,11 +1348,12 @@ class Spectra(Convinience):
                 bounds=(bounds_l, bounds_r)
             )
         except ValueError as e:
-            logger.warning(
-                f'encountered a value error while trying to find parameters '
-                f'for peak with index {peak_idx}: \n {e} \n'
-                f'This can happen for double peaks.'
-            )
+            if not suppress_warnings:
+                logger.warning(
+                    f'encountered a value error while trying to find parameters '
+                    f'for peak with index {peak_idx}: \n {e} \n'
+                    f'This can happen for double peaks.'
+                )
             return
 
         return params
@@ -2012,92 +2022,6 @@ class Spectra(Convinience):
             tic = self._tic[c]
             self._losses[c, :] = np.abs(y_rec - spec) / tic if tic else 0
 
-    def plot_losses(self, n_max_spectra=1000, n_max_masses=1000):
-        # summed at top
-        # TIC at left side
-        # heat map in middle
-        # spectra-wise loss at right
-        assert check_attr(self, '_losses')
-
-        # Create figure and main axis for the heatmap
-        fig, ax = plt.subplots(layout='compressed', figsize=(15, 12))
-
-        # we can only plot a selection
-        n_spectra = min([n_max_spectra, self._n_spectra])
-        n_masses = min([n_max_masses, len(self.mzs)])
-        every_spectra = round(self._n_spectra/n_spectra)
-        every_masses = round(len(self.mzs) / n_masses)
-
-        losses = self._losses[::every_spectra, ::every_masses]
-
-        # Plot heatmap
-        ax.imshow(
-            np.log(losses),
-            aspect='auto',
-            cmap='viridis',
-            extent=[
-                self.mzs[0],
-                self.mzs[-1],
-                self.indices.max(),
-                self.indices.min()
-            ],
-            origin='upper'
-        )
-
-        # Create additional axes for the functions
-        top_ax = ax.inset_axes([0, 1, 1, 0.2])
-        bottom_ax = ax.inset_axes([0, -0.2, 1, 0.2])
-        left_ax = ax.inset_axes([-0.2, 0, 0.2, 1])
-        right_ax = ax.inset_axes([1, 0, 0.2, 1])
-
-        # Plot the functions on each axis
-        # normalized to total intensity of spectrum
-        spectra_wise_loss = np.trapz(self._losses, dx=self.delta_mz, axis=1)
-        # average loss at masses, normalized to average intensity
-        mass_wise_loss = np.nanmedian(self._losses, axis=0)
-
-        top_ax.plot(self.mzs, self.intensities, color='C0')
-        bottom_ax.plot(self.mzs, mass_wise_loss, color='C1')
-        left_ax.plot(
-            self._tic, self.indices, color='C0'
-        )
-        right_ax.plot(spectra_wise_loss, self.indices, color='C1')
-
-        # Hide x and y ticks for the function plots
-        top_ax.set_xticks([])
-        top_ax.set_title('summed intensities')
-
-        bottom_ax.set_title('mass-wise loss', y=-0.3)
-
-        left_ax.set_title('spectra-wise TIC')
-        left_ax.set_ylabel('index')
-
-        right_ax.set_yticks([])
-        right_ax.set_title('spectra-wise loss')
-
-        # Adjust the limits to match the heatmap extent
-        top_ax.set_xlim(ax.get_xlim())
-        bottom_ax.set_xlim(ax.get_xlim())
-        left_ax.set_ylim(ax.get_ylim())
-        right_ax.set_ylim(ax.get_ylim())
-
-        # Show plot
-        plt.show()
-
-        # distribution
-        plt.hist(
-            self._losses[~np.isnan(self._losses)],
-            bins=np.linspace(
-                np.nanmin(self._losses),
-                np.nanquantile(self._losses, .95),
-                1000
-            )
-        )
-        plt.title(f'Distribution of losses (median = {np.nanmedian(self._losses):.2f})')
-        plt.xlabel('Normed loss')
-        plt.ylabel('Count')
-        plt.show()
-
     def filter_line_spectra(
             self, SNR_threshold: float = 0, intensity_min: float = 0, **_: dict
     ) -> np.ndarray[bool]:
@@ -2358,6 +2282,92 @@ class Spectra(Convinience):
         ax_r.legend(['shift in mDa'])
 
         fig.tight_layout()
+        plt.show()
+
+    def plot_losses(self, n_max_spectra=1000, n_max_masses=1000):
+        # summed at top
+        # TIC at left side
+        # heat map in middle
+        # spectra-wise loss at right
+        assert check_attr(self, '_losses')
+
+        # Create figure and main axis for the heatmap
+        fig, ax = plt.subplots(layout='compressed', figsize=(15, 12))
+
+        # we can only plot a selection
+        n_spectra = min([n_max_spectra, self._n_spectra])
+        n_masses = min([n_max_masses, len(self.mzs)])
+        every_spectra = round(self._n_spectra/n_spectra)
+        every_masses = round(len(self.mzs) / n_masses)
+
+        losses = self._losses[::every_spectra, ::every_masses]
+
+        # Plot heatmap
+        ax.imshow(
+            np.log(losses),
+            aspect='auto',
+            cmap='viridis',
+            extent=[
+                self.mzs[0],
+                self.mzs[-1],
+                self.indices.max(),
+                self.indices.min()
+            ],
+            origin='upper'
+        )
+
+        # Create additional axes for the functions
+        top_ax = ax.inset_axes([0, 1, 1, 0.2])
+        bottom_ax = ax.inset_axes([0, -0.2, 1, 0.2])
+        left_ax = ax.inset_axes([-0.2, 0, 0.2, 1])
+        right_ax = ax.inset_axes([1, 0, 0.2, 1])
+
+        # Plot the functions on each axis
+        # normalized to total intensity of spectrum
+        spectra_wise_loss = np.trapz(self._losses, dx=self.delta_mz, axis=1)
+        # average loss at masses, normalized to average intensity
+        mass_wise_loss = np.nanmedian(self._losses, axis=0)
+
+        top_ax.plot(self.mzs, self.intensities, color='C0')
+        bottom_ax.plot(self.mzs, mass_wise_loss, color='C1')
+        left_ax.plot(
+            self._tic, self.indices, color='C0'
+        )
+        right_ax.plot(spectra_wise_loss, self.indices, color='C1')
+
+        # Hide x and y ticks for the function plots
+        top_ax.set_xticks([])
+        top_ax.set_title('summed intensities')
+
+        bottom_ax.set_title('mass-wise loss', y=-0.3)
+
+        left_ax.set_title('spectra-wise TIC')
+        left_ax.set_ylabel('index')
+
+        right_ax.set_yticks([])
+        right_ax.set_title('spectra-wise loss')
+
+        # Adjust the limits to match the heatmap extent
+        top_ax.set_xlim(ax.get_xlim())
+        bottom_ax.set_xlim(ax.get_xlim())
+        left_ax.set_ylim(ax.get_ylim())
+        right_ax.set_ylim(ax.get_ylim())
+
+        # Show plot
+        plt.show()
+
+        # distribution
+        plt.hist(
+            self._losses[~np.isnan(self._losses)],
+            bins=np.linspace(
+                np.nanmin(self._losses),
+                np.nanquantile(self._losses, .95),
+                1000
+            )
+        )
+        plt.title(f'Distribution of losses (median = {np.nanmedian(self._losses):.2f})')
+        plt.xlabel('Normed loss')
+        plt.ylabel('Count')
         plt.show()
 
 

@@ -35,7 +35,7 @@ ImageTransformation_disc_attributes = {}
 
 Data_disc_attributes = {
     'distance_pixels',
-    'feature_table',
+    '_feature_table',
     'depth_section',
     'age_span'
 }
@@ -135,6 +135,8 @@ Transformation_attributes = {
 
 Mapper_attributes = {'_Us', '_Vs', '_image_shape', '_tag'}
 
+AgeModel_attributes = {'df', '_in_file', 'save_file', 'column_age', 'column_depth'}
+
 name_to_attrs = {
     'Image': Image_disc_attributes,
     'ImageSample': ImageSample_disc_attributes,
@@ -151,7 +153,8 @@ name_to_attrs = {
     'SampleImageHandlerXRF': SampleImageHandlerXRF_attributes,
     'MultiSectionSpectra': MultiSectionSpectra_attributes,
     'Transformation': Transformation_attributes,
-    'Mapper': Mapper_attributes
+    'Mapper': Mapper_attributes,
+    'AgeModel': AgeModel_attributes
 }
 
 

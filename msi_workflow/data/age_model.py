@@ -7,6 +7,8 @@ import logging
 from typing import Self
 from collections.abc import Iterable
 
+from matplotlib import pyplot as plt
+
 from msi_workflow.util import Convinience
 
 logger = logging.getLogger('msi_workflow.' + __name__)
@@ -33,18 +35,22 @@ class AgeModel(Convinience):
     """
     Offer depth-age conversions for tabled data.
 
-    This object allows to read in tabulated age data, interpolate between missing depth and combine multiple objects.
+    This object allows to read in tabulated age data, interpolate between
+    missing depth and combine multiple objects.
 
     Example Usage
     -------------
-    Usually the depth-age information is stored in a separate file. The file reader is a wrapper around the pandas read
-    functions, hence, to read data in correctly, the user is referenced to the documentation of read_csv, read_excel,
-    depending on the file type. For a tab separated file with column names 'age' and 'depth' the initalization can look like this:
-    >>> from data.cAgeModel import AgeModel
+    Usually the depth-age information is stored in a separate file. The file
+    reader is a wrapper around the pandas read functions, hence, to read data
+    in correctly, the user is referenced to the documentation of read_csv,
+    read_excel, depending on the file type. For a tab separated file with
+    column names 'age' and 'depth' the initalization can look like this:
+    >>> from msi_workflow import AgeModel
     >>> age_model = AgeModel(path_file='path/to/file.txt', sep='\t', index_col=False)
-    The class expects the depth data to be in cm below seaflow and the age in years. Oftentimes this is not the case.
-    Here, the add_depth_offset and convert_depth_scale methods are handy (call order does not matter,
-    but a different depth offset is required after converting the depth-scale)
+    The class expects the depth data to be in cm below seaflow and the age in
+    years. Oftentimes this is not the case. Here, the add_depth_offset and
+    convert_depth_scale methods are handy (call order does not matter, but a
+    different depth offset is required after converting the depth-scale)
     >>> age_model.convert_depth_scale(1 / 10)  # converts mm to cm
     >>> age_model.add_depth_offset(500)  # age model starts add 500 cmbsf
     Those parameters can also be provided upon initialization
@@ -55,8 +61,8 @@ class AgeModel(Convinience):
     >>>     sep='\t',
     >>>     index_col=False
     >>> )
-    In this case the depth offset is applied first.
-    By default, the age model will be saved in the same folder from which the data has been loaded
+    In this case the depth offset is applied first. By default, the age model
+    will be saved in the same folder from which the data has been loaded
     >>> age_model.save()  # saves the object in 'path/to'
     This can be changed by providing a path
     >>> age_model.save('path/to/desired/folder')
@@ -67,6 +73,7 @@ class AgeModel(Convinience):
     """
     def __init__(
             self,
+            *,
             path_file: str | None = None,
             depth: Iterable | None = None,
             age: Iterable | None = None,
@@ -87,7 +94,8 @@ class AgeModel(Convinience):
 
         :param path_file: file from which to load the age model, see _read_file for more information
         :param depth: depth vector to be used and
-        :param age: age vector to be used for the age model, age and depth must have the same length
+        :param age: age vector to be used for the age model, age and depth must
+            have the same length
         :param column_depth: name of the depth column in the data frame
         :param column_age: name of the age column in the data frame
         :param depth_offset: depth offset to be added to the depth column
@@ -142,6 +150,7 @@ class AgeModel(Convinience):
     def path_file(self, path_file: str) -> None:
         self.path_folder: str = os.path.dirname(path_file)
         self.save_file: str = os.path.basename(path_file)
+        self._in_file: str = self.save_file
 
     def _read_file(self, depth_offset: float | int, conversion_to_cm: float | int, **kwargs) -> None:
         """
@@ -160,11 +169,12 @@ class AgeModel(Convinience):
             self.df: pd.DataFrame = pd.read_excel(file, **kwargs)
         else:  # suffix pickle
             self.load()
+        print(self.__dict__.keys())
         # strip whitespaces
-        try:  # depending on pandas version
-            self.df: pd.DataFrame = self.df.map(lambda x: x.strip() if isinstance(x, str) else x)
-        except AttributeError:  # if map does not exist in installed pandas version
-            self.df: pd.DataFrame = self.df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+        self.df: pd.DataFrame = self.df.map(
+            lambda x: x.strip() if isinstance(x, str) else x
+        )
+
         self.df.columns = self.df.columns.str.strip()
 
         # try to infere missing columns
@@ -208,9 +218,17 @@ class AgeModel(Convinience):
         """Apply a depth offset to the depth column"""
         self.df.loc[:, self.column_depth] += depth_offset
 
+    def add_age_offset(self, age_offset: float | int):
+        """Apply a depth offset to the depth column"""
+        self.df.loc[:, self.column_age] += age_offset
+
     def convert_depth_scale(self, factor: float | int):
         """Apply a conversion factor"""
         self.df.loc[:, self.column_depth] *= factor
+
+    def convert_age_scale(self, factor: float | int):
+        """Apply a conversion factor"""
+        self.df.loc[:, self.column_age] *= factor
 
     @property
     def depth(self):
@@ -246,6 +264,15 @@ class AgeModel(Convinience):
             raise ValueError('Depths not always increasing!')
         # lineraly interpolate between values
         return np.interp(depth, self.depth, self.age)
+
+    def plot(self):
+        fig, ax = plt.subplots()
+        ax.plot(self.depth, self.age)
+        ax.set_xlabel('Depth in cmbsf')
+        ax.set_ylabel('Age in yrs b2k')
+        ax.grid(True)
+
+        plt.show()
 
     def __add__(self, other: Self) -> Self:
         """

@@ -224,10 +224,10 @@ if __name__ == '__main__':
     a = a.split_at_depth(494.99)[0]
     a.plot_comp(mC37_2)
 
-    a.analyzing_NMF(k=5)
+    a.estimate_nmf(k=5)
 
     # %%
-    fig, axs = a.plt_NMF(k=5, hold=True)
+    fig, axs = a.plot_nmf(k=5, hold=True)
 
     for ax in list(axs[:, 0]):
         ax.set_axis_off()
@@ -353,8 +353,8 @@ if __name__ == '__main__':
     # self = m
     # self.processing_perform_smoothing(kernel_size=5)
     # self.current_feature_table = self.smoothed_feature_table
-    # self.analyzing_NMF(k=5, use_repeated_NMF=True, N_rep=10)
-    # self.plt_NMF(k=5)
+    # self.estimate_nmf(k=5, use_repeated_NMF=True, N_rep=10)
+    # self.plot_nmf(k=5)
     # find_gray_mode(self)
 
     # m.plot_comp('classification', exclude_holes=False)

@@ -11,7 +11,10 @@ from msi_workflow.project.file_helpers import find_matches
 from msi_workflow.res.constants import elements
 
 
-def handle_video_file(folder: str, file_name: str) -> list[np.ndarray, np.ndarray, np.ndarray]:
+def handle_video_file(
+        folder: str,
+        file_name: str
+) -> list[np.ndarray, np.ndarray, np.ndarray]:
     """
     Reads a csv file with image data and returns values as vectors.
 
@@ -64,7 +67,7 @@ class XRF(Data):
     Example Usage
     -------------
     Import
-    >>> from data.cXRF import XRF
+    >>> from msi_workflow import XRF
     Initialize
     >>> xrf = XRF(path_folder='path/to/your/folder')
     By default the measurement name will be infered from the folder name and the distance_pixels
@@ -75,7 +78,7 @@ class XRF(Data):
     >>> xrf.set_feature_table_from_txts()
 
     Now we are ready to do some analysis, e.g. nonnegative matrix factorization
-    >>> xrf.plt_NMF(k=5)
+    >>> xrf.plot_nmf(k=5)
     """
     def __init__(
             self, 
@@ -198,7 +201,7 @@ class XRF(Data):
                 vecs.append(txt_to_vec(self.path_folder, file))
                 keys.append(element)
         # combine to feature_table
-        self.feature_table = pd.DataFrame(data=np.vstack(vecs).T, columns=keys)
+        self._feature_table = pd.DataFrame(data=np.vstack(vecs).T, columns=keys)
 
 
 if __name__ == '__main__':
