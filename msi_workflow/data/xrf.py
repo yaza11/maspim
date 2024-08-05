@@ -80,6 +80,16 @@ class XRF(Data):
     Now we are ready to do some analysis, e.g. nonnegative matrix factorization
     >>> xrf.plot_nmf(k=5)
     """
+    _save_attrs: set[str] = {
+        'default_file_type',
+        'measurement_name',
+        'prefix_files',
+        'distance_pixels',
+        '_feature_table',  # it could be processed, so not necessarily redundant information
+        'depth_section',
+        'age_span'
+    }
+
     def __init__(
             self, 
             path_folder: str,

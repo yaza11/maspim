@@ -206,11 +206,12 @@ def plot_comp(
         flip: bool = False,
         SNR_scale: bool = False,
         N_labels: int = 5,
-        y_tick_precision: int = 0,
+        tick_precision: int = 0,
         distance_pixels = None,
         hold: bool = False,
         fig: plt.Figure | None = None,
         ax: plt.Axes | None = None,
+        ticks_on_longer_axis: bool = True,
         **kwargs
 ):
     """
@@ -227,10 +228,6 @@ def plot_comp(
         not be saved.
     flip: bool, optional
         Whether to flip the image over its main diagonal.
-    clip_above_percentile: float | None, optional
-        By default values are clipped to the 95th percentile for data features.
-        Nondata features are by default not clipped. Providing a value will
-        clip the data at the given quantile (valid values are (0, 1]).
     SNR_scale: bool, optional
         This changes the ticks behavior of the intensity scale. If this value
         is set to True, 4 ticks will be used with the lowest one always being 0.
@@ -238,7 +235,7 @@ def plot_comp(
         minimum value of the ion image).
     N_labels: int, optional
         The number of ticks on the depth scale. The default is 5.
-    y_tick_precision: int, optional,
+    tick_precision: int, optional,
         The number decimals of the depth scale. The default is 0.
     kwargs: dict, optional
         keywords for get_comp_as_img
@@ -251,6 +248,10 @@ def plot_comp(
     )
 
     img_clipped, vmin, vmax = clip_image(img_mz, comp=comp, **kwargs)
+    if 'vmin' not in kwargs:
+        kwargs['vmin'] = vmin
+    if 'vmax' not in kwargs:
+        kwargs['vmax'] = vmax
 
     if fig is None:
         assert ax is None
@@ -258,24 +259,46 @@ def plot_comp(
     else:
         hold = True
 
-    im = plt.imshow(img_clipped,
-                    aspect='equal',
-                    interpolation='none',
-                    vmin=vmin,
-                    vmax=vmax)
+    # chose the y or x axis, depending on ticks_on_longer_axis
+    tick_axis: int = (np.argmax(img_clipped.shape)
+                 if ticks_on_longer_axis
+                 else np.argmin(img_clipped.shape))
+    tick_axis: str = ['y', 'x'][tick_axis]
+
+
+    if 'aspect' not in kwargs:
+        kwargs['aspect'] = 'equal'
+    if 'interpolation' not in kwargs:
+        kwargs['interpolation'] = 'none'
+
+    keys_imshow = (
+        'cmap norm aspect interpolation alpha vmin vmax origin extent '
+        'interpolation_stage filternorm filterrad resample url data'
+    ).split()
+    kwargs_imshow = {k: v for k, v in kwargs.items() if k in keys_imshow}
+
+    im = plt.imshow(
+        img_clipped,
+        **kwargs_imshow
+    )
 
     if title is None:
         title = f'{comp}'
 
-    y_tick_positions = np.linspace(
+    tick_positions = np.linspace(
         start=0,
-        stop=img_clipped.shape[0],
+        stop=img_clipped.shape[0] if tick_axis == 'y' else img_clipped.shape[1],
         num=N_labels,
         endpoint=True
     )
-    ax.set_ylabel(r'depth (cm)')
+
+    if tick_axis == 'y':
+        ax.set_ylabel(r'depth (cm)')
+    else:
+        ax.set_xlabel(r'depth (cm)')
+
     if 'depth' in data_frame.columns:
-        y_tick_labels = np.linspace(
+        tick_labels = np.linspace(
             start=data_frame.depth.min(),
             stop=data_frame.depth.max(),
             num=N_labels,
@@ -283,38 +306,42 @@ def plot_comp(
         )
     elif distance_pixels is not None:
         pixel_to_depth = distance_pixels * 1e-4  # cm
-        y_tick_labels = y_tick_positions * pixel_to_depth
+        tick_labels = tick_positions * pixel_to_depth
     else:
         if flip:
             col_d = idx_x
         else:
             col_d = idx_y
-        y_tick_labels = np.linspace(
+        tick_labels = np.linspace(
             data_frame[col_d].min(),
             data_frame[col_d].max(),
             N_labels,
             endpoint=True
         )
-        ax.set_ylabel(r'pixel index y_ROI')
-    y_tick_labels = np.round(y_tick_labels, y_tick_precision)
-    if y_tick_precision <= 0:
-        y_tick_labels = y_tick_labels.astype(int)
-    ax.set_yticks(y_tick_positions)
-    ax.set_yticklabels(y_tick_labels)
-    ax.tick_params(
-        axis='x',  # changes apply to the x-axis
-        which='both',  # both major and minor ticks are affected
-        bottom=False,  # ticks along the bottom edge are off
-        top=False,  # ticks along the top edge are off
-        labelbottom=False
-    )
+        if tick_axis == 'y':
+            ax.set_ylabel('pixel index y_ROI')
+        else:
+            ax.set_xlabel('pixel index y_ROI')
+    tick_labels = np.round(tick_labels, tick_precision)
+    if tick_precision <= 0:
+        tick_labels = tick_labels.astype(int)
+
+    if tick_axis == 'y':
+        ax.set_yticks(tick_positions)
+        ax.set_yticklabels(tick_labels)
+        ax.set_xticks([])
+    else:
+        # move x ticks to top
+        # ax.tick_params(top=True, labeltop=True, bottom=False, labelbottom=False)
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(tick_labels)
+        ax.set_yticks([])
 
     ax.set_title(title)
 
-    divider = make_axes_locatable(ax)
-    cax_pos = ('right' if (portait_mode := (img_mz.shape[0] > img_mz.shape[1]))
-               else 'bottom')
-    cax = divider.append_axes(cax_pos, size="20%", pad=0.05)
+    # decide where to put the colorbar
+    portait_mode = img_mz.shape[0] > img_mz.shape[1]
+
     # SNR ratios
     if SNR_scale:
         ticks = [vmin, vmin + (vmax - vmin) / 3, vmin + (vmax - vmin) * 2 / 3, vmax]
@@ -332,19 +359,19 @@ def plot_comp(
         ticklabels[0] = r'$\leq$' + ticklabels[0]
     if vmax < np.nanmax(img_mz):
         ticklabels[-1] = r'$\geq$' + ticklabels[-1]
-    cbar = plt.colorbar(
+    cbar = fig.colorbar(
         im,
-        cax=cax,
-        ticks=ticks,
-        orientation='vertical' if portait_mode else 'horizontal'
+        orientation='vertical' if portait_mode else 'horizontal',
+        shrink=.8
     )
+    cbar.set_ticks(ticks=ticks, labels=ticklabels)
 
     if portait_mode:
         cbar.ax.set_yticklabels(ticklabels)
-        cbar.ax.set_ylabel('Intensity', rotation=270)
+        cbar.ax.set_ylabel('Intensity', rotation=270, fontsize='10')
     else:
         cbar.ax.set_xticklabels(ticklabels)
-        cbar.ax.set_xlabel('Intensity')
+        cbar.ax.set_xlabel('Intensity', fontsize='10')
     if save_png is not None:
         plt.savefig(save_png, dpi=300)
     if hold:
@@ -501,91 +528,6 @@ def transform_feature_table(
     df_new.loc[:, 'y_ROI'] = Y.ravel()
     mask_nan = np.isnan(df_new.x_ROI) | np.isnan(df_new.y_ROI)
     return df_new.loc[~mask_nan, :]
-
-
-def __transform_feature_table(
-        df: pd.DataFrame,
-        *,
-        p_ROI_T: pd.DataFrame | None = None,
-        x_ROI_T: pd.Series | None = None,
-        y_ROI_T: pd.Series | None = None,
-        dx: int | float | None = None,
-        dy: int | float | None = None
-) -> pd.DataFrame:
-    """
-    Transform data in feature table according to transformed coordinates.
-    This wrong, but not sure why, dont want to delete yet
-
-    It is assumed that x_ROI and y_ROI are columns in the feature table.
-    Transformed coordinates have to be either in the data frame
-    (as x_ROI_T and y_ROI_T) or
-    """
-    def get_d(vals: pd.Series) -> int | float:
-        ds = vals.diff().iloc[1:]  # exclude first nan val
-        for d in ds:  # pick the smallest value bigger than 0
-            if d > 0:
-                return d
-        else:
-            raise ValueError(f'found invalid spacings in x_ROI {ds} (x values should be increasing)')
-
-    assert 'x_ROI' in df.columns
-    assert 'y_ROI' in df.columns
-    assert (
-        (('x_ROI_T' in df.columns) and ('y_ROI_T' in df.columns)) or
-        (p_ROI_T is not None) or
-        ((x_ROI_T is not None) and (y_ROI_T is not None))
-    ), 'If x_ROI_T and y_ROI_T are not in the df'
-
-    x_ROI: pd.Series = df.x_ROI.copy()
-    y_ROI: pd.Series = df.y_ROI.copy()
-    # df.drop(columns=['x_ROI', 'y_ROI'], inplace=True)
-
-    if dx is None:
-        dx = get_d(x_ROI)
-    if dy is None:
-        dy = get_d(y_ROI)
-
-    # get x_ROI_T, y_ROI_T
-    if p_ROI_T is not None:
-        x_ROI_T: pd.Series = p_ROI_T.x_ROI_T
-        y_ROI_T: pd.Series = p_ROI_T.y_ROI_T
-    elif 'x_ROI_T' in df.columns:
-        x_ROI_T: pd.Series = df.x_ROI_T.copy()
-        y_ROI_T: pd.Series = df.y_ROI_T.copy()
-        df.drop(columns=['x_ROI_T', 'y_ROI_T'], inplace=True)
-    # exclude nans
-    mask_nan = x_ROI_T.isna() | y_ROI_T.isna()
-    x_ROI_T = x_ROI_T[~mask_nan]
-    y_ROI_T = y_ROI_T[~mask_nan]
-
-    # map x_ROI, y_ROI to x_ROI_T, y_ROI_T in a way that conserves local averages
-    # p_ROI_T are the points where values are known, we want them on p_ROI
-
-    # arrays of shape (n_points_y, n_points_x)
-    grid_x, grid_y = _get_grid(x_ROI_T, y_ROI_T, dx=dx, dy=dy)
-    n_points = grid_x.shape[0] * grid_x.shape[1]
-
-    # array of shape (n_points_y * n_points_x, n_columns)
-    values: np.ndarray[float] = df.loc[~mask_nan, :].values
-    n_columns = values.shape[1]
-
-    # Interpolate data for each value column
-    interp: LinearNDInterpolator = LinearNDInterpolator(
-        list(zip(x_ROI_T, y_ROI_T)), values
-    )
-    # array of shape (n_points_y, n_points_x, n_columns)
-    grid_z: np.ndarray[float] = interp(grid_x, grid_y)
-
-    # Create a new DataFrame with grid coordinates
-    new_df: pd.DataFrame = pd.DataFrame({'x_ROI': grid_x.ravel(), 'y_ROI': grid_y.ravel()})
-
-    # Add the interpolated value columns to the DataFrame
-    interpolated_df: pd.DataFrame = pd.DataFrame(
-        grid_z.reshape((n_points, n_columns)),
-        columns=df.columns
-    )
-
-    return pd.concat([new_df, interpolated_df], axis=1)
 
 
 

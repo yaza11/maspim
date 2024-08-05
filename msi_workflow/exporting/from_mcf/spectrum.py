@@ -194,6 +194,32 @@ class Spectra(Convinience):
 
     _losses: np.ndarray[float] | None = None
 
+    _save_in_d_folder: bool = True
+    _save_attrs: set[str] = {
+        'd_folder',
+        '_delta_mz',
+        '_mzs',
+        '_intensities',
+        '_tic',
+        '_indices',
+        '_limits',
+        '_peaks',
+        '_peak_properties',
+        '_peak_setting_parameters',
+        '_peaks_SNR',
+        '_peaks_is_side_peak',
+        '_kernel_params',
+        '_kernel_shape',
+        '_line_spectra',
+        '_feature_table',
+        '_losses',
+        '_binning_by',
+        '_noise_level',
+        '_noise_level_subtracted',
+        '_calibration_parameters',
+        '_calibration_settings'
+    }
+
     def __init__(
             self,
             *,
@@ -1359,7 +1385,10 @@ class Spectra(Convinience):
         return params
 
     @property
-    def _kernel_func(self) -> Callable[[tuple[np.ndarray, float, ...]], np.ndarray[float]]:
+    def _kernel_func(
+            self
+    ) -> (Callable[[np.ndarray, float, float, float, float], np.ndarray] |
+          Callable[[np.ndarray, float, float, float], np.ndarray]):
         """Return either gaussian or bigaussian function."""
         assert check_attr(self, '_kernel_shape')
         if self._kernel_shape == 'bigaussian':
@@ -2289,7 +2318,7 @@ class Spectra(Convinience):
         # TIC at left side
         # heat map in middle
         # spectra-wise loss at right
-        assert check_attr(self, '_losses')
+        assert check_attr(self, '_losses'), 'call set_reconstruction_losses() first'
 
         # Create figure and main axis for the heatmap
         fig, ax = plt.subplots(layout='compressed', figsize=(15, 12))

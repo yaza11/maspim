@@ -44,6 +44,16 @@ class MSI(Data):
     >>> msi.plot_nmf(k=5)
     """
 
+    _save_in_d_folder: bool = True
+    _save_attrs: set[str] = {
+        'd_folder',
+        'mis_file',
+        'distance_pixels',
+        '_feature_table',  # it could be processed, so not necessarily redundant information
+        'depth_section',
+        'age_span'
+    }
+
     def __init__(
             self,
             path_d_folder: str,

@@ -54,6 +54,18 @@ class XRay(ImageSample):
     >>> img: np.ndarray = xray.get_section((100, 105))
 
     """
+    _save_attrs = {
+        'age_span',
+        '_average_width_yearly_cycle',
+        'image_file',
+        '_image',
+        'obj_color',
+        '_xywh_ROI',
+        '_hw',
+        'depth_section',
+        '_image_ROI',
+        '_bars_removed'
+    }
 
     def __init__(
             self,

@@ -5,8 +5,6 @@ import os
 import pickle
 import logging
 
-from msi_workflow.util.manage_obj_saves import class_to_attributes
-
 logger = logging.getLogger("msi_workflow." + __name__)
 
 
@@ -37,22 +35,6 @@ def return_existing(attr_name: str) -> Callable:
     return return_existing_decorator
 
 
-class_in_d_folder = {  # True if saved in d-folder
-    'ImageClassified': False,
-    'ImageROI': False,
-    'ImageSample': False,
-    'SampleImageHandlerMSI': False,
-    'SampleImageHandlerXRF': False,
-    'TimeSeries': True,
-    'Spectra': True,
-    'XRF': False,
-    'MSI': True,
-    'AgeModel': True,
-    'XRay': False,
-    'Mapper': False
-}
-
-
 def check_attr(obj, attr_name: str, check_nonempty: bool = False) -> bool:
     """
     Check whether an attribute exists and is valid.
@@ -68,6 +50,12 @@ def check_attr(obj, attr_name: str, check_nonempty: bool = False) -> bool:
 
 
 class Convinience:
+    path_d_folder: str | None = None
+    path_folder: str | None = None
+
+    _save_attrs: set[str] | None = None
+    _save_in_d_folder: bool = False
+
     def _get_disc_folder_and_file(self) -> tuple[str, str]:
         assert (check_attr(self, 'path_folder')
                 or check_attr(self, 'path_file')), \
@@ -76,9 +64,13 @@ class Convinience:
         class_name: str = str(self.__class__).split('.')[-1][:-2]
         file_name: str = class_name + '.pickle'
 
-        if class_in_d_folder[class_name]:
+        if self._save_in_d_folder[class_name]:
+            assert check_attr(self, 'path_d_folder'), \
+                'object does not have a path_d_folder attribute'
             folder: str = self.path_d_folder
         else:
+            assert check_attr(self, 'path_folder'), \
+                'object does not have a path_folder attribute'
             folder: str = self.path_folder
 
         file: str = os.path.join(folder, file_name)
@@ -109,16 +101,17 @@ class Convinience:
                 f'{os.path.basename(file)}'
             )
 
-        # for backwards compatibility, filter out attributes that are no longer
-        # desired to load
-        filter_attr = class_to_attributes(self)
-
         with open(file, 'rb') as f:
             obj: object | dict = pickle.load(f)
             if type(obj) is not dict:  # legacy
                 obj: dict[str, Any] = obj.__dict__
             # filter out attributes that are not supposed to be saved
-            load_attr: set[str] = filter_attr & set(obj.keys())
+            if check_attr(self, '_save_attrs'):
+                load_attr: set[str] = self._save_attrs & set(obj.keys())
+            else:  # load everything
+                load_attr: set[str] = set(obj.keys())
+            if len(discarded := obj.keys() - self._save_attrs) > 0:
+                logger.warning(f'discarded attributes {discarded} when loading {file}')
             # generate new dict, that only has the desired attributes
             obj_new: dict[str, Any] = {key: obj[key] for key in load_attr}
             # merge the objects dict with the disk dict, overwriting
@@ -142,7 +135,7 @@ class Convinience:
         folder, file = self._get_disc_folder_and_file()
 
         # discard all attributes that are not flagged as relevant
-        keep_attributes: set[str] = set(self.__dict__.keys()) & class_to_attributes(self)
+        keep_attributes: set[str] = set(self.__dict__.keys()) & self._save_attrs
 
         # new dict with only the desired attributes
         save_dict: dict[str, Any] = {key: self.__dict__[key] for key in keep_attributes}

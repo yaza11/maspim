@@ -158,6 +158,13 @@ class Mapper(Convinience):
     """
     Object to store shift matrices U and V and apply them to Images/ Feature tables.
     """
+    _save_attrs: set[str] = {
+        '_Us',
+        '_Vs',
+        '_image_shape',
+        '_tag'
+    }
+
     def __init__(
             self,
             image_shape: tuple[int, ...] | None = None,

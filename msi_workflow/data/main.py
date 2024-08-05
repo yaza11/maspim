@@ -226,6 +226,13 @@ class Data(Convinience, DataBaseClass):
 
     _kmeans: KMeans | None = None
 
+    _save_attrs: set[str] = {
+        'distance_pixels',
+        '_feature_table',  # it could be processed, so not necessarily redundant information
+        'depth_section',
+        'age_span'
+    }
+
     @property
     def path_d_folder(self):
         """Overwritten by children"""
@@ -317,8 +324,8 @@ class Data(Convinience, DataBaseClass):
         # fit the pixel coords in the feature table to ROI pixel
         # coordinates by
         #   1. get values
-        x_ft = self.x.to_numpy()
-        y_ft = self.y.to_numpy()
+        x_ft = self.x.to_numpy().astype(float)
+        y_ft = self.y.to_numpy().astype(float)
         #   2. shift to 0
         x_ft -= xd
         y_ft -= yd

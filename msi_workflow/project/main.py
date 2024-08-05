@@ -93,6 +93,16 @@ class SampleImageHandlerMSI(Convinience):
     _data_roi_xywh: tuple[int, int, int, int] | None = None
     _photo_roi_xywh: tuple[int, int, int, int] | None = None
 
+    _save_attrs = {
+        '_extent_spots',
+        'd_folder',
+        'image_file',
+        'mis_file',
+        '_extent_spots'
+        '_data_roi_xywh'
+        '_photo_roi_xywh',
+    }
+
     def __init__(
             self,
             path_folder: str,
@@ -410,6 +420,17 @@ class SampleImageHandlerXRF(Convinience):
     _data_roi_xywh: tuple[int, int, int, int] | None = None
     _photo_roi_xywh: tuple[int, int, int, int] | None = None
     _scale_conversion: float | None = None
+
+    _save_attrs: set[str] = {
+        'image_file',
+        'image_roi_file',
+        'roi_is_image',
+        '_extent',
+        '_extent_spots',
+        '_data_roi_xywh',
+        '_photo_roi_xywh',
+        '_scale_conversion'
+    }
 
     def __init__(
             self,
@@ -801,23 +822,29 @@ class ProjectBaseClass:
             image_type='pil',
             obj_color=obj_color
         )
-        if not check_attr(self._image_sample, '_xywh_ROI'):
+
+        if (
+                use_extent_from_mis and
+                (not check_attr(self._image_sample, '_xywh_ROI'))
+        ):
             try:
                 self.image_handler.set_photo_ROI()
+                assert check_attr(self.image_handler, '_photo_roi_xywh'), \
+                    'Need an image handler with photo ROI'
             except Exception as e:
                 logger.error(e)
                 logger.info('Could not set photo ROI, continuing with fitting box')
-            if use_extent_from_mis:
-                assert check_attr(self.image_handler, '_photo_roi_xywh'), \
-                    'Need an image handler with photo ROI'
-                x_start: int = self.image_handler._photo_roi_xywh[0]
-                x_end: int = x_start + self.image_handler._photo_roi_xywh[2]
-                extent_x: tuple[int, int] = (x_start, x_end)
-            else:
-                extent_x: None = None
+                use_extent_from_mis = False
 
-            self._image_sample.set_sample_area(extent_x=extent_x, **kwargs_area)
-            self._image_sample.save()
+        if use_extent_from_mis:
+            x_start: int = self.image_handler._photo_roi_xywh[0]
+            x_end: int = x_start + self.image_handler._photo_roi_xywh[2]
+            extent_x: tuple[int, int] = (x_start, x_end)
+        else:
+            extent_x: None = None
+
+        self._image_sample.set_sample_area(extent_x=extent_x, **kwargs_area)
+        self._image_sample.save()
 
         self._update_files()
 
@@ -1722,7 +1749,7 @@ class ProjectBaseClass:
             np.arange(h_ROI)
         )
         for comp in tqdm(
-                project.data_object.get_data_columns(),
+                project.data_object.data_columns,
                 desc='adding XRF ion images'
         ):
             values: np.ndarray[float] = project.data_object.feature_table.loc[
@@ -1779,7 +1806,7 @@ class ProjectBaseClass:
 
         # x column always included in processing_zone_wise_average
         columns_feature_table = np.append(
-            self.data_object.get_data_columns(),
+            self.data_object.data_columns,
             ['x_ROI', 'R', 'L', 'depth']
         )
         ft_seeds_avg, ft_seeds_std, ft_seeds_success = self.data_object.processing_zone_wise_average(

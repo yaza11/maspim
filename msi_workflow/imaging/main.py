@@ -58,7 +58,6 @@ class Image(Convinience):
     _average_width_yearly_cycle: float | None = None
     _hw: tuple[int, int] | None = None
     _image: np.ndarray[int | float] | None = None
-    _image_original: np.ndarray[int | float] | None = None
     _image_simplified: np.ndarray[int] | None = None
     _main_contour: np.ndarray[int] | None = None
     _mask_foreground: np.ndarray[bool] | None = None
@@ -68,6 +67,14 @@ class Image(Convinience):
     image_file: str | None = None
     path_folder: str | None = None
     obj_color: str | None = None
+
+    _save_attrs: set[str] = {
+        'age_span',
+        '_average_width_yearly_cycle',
+        'image_file',
+        '_image',
+        'obj_color'
+    }
 
     def __init__(
             self,
@@ -100,7 +107,8 @@ class Image(Convinience):
         assert (path_image_file is not None) or (image is not None), \
             "Must provide either path or image"
         image_types: tuple[str, ...] = ('cv', 'np', 'pil')
-        assert image_type in image_types, f'valid image types are {image_types}, depending on the source of the image'
+        assert image_type in image_types, (f'valid image types are {image_types},'
+                                           f' depending on the source of the image')
         obj_colors: tuple[str, str] = ('light', 'dark')
         assert obj_color in obj_colors, f'valid object colors are {obj_colors}'
 
@@ -119,10 +127,14 @@ class Image(Convinience):
         self.path_folder: str = path_folder if path_folder is not None else ''
 
     @property
-    def path_image_file(self) -> str:
+    def path_image_file(self) -> str | None:
         """Compose the path of the image file from folder and image file."""
-        assert check_attr(self, 'image_file'), 'image file was not provided'
-        assert check_attr(self, 'path_folder'), 'path_folder was not provided'
+        # image file was not provided
+        if not check_attr(self, 'image_file'):
+            return
+        # path_folder was not provided
+        if not check_attr(self, 'path_folder'):
+            return
         return os.path.join(self.path_folder, self.image_file)
 
     def _from_image(self, image: np.ndarray, image_type: str) -> None:
@@ -138,12 +150,13 @@ class Image(Convinience):
         # make sure image is oriented horizontally
         h, w, *_ = image.shape
         if h > w:
-            logger.info('swapped axes of input image to ensure horizontal orientation')
+            logger.info(
+                'swapped axes of input image to ensure horizontal orientation'
+            )
             # swapaxes returns a view by default
             image: np.ndarray[int | float] = image.copy().swapaxes(0, 1)
         self._hw = h, w
-        self._image_original: np.ndarray[int | float] = image
-        self._image: np.ndarray[int | float] = self._image_original.copy()
+        self._image: np.ndarray[int | float] = self._image
 
     @classmethod
     def from_disk(cls, path_folder: str) -> Self:
@@ -154,8 +167,8 @@ class Image(Convinience):
         # load messes with _image, _image_original, the constructor can take care of that
         new: Self = cls(
             obj_color=dummy.obj_color,
-            path_image_file=dummy.__dict__.get('path_image_file'),
-            image=dummy.__dict__.get('_image_original'),
+            path_image_file=dummy.path_image_file,
+            image=dummy.__dict__.get('_image'),
             image_type='cv',
             path_folder=path_folder,
         )
@@ -507,6 +520,16 @@ class ImageSample(Image):
     >>> i.save()
     """
 
+    _save_attrs: set[str] = {
+        'age_span',
+        '_average_width_yearly_cycle',
+        'image_file',
+        '_image',
+        'obj_color',
+        '_xywh_ROI',
+        '_hw'
+    }
+
     def __init__(
             self,
             path_folder: str | None = None,
@@ -548,6 +571,20 @@ class ImageSample(Image):
         if obj_color is not None:
             assert obj_color in ['light', 'dark'], 'obj_color must be either "light" or "dark"!'
         self.obj_color: str = self._get_obj_color() if obj_color is None else obj_color
+
+    def _pre_save(self):
+        # if image_file is defined, we don't need to store the original image
+        if check_attr(self, 'path_image_file'):
+            self._save_attrs.remove('_image')
+
+    def _post_save(self):
+        self._save_attrs.append('_image')
+
+    def _post_load(self):
+        if check_attr(self, '_image'):
+            assert check_attr(self, 'path_image_file'), \
+                'loaded corrupted instance with neither image nor image_file'
+            self._image = cv2.imread(self.path_image_file)
 
     def _get_obj_color(self, region_middleground: float=.8, **_) -> str:
         """
@@ -944,6 +981,7 @@ class ImageSample(Image):
             ax=axs[0, 0],
             image=self.image,
             title='input image',
+            swap_rb=False,
             no_ticks=True
         )
         plt_rect_on_image(
@@ -961,6 +999,7 @@ class ImageSample(Image):
             image=np.stack([image_sub.image_simplified] * 3, axis=-1) * image_sub.image,
             contours=image_sub.main_contour,
             title='contour in simplified sub-region',
+            swap_rb=False,
             hold=True,
             no_ticks=True
         )
@@ -968,7 +1007,8 @@ class ImageSample(Image):
             fig=fig,
             ax=axs[1, 1],
             image=self.image_sample_area,
-            title='final sample region', no_ticks=True
+            title='final sample region', no_ticks=True,
+            swap_rb=False
         )
         fig.tight_layout()
         plt.show()
@@ -1022,6 +1062,20 @@ class ImageROI(Image):
     if path_folder or path_image_file has been specified, you can save the instance to disk:
     >>> ir.save()
     """
+
+    _save_attrs: set[str] = {
+        'age_span',
+        '_average_width_yearly_cycle',
+        'image_file',
+        '_image',
+        'obj_color',
+        '_xywh_ROI',
+        '_hw',
+        '_image_classification',
+        '_params',
+        '_punchholes',
+        '_punchhole_size',
+    }
 
     def __init__(
             self,
@@ -1545,6 +1599,19 @@ class ImageClassified(Image):
     View the results
     >>> ic.plot_overview()
     """
+
+    _save_attrs: list[str] = [
+        'age_span',
+        '_average_width_yearly_cycle',
+        'image_file',
+        '_image',
+        'obj_color',
+        '_xywh_ROI',
+        '_hw',
+        'params_laminae_simplified',
+        'image_seeds',
+        '_image_classification'
+    ]
 
     def __init__(
             self,

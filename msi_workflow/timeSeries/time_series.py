@@ -19,6 +19,16 @@ logger = logging.getLogger('msi_workflow.' + __name__)
 
 
 class TimeSeries(Convinience):
+    _save_in_d_folder: bool = True
+
+    _save_attrs = {
+        'd_folder',
+        'n_successes_required',
+        'feature_table',
+        'feature_table_standard_deviations',
+        'feature_table_successes'
+    }
+
     def __init__(
             self,
             path_folder: str | None = None,

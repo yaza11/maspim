@@ -389,8 +389,7 @@ class Transformation:
 
     Example Usage
     -------------
-    >>> from imaging.register.transformation import Transformation
-    >>> from imaging.main.cImage import ImageROI
+    >>> from msi_workflow import Transformation, ImageROI
     >>> ir1 = ImageROI.from_disk('some/path/to/ImageROI.pickle')
     >>> ir2 = ImageROI.from_disk('some/other/path/to/ImageROI.pickle')
     >>> t = Transformation(ir1, ir2, 'light', 'light')

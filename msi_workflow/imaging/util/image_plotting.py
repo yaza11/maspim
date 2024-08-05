@@ -13,6 +13,7 @@ from msi_workflow.imaging.util.coordinate_transformations import rescale_values
 def plt_cv2_image(
         image: np.ndarray,
         title: str | None = None,
+        swap_rb: bool = True,
         cmap: str | None = None,
         hold: bool | str = False,
         ax: plt.Axes | None = None,
@@ -31,8 +32,12 @@ def plt_cv2_image(
         image to plot.
     title : str | None, optional
         The default is None.
+    swap_rb : bool, optional
+        Whether to swap the red and blue channel for plotting. The default is
+        True.
     cmap : str | None, optional
-        Colormap. For grayscale image None defaults to 'gray'. The default is None.
+        Colormap. For grayscale image None defaults to 'gray'. The default is
+        None.
     hold : bool, optional
         If True, will not show the plot but return the figure.
         The default is False.
@@ -64,7 +69,7 @@ def plt_cv2_image(
         hold = True
     else:
         fig, ax = plt.subplots(layout="constrained")
-    if (cmode := infer_mode(image)) != 'L':
+    if ((cmode := infer_mode(image)) != 'L') and swap_rb:
         image = swap_RB(image.copy())
         ax.imshow(image, interpolation='None')
     elif (cmode == 'L') and (cmap is None):

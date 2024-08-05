@@ -71,6 +71,16 @@ class AgeModel(Convinience):
     >>> age_model2 = AgeModel(path2, ...)
     >>> age_model_combined = age_model1 + age_model2
     """
+
+    _save_in_d_folder: bool = True
+    _save_attrs: set[str] = {
+        'df',
+        '_in_file',
+        'save_file',
+        'column_age',
+        'column_depth'
+    }
+
     def __init__(
             self,
             *,
