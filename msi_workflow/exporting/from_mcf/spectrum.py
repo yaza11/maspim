@@ -28,7 +28,6 @@ from msi_workflow.exporting.from_mcf.helper import get_mzs_for_limits
 from msi_workflow.res.calibrants import get_calibrants
 from msi_workflow.util import Convinience
 from msi_workflow.util.convinience import check_attr
-from msi_workflow.util.manage_obj_saves import class_to_attributes
 from msi_workflow.project.file_helpers import ImagingInfoXML, get_rxy
 
 logger = logging.getLogger(__name__)
@@ -2743,69 +2742,22 @@ class MultiSectionSpectra(Spectra):
         self.filter_line_spectra(**kwargs)
         self.set_feature_table(readers=readers, **kwargs)
 
-    def save(self, path_file: str):
-        """
-        Save object to d-folder.
+    def _pre_save(self):
+        # only save feature table, if both exist
+        if (
+                check_attr(self, '_feature_table')
+                and check_attr(self, '_line_spectra')
+        ):
+            self._save_attrs.remove('_line_spectra')
 
-        Parameters
-        ----------
-        path_file: str
-            Path and name of saved file.
+    def _post_save(self):
+        self._save_attrs.add('_line_spectra')
 
-        Example
-        -------
-        >>> obj.save(r'path/to/save/file.pickle')
-        """
-        if os.path.exists(path_file):
-            logger.info('deleting legacy file')
-            os.remove(path_file)
-
-        keep_attributes: set[str] = set(self.__dict__.keys()) & class_to_attributes(self)
-        if check_attr(self, 'feature_table') and check_attr(self, '_line_spectra'):
-            keep_attributes.remove('line_spectra')
-
-        save_dict: dict[str, Any] = {key: self.__dict__[key] for key in keep_attributes}
-
-        logger.info(f'saving image object with {self.__dict__.keys()} to {os.path.dirname(path_file)}.')
-        with open(path_file, 'wb') as f:
-            pickle.dump(save_dict, f, pickle.HIGHEST_PROTOCOL)
-
-    def load(self, path_file: str):
-        """
-        Load object from d-folder.
-
-        Parameters
-        ----------
-        path_file: str
-            Path and name of saved file.
-
-        Example
-        -------
-        >>> from msi_workflow.exporting.from_mcf.spectrum import MultiSectionSpectra
-        >>> obj = MultiSectionSpectra([])
-        >>> obj.load(r'path/to/save/file.pickle')
-        """
-        assert os.path.exists(path_file), \
-            (f'found no saved spectra object in {os.path.dirname(path_file)} ' +
-             f'with name {os.path.basename(path_file)}')
-
-        # for backwards compatibility, filter out attributes that are no longer
-        # desired to load
-        filter_attr = class_to_attributes(self)
-
-        with open(path_file, 'rb') as f:
-            obj: object | dict = pickle.load(f)
-            if type(obj) is not dict:  # legacy
-                obj: dict[str, Any] = obj.__dict__
-            # filter out attributes that are not supposed to be saved
-            load_attr: set[str] = filter_attr & set(obj.keys())
-            # generate new dict, that only has the desired attributes
-            obj_new: dict[str, Any] = {key: obj[key] for key in load_attr}
-            # merge the objects dict with the disk dict, overwriting
-            # instance attributes with saved once, if they both exist
-            self.__dict__ |= obj_new
-
-        if check_attr(self, 'feature_table'):
+    def _post_load(self):
+        if (  # set line_spectra from the saved feature table
+                not check_attr(self, '_line_spectra')
+                and check_attr(self, '_feature_table')
+        ):
             self._line_spectra: np.ndarray[float] = self.feature_table. \
                 drop(columns=['R', 'x', 'y']). \
                 to_numpy()

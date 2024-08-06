@@ -10,6 +10,7 @@ from msi_workflow.imaging.register.transformation import Transformation
 from msi_workflow.imaging.register.descriptor import Descriptor
 from msi_workflow.imaging.misc.find_punch_holes import find_holes
 from msi_workflow.imaging.main import Image, ImageSample, ImageROI, ImageClassified
+from msi_workflow.imaging.util.image_plotting import plt_cv2_image
 
 from msi_workflow.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
 from msi_workflow.exporting.legacy.parser import extract_mzs as da_export_extract_mzs

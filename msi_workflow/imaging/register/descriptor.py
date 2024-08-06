@@ -1,4 +1,6 @@
 """Feature descriptor based on rectangular filters."""
+from functools import cached_property
+
 import matplotlib
 import numpy as np
 import logging
@@ -13,7 +15,9 @@ from scipy.signal import fftconvolve
 from scipy.interpolate import griddata, CubicSpline
 
 from msi_workflow.imaging.register.helpers import Mapper, apply_displacement
+from msi_workflow.imaging.util.coordinate_transformations import rescale_values
 from msi_workflow.imaging.util.image_convert_types import ensure_image_is_gray
+from msi_workflow.util.convinience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +112,7 @@ class Descriptor:
     Example Usage
     -------------
     Initialization
-    >>> from msi_workflow.imaging.register.tilt_descriptor import Descriptor
+    >>> from msi_workflow import Descriptor
     >>> import skimage
     >>> image = skimage.data.brick()
     A mask is not suitable for this problem
@@ -124,12 +128,48 @@ class Descriptor:
     And view the result
     >>> descriptor.plot_corrected()
     """
+    # inputs
     kernel_types: list[str] = ['rect', 'gabor']
+    kernel_type: str | None = None
+
+    image: np.ndarray | None = None
+    mask: np.ndarray[bool] | None = None
+
+    n_angles: int | None = None
+    angles: np.ndarray[float] | None = None
+
+    max_period: int | None = None
+    min_period: int | None = None
+    n_sizes: int | None = None
+    widths: np.ndarray[float] | None = None
+
+    n_phases: int | None = None
+    phases: np.ndarray[float] | None = None
+
+    nx: int | None = None
+    pad: int | None = None
+
+    # inbetween results
+    vals: np.ndarray[float] | None = None
+    image_angles: np.ndarray[float] | None = None
+    image_phases: np.ndarray[float] | None = None
+    image_widths: np.ndarray[float] | None = None
+
+    _stream_lines: list[matplotlib.path.Path] | None = None
+    _x_seeds: np.ndarray[float]
+
+    # results
+    _points_shift: np.ndarray[float] | None = None
+    _points_shift_inverse: np.ndarray[float] | None = None
+    _shifts: np.ndarray[float] | None = None
+    _shifts_inverse: np.ndarray[float] | None = None
+
 
     def __init__(
             self,
             image: np.ndarray,
             mask: np.ndarray | None = None,
+            use_mask: bool = False,
             n_angles: int = 32,
             n_sizes: int = 8,
             n_phases: int = 8,
@@ -147,6 +187,9 @@ class Descriptor:
             Input image (Multi- or single-channel).
         mask : np.ndarray, optional
             Mask with same shape as image where foreground pixels are > 0.
+        use_mask: bool, optional
+            Whether to use a mask to exclude background pixels. The default is
+            False.
         n_angles : int, optional
             The number of angles for which to create kernels (angles will be
             evenly distributed in [0, pi)). The default is 8
@@ -156,6 +199,13 @@ class Descriptor:
         n_phases : int, optional
             The number of phases for which to create kernels (evenly distributed
             between [0, 2 * pi)).
+        min_period: int | float, optional
+            The size of the smallest kernel. If this value is <= 1, this value
+            is assumed to be in terms of the image dimension, so for example
+            a value of 0.01 (which is the default behavior) results in a min_period
+            of round(0.01 * N) for an N x M image with N < M. If this value is
+            not provided, it will be taken to be 1/10 the max_period, but at
+            least 5.
         max_period: int | float, optional
             The size of the largest kernel. If this value is <= 1, this value
             is assumed to be in terms of the image dimension, so for example
@@ -165,9 +215,17 @@ class Descriptor:
             The type of kernel to be used. Currently, options are 'rect' (default)
              and 'gabor'.
         """
+        if (mask is not None) and (use_mask is False):
+            logger.warning(
+                'a mask was provided, but use_mask is set to False. This will '
+                'ignore the mask. In order to use the mask, set use_mask=True'
+            )
+
         if mask is None:
-            mask: np.ndarray = get_mask(image)
-        self.mask: np.ndarray[bool] = mask > 0
+            if use_mask:
+                mask: np.ndarray = get_mask(image)
+            else:
+                mask: np.ndarray = np.ones(image.shape[:2], dtype=bool)
 
         assert mask.shape[:2] == image.shape[:2], \
             "Mask and image must have the same shape along dim 1 and 2"
@@ -181,29 +239,30 @@ class Descriptor:
         if max_period < 1:
             max_period: int = round(np.min(image.shape[:2]) * max_period)
         # make sure this value is at least 5
-        max_period: int = max([5, max_period])
+        self.max_period: int = max([5, max_period])
 
         if min_period is None:
             min_period: float = round(max_period / 10)
         elif min_period < 1:
             min_period: int = max([5, round(np.min(image.shape[:2]) * min_period)])
+        # make sure this value is at least 5
+        self.min_period: int = max([5, min_period])
 
         assert min_period <= max_period
 
         self.kernel_type: str = kernel_type
         self.image: np.ndarray = image
-        self.mask: np.ndarray[bool] = mask
+        self.mask: np.ndarray[bool] = mask > 0
         self.n_angles: int = n_angles
         self.n_sizes: int = n_sizes
         self.n_phases: int = n_phases
-        self.max_period: int = max_period
         # account for rotating square out of original footprint
         self.nx: int = np.ceil(self.max_period * np.sqrt(2)).astype(int)
         self.pad = self.nx - self.max_period
 
         if self.n_sizes > 1:
             self.widths: np.ndarray[int] = np.linspace(
-                min_period, self.max_period, self.n_sizes, dtype=int
+                self.min_period, self.max_period, self.n_sizes, dtype=int
             )
         else:
             self.widths: np.ndarray[int] = np.array(
@@ -225,7 +284,7 @@ class Descriptor:
         This is the recommended way for working downstream with tilt corrected
         images.
         """
-        assert hasattr(other, '_shifts'), 'call fit on descriptor first'
+        assert check_attr(other, '_shifts'), 'call fit on descriptor first'
         # since this is constructed from angle corrected image, we are only
         # interested in one angle
         if kwargs.get('n_angles') is None:
@@ -239,7 +298,7 @@ class Descriptor:
         new = cls(image=image_corrected, **kwargs)
         return new
 
-    @property
+    @cached_property
     def image_processed(self) -> np.ndarray[float]:
         """
         Preprocess image to be between -1 and 1 and set background pixels to 0.
@@ -312,7 +371,9 @@ class Descriptor:
     def _get_kernel_gabor(
             self, width: int, angle: float, phase: float
     ) -> np.ndarray[float]:
-        kernel: np.ndarray[float] = gabor(nx=self.nx, width=width, theta=angle, psi=phase)
+        kernel: np.ndarray[float] = gabor(
+            nx=self.nx, width=width, theta=angle, psi=phase
+        )
         # unit vol
         k = np.sqrt(np.abs(kernel ** 2).sum())
         kernel /= k
@@ -320,6 +381,7 @@ class Descriptor:
 
     @property
     def get_kernel(self) -> Callable:
+        """Convinience function for fetching the right kernel function."""
         if self.kernel_type == 'gabor':
             return self._get_kernel_gabor
         elif self.kernel_type == 'rect':
@@ -697,7 +759,7 @@ class Descriptor:
         paths: list[matplotlib.path.Path] = lines.get_paths()
 
         self._x_seeds: np.ndarray[float] = x_seeds
-        self._stream_lines = paths
+        self._stream_lines: list[matplotlib.path.Path] = paths
 
     def fit(
             self,
@@ -721,9 +783,12 @@ class Descriptor:
             Number of cells in vertical direction used to pool angles. The
             actual number is about twice of this due to using staggered grids.
         """
+        if not check_attr(self, 'vals', True):
+            self.set_conv()
+
         h, w = self.image.shape[:2]
         # post-processed angles
-        if not hasattr(self, 'x_seeds'):
+        if not check_attr(self, 'x_seeds'):
             self._set_stream_lines(ny_cells=ny_cells, **kwargs)
 
         # construct array of shifts from nodes of streamlines
@@ -824,7 +889,7 @@ class Descriptor:
             f'transforming image with shape {image.shape} '
             f'and dtype {image.dtype}'
         )
-        assert hasattr(self, '_shifts'), 'call fit first'
+        assert check_attr(self, '_shifts'), 'call fit first'
 
         if is_inverse:
             u = self._get_inverse_shift_matrix(image.shape[:2], method='cubic')
@@ -880,22 +945,27 @@ class Descriptor:
             plt.show()
 
     def plot_kernel_on_img(self):
-        kernel = self.get_kernel(self.widths[0], 0, 0)
         img = self.image_processed.copy()
-        kernel = kernel.astype(float) * img.max() / max((kernel.max(), 1))
-
         img_k = img.copy()
+
+        kernel = self.get_kernel(self.widths[0], 0, 0)
+        kernel = rescale_values(kernel.astype(float), -1, 1, )
+
         img_k[:kernel.shape[0], :kernel.shape[1]] = kernel
 
         kernel = self.get_kernel(self.widths[-1], 0, 0)
-        kernel = kernel.astype(float) * img.max() / max((kernel.max(), 1))
+        kernel = rescale_values(kernel.astype(float), -1, 1)
         img_k[-kernel.shape[0]:, -kernel.shape[1]:] = kernel
 
         plt.imshow(img_k)
-        plt.title('Input image with biggest and smallest kernel (rescaled for visibility)')
+        plt.title(
+            'Input image with biggest and smallest kernel (rescaled for visibility)'
+        )
         plt.show()
 
     def plot_parameter_images(self):
+        if not check_attr(self, 'vals', True):
+            self.set_conv()
         fix, ((tl, tr), (bl, br)) = plt.subplots(
             2, 2, sharex=True, sharey=True
         )
@@ -941,7 +1011,7 @@ class Descriptor:
             return fig, ax
 
     def plot_corrected(self, image: np.ndarray | None = None):
-        assert hasattr(self, '_shifts'), 'call fit first'
+        assert check_attr(self, '_shifts'), 'call fit first'
         if image is None:
             image = self.image_processed
         assert image.shape[:2] == self.image.shape[:2]

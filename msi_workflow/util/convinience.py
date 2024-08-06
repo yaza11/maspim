@@ -1,9 +1,11 @@
 from copy import deepcopy
-from typing import Iterable, Callable, Any, Self
+from typing import Iterable, Callable, Any
 import numpy as np
 import os
 import pickle
 import logging
+
+import pandas as pd
 
 logger = logging.getLogger("msi_workflow." + __name__)
 
@@ -52,6 +54,7 @@ def check_attr(obj, attr_name: str, check_nonempty: bool = False) -> bool:
 class Convinience:
     path_d_folder: str | None = None
     path_folder: str | None = None
+    feature_table: pd.DataFrame | None = None
 
     _save_attrs: set[str] | None = None
     _save_in_d_folder: bool = False
@@ -64,7 +67,7 @@ class Convinience:
         class_name: str = str(self.__class__).split('.')[-1][:-2]
         file_name: str = class_name + '.pickle'
 
-        if self._save_in_d_folder[class_name]:
+        if self._save_in_d_folder:
             assert check_attr(self, 'path_d_folder'), \
                 'object does not have a path_d_folder attribute'
             folder: str = self.path_d_folder
@@ -77,16 +80,25 @@ class Convinience:
 
         return folder, file
 
+    @property
+    def save_file(self):
+        return self._get_disc_folder_and_file()[1]
+
     def __repr__(self) -> str:
         out: list[str] = []
         for k, v in self.__dict__.items():
-            out.append(f'{k}: {str(v)}')
+
+            if isinstance(v, np.ndarray):
+                v_str = f'Numpy array of type {v.dtype}, with shape {v.shape}'
+            else:
+                v_str = str(v)
+            out.append(f'{k}: {v_str}')
         return '\n'.join(out)
 
-    def _post_load(self):
+    def _pre_load(self):
         pass
 
-    def _pre_load(self):
+    def _post_load(self):
         pass
 
     def load(self):

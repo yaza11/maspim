@@ -186,7 +186,11 @@ class Mapper(Convinience):
             file name (necessary if multiple transformations are stored in the
             same folder, as is usually the case).
         """
-        self._image_shape: tuple[int, int] | None = image_shape[:2] if image_shape is not None else None
+        self._image_shape: tuple[int, int] | None = (
+            image_shape[:2]
+            if image_shape is not None
+            else None
+        )
         self._Us: list[np.ndarray[int]] = []
         self._Vs: list[np.ndarray[int]] = []
         self.path_folder: str | None = path_folder

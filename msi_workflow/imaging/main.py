@@ -89,15 +89,17 @@ class Image(Convinience):
         Parameters
         ----------
         obj_color : str
-            The foreground color of the object in the image. Either 'light' or 'dark'.
-            This is required for working with thresholded images is desired.
+            The foreground color of the object in the image. Either 'light' or
+            'dark'. This is required for working with thresholded images is
+            desired.
         path_image_file : str, optional
             The file path to an image file to be read.
         image : np.ndarray[float | int], optional
             Alternatively, an image can be provided directly.
         image_type: str, optional
-            If the input image is not a cv image, provide this keyword argument. Options are 'cv', 'np', 'pil'
-            for images read or processed with OpenCV, numpy or PILLOW respectively.
+            If the input image is not a cv image, provide this keyword argument.
+            Options are 'cv', 'np', 'pil' for images read or processed with
+            OpenCV, numpy or PILLOW respectively.
         path_folder : str, optional
             Folder in which the image or saved object is located. If not provided,
             will be inferred from path_image_file.
@@ -115,9 +117,9 @@ class Image(Convinience):
         self.obj_color: str = obj_color
 
         if path_image_file is not None:
-            self.image_file: str = os.path.basename(path_image_file)
             image = cv2.imread(path_image_file)
             assert image is not None, f"Could not load image from {path_image_file}"
+            self.image_file: str = os.path.basename(path_image_file)
             if path_folder is None:
                 path_folder: str = os.path.dirname(path_image_file)
 
@@ -137,7 +139,7 @@ class Image(Convinience):
             return
         return os.path.join(self.path_folder, self.image_file)
 
-    def _from_image(self, image: np.ndarray, image_type: str) -> None:
+    def _from_image(self, image: np.ndarray | None, image_type: str) -> None:
         """
         Set attributes from the image and type.
 
@@ -156,7 +158,7 @@ class Image(Convinience):
             # swapaxes returns a view by default
             image: np.ndarray[int | float] = image.copy().swapaxes(0, 1)
         self._hw = h, w
-        self._image: np.ndarray[int | float] = self._image
+        self._image: np.ndarray[int | float] = image
 
     @classmethod
     def from_disk(cls, path_folder: str) -> Self:
@@ -488,9 +490,11 @@ class ImageSample(Image):
     """
     Define sample area.
 
-    This function uses a multistep approach to find the sample area. Oftentimes it is necessary to define the
-    object color, which tells the algorithms if the pixels of the samples are lighter than the background (in which
-    case the 'obj_color' keyword should be set to 'light') or darker (obj_color='dark'). It is recommended to save
+    This function uses a multistep approach to find the sample area. Oftentimes
+    it is necessary to define the object color, which tells the algorithms if
+    the pixels of the samples are lighter than the background (in which case
+    the 'obj_color' keyword should be set to 'light') or darker
+    (obj_color='dark'). It is recommended to save
 
     Example Usage
     -------------
@@ -501,18 +505,22 @@ class ImageSample(Image):
     >>> i = ImageSample(path_image_file="/path/to/your/file", obj_color='light')
     or
     >>> i = ImageSample(path_image_file="/path/to/your/file", obj_color='dark')
-    depending on your sample. The resolution of the image matters for downstream applications (e.g. combination of
-    image with MSI measurement. Therefore, for MSI applications it is adviced to use the project class which takes
+    depending on your sample. The resolution of the image matters for downstream
+    applications (e.g. combination of image with MSI measurement. Therefore,
+    for MSI applications it is adviced to use the project class which takes
     care of finding the right image file (specified in the mis-file).
-    Alternatively, one can load in a previously saved ImageSample instance by providing the folder path
-    >>> i = ImageSample.from_path("path/to/your/folder")
+    Alternatively, one can load in a previously saved ImageSample instance by
+    providing the folder path
+    >>> i = ImageSample.from_disk("path/to/your/folder")
     or
     >>> i = ImageSample(path_image_file='path/to/your/file')
     >>> i.load()
 
-    It is recommended to stick to the properties, e.g. image, image_grayscale, image_binary, image_simplified, main_contour.
-    The most important property is the image_sample_area which is the final result of performing all the steps of finding
-    the sample area, so initiating and checking a new instance could look like this:
+    It is recommended to stick to the properties, e.g. image, image_grayscale,
+    image_binary, image_simplified, main_contour. The most important property
+    is the image_sample_area which is the final result of performing all the
+    steps of finding the sample area, so initiating and checking a new instance
+    could look like this:
     >>> from msi_workflow import ImageSample
     >>> i = ImageSample(path_image_file="/path/to/your/file")
     >>> i.set_sample_area()
@@ -550,8 +558,9 @@ class ImageSample(Image):
         image : np.ndarray[float | int], optional
            Alternatively, an image can be provided directly.
         image_type: str, optional
-           If the input image is not a cv image, provide this keyword argument. Options are 'cv', 'np', 'pil'
-           for images read or processed with OpenCV, numpy or PILLOW respectively.
+           If the input image is not a cv image, provide this keyword argument.
+           Options are 'cv', 'np', 'pil' for images read or processed with
+           OpenCV, numpy or PILLOW respectively.
         path_folder : str, optional
            Folder in which the image or saved object is located. If not provided,
            will be inferred from path_image_file.
@@ -569,8 +578,11 @@ class ImageSample(Image):
 
         # overwrite the obj color attribute of the super init method
         if obj_color is not None:
-            assert obj_color in ['light', 'dark'], 'obj_color must be either "light" or "dark"!'
-        self.obj_color: str = self._get_obj_color() if obj_color is None else obj_color
+            assert obj_color in ['light', 'dark'], \
+                'obj_color must be either "light" or "dark"!'
+            self.obj_color: str = obj_color
+        else:
+            self.obj_color: str = self._get_obj_color()
 
     def _pre_save(self):
         # if image_file is defined, we don't need to store the original image
@@ -578,7 +590,7 @@ class ImageSample(Image):
             self._save_attrs.remove('_image')
 
     def _post_save(self):
-        self._save_attrs.append('_image')
+        self._save_attrs.add('_image')
 
     def _post_load(self):
         if check_attr(self, '_image'):
@@ -586,9 +598,9 @@ class ImageSample(Image):
                 'loaded corrupted instance with neither image nor image_file'
             self._image = cv2.imread(self.path_image_file)
 
-    def _get_obj_color(self, region_middleground: float=.8, **_) -> str:
+    def _get_obj_color(self, region_middleground: float = .8, **_) -> str:
         """
-        Determine if middleground is light or dark by comparing averages.
+        Determine if middle-ground is light or dark by comparing averages.
 
         Parameters
         ----------
@@ -763,7 +775,7 @@ class ImageSample(Image):
             # determined values
             box_ratio_y, center_box_y = params.x
 
-        center_box: tuple[int, int] = (center_box_x, center_box_y)
+        center_box: tuple[float, float] = (center_box_x, center_box_y)
         logger.info(f'found box with {params.x}')
         logger.info(f'solver converged: {params.success}')
 
@@ -1026,7 +1038,7 @@ class ImageROI(Image):
     the 'from_parent' constructor:
     >>> from msi_workflow import ImageROI
     >>> i = ImageSample(...)
-    >>> i.set_from_parent(...)
+    >>> i.from_disk(...)
     >>> ir = ImageROI.from_parent(i)
 
     Otherwise, the instance can be initiated using the default constructor by either providing an image or a file to an image.
@@ -1041,7 +1053,7 @@ class ImageROI(Image):
     Classify the foreground pixels works best if the age span is known, in which case the kernel size can be estimated
     to cover about 2 years:
     >>> ir.set_age_span((0, 100))  # sample covers ages from 0 to 100 yrs
-    >>> ir.set_classification_adaptive_mean_filter()
+    >>> ir.set_classification_adaptive_mean()
     otherwise
     >>> ir.set_classification_varying_kernel_size()
     can be used which takes the median classification of a bunch of classifications with filters at different sizes.
@@ -1504,7 +1516,7 @@ class ImageROI(Image):
 
     def _user_punchholes(self) -> None:
         interactive_image: InteractiveImage = InteractiveImage(
-            self.image, mode='punchholes'
+            image_convert_types.swap_RB(self.image), mode='punchholes'
         )
         interactive_image.show()
 
@@ -1588,7 +1600,7 @@ class ImageClassified(Image):
     >>> ir = ImageROI.from_disk('path/to/your/folder')
     >>> ic = ImageClassified.from_parent(ir)
     >>> ic.set_seeds(peak_prominence=.1,plts=True)
-    >>> ic._set_params_laminae_simplified()
+    >>> ic.set_params_laminae_simplified()
     >>> ic.set_quality_score()
     or, doing it all in one step
     >>> ic.set_laminae_params_table()
@@ -1600,7 +1612,7 @@ class ImageClassified(Image):
     >>> ic.plot_overview()
     """
 
-    _save_attrs: list[str] = [
+    _save_attrs: set[str] = {
         'age_span',
         '_average_width_yearly_cycle',
         'image_file',
@@ -1611,7 +1623,7 @@ class ImageClassified(Image):
         'params_laminae_simplified',
         'image_seeds',
         '_image_classification'
-    ]
+    }
 
     def __init__(
             self,
@@ -1660,6 +1672,12 @@ class ImageClassified(Image):
         )
 
         if image_classification is not None:
+            assert image_classification.shape[:2] == self._image.shape[:2], (
+                'image_classification and image should have the same shape ' +
+                'along the first two axes' +
+                f'but have shapes {image_classification.shape[:2]}' +
+                f' and {self._image.shape[:2]}'
+            )
             self._image_classification: np.ndarray[int] = image_classification
 
         self.use_tilt_correction: bool = use_tilt_correction
@@ -1721,13 +1739,24 @@ class ImageClassified(Image):
         av[~mask_nonempty_col] = 0
         return av
 
+    def _set_corrected_using_mapper(self, mapper: Mapper) -> None:
+        self._image_corrected: np.ndarray = mapper.fit(
+            self._image, preserve_range=True)
+        ic_corrected: np.ndarray = mapper.fit(
+            self._image_classification, preserve_range=True
+        )
+        # restore original values
+        self._image_classification_corrected = restore_unique_values(
+            ic_corrected, (0, 127, 255)
+        )
+        self._tilt_descriptor: Mapper = mapper
+
     def set_corrected_image(
             self,
             plts: bool = False,
             nx_pixels_downscaled: int = 500,
-            overwrite: bool = False,
             **kwargs
-    ):
+    ) -> None:
         """
         Use Descriptor class to find tilts of layers in the image and set
         corrected images.
@@ -1750,83 +1779,89 @@ class ImageClassified(Image):
             'image_classification has not been provided'
 
         mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
-        if os.path.exists(mapper._get_disc_folder_and_file()[1]) and not overwrite:
+
+        logger.info('setting new tilt correction transformation')
+        # downscaled image has at most nx_pixels_downscaled pixels in x-direction
+        downscale_factor: float = min((
+            nx_pixels_downscaled / self._image.shape[1],
+            1
+        ))
+        downscaled_shape = (
+            round(self._image.shape[0] * downscale_factor),
+            round(self._image.shape[1] * downscale_factor)
+        )
+        image_downscaled: np.ndarray = skimage.transform.resize(
+            self._image, downscaled_shape
+        )
+        logger.info(
+            f'initializing descriptor with image of shape '
+            f'{image_downscaled.shape} (instead of {self._image.shape})'
+        )
+        # TODO: set max_size and min_size from age model, if available
+        d = Descriptor(image=image_downscaled, **kwargs)
+
+        d.set_conv()
+        d.fit(**kwargs)
+
+        U = d.get_shift_matrix(self._image.shape[:2])
+        mapper.add_UV(U=U)
+        mapper.save()
+
+        self._set_corrected_using_mapper(mapper)
+
+        if plts:
+            d.plot_kernels()
+            d.plot_kernel_on_img()
+            d.plot_parameter_images()
+            d.plot_quiver()
+            d.plot_corrected()
+
+    def require_corrected_images(
+            self, overwrite=False, **kwargs
+    ) -> tuple[np.ndarray, np.ndarray]:
+        # return an existing corrected image
+        if check_attr(self, '_image_corrected') and (not overwrite):
+            return (
+                self._image_corrected.copy(),
+                self._image_classification_corrected.copy()
+            )
+
+        # load a mapping, apply it and return the result
+        mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
+        if os.path.exists(mapper._get_disc_folder_and_file()[1]) and (not overwrite):
             logger.info('loading tilt correction transformation')
             mapper.load()
-        else:
-            logger.info('setting new tilt correction transformation')
-            # downscaled image has at most nx_pixels_downscaled pixels in x-direction
-            downscale_factor: float = min((
-                nx_pixels_downscaled / self._image.shape[1],
-                1
-            ))
-            downscaled_shape = (
-                round(self._image.shape[0] * downscale_factor),
-                round(self._image.shape[1] * downscale_factor)
+            self._set_corrected_using_mapper(mapper)
+            return (
+                self._image_corrected.copy(),
+                self._image_classification_corrected.copy()
             )
-            image_downscaled: np.ndarray = skimage.transform.resize(
-                self._image, downscaled_shape
-            )
-            logger.info(
-                f'initializing descriptor with image of shape '
-                f'{image_downscaled.shape} (instead of {self._image.shape})'
-            )
-            # TODO: set max_size and min_size from age model, if available
-            d = Descriptor(image=image_downscaled, **kwargs)
 
-            d.set_conv()
-            d.fit(**kwargs)
-
-            U = d.get_shift_matrix(self._image.shape[:2])
-            mapper.add_UV(U=U)
-            mapper.save()
-
-            if plts:
-                d.plot_kernels()
-                d.plot_kernel_on_img()
-                d.plot_parameter_images()
-                d.plot_quiver()
-                d.plot_corrected()
-
-        self._image_corrected: np.ndarray = mapper.fit(
-            self._image, preserve_range=True)
-        ic_corrected: np.ndarray = mapper.fit(
-            self._image_classification, preserve_range=True
+        # nothing found, create a new mapping
+        self.set_corrected_image(**kwargs)
+        return (
+            self._image_corrected.copy(),
+            self._image_classification_corrected.copy()
         )
-        # restore original values
-        self._image_classification_corrected = restore_unique_values(
-            ic_corrected, (0, 127, 255)
-        )
-        self._tilt_descriptor: Mapper = mapper
-
-    def require_corrected_image(self, **kwargs):
-        if not check_attr(self, '_image_corrected'):
-            self.set_corrected_image(**kwargs)
-        return self._image_corrected.copy()
 
     @property
-    def image_corrected(self):
-        return self.require_corrected_image()
+    def image_corrected(self) -> np.ndarray:
+        return self.require_corrected_images()[0]
 
     @property
-    def image(self):
+    def image(self) -> np.ndarray:
         return self.image_corrected if self.use_tilt_correction else self._image
 
-    def require_corrected_image_classification(self, **kwargs):
-        if not check_attr(self, '_image_classification_corrected'):
-            self.set_corrected_image(**kwargs)
-        return self._image_classification_corrected.copy()
+    @property
+    def image_classification_corrected(self) -> np.ndarray:
+        return self.require_corrected_images()[1]
 
     @property
-    def image_classification_corrected(self):
-        return self.require_corrected_image_classification()
-
-    @property
-    def image_classification(self):
+    def image_classification(self) -> np.ndarray:
         return (
             self.image_classification_corrected
             if self.use_tilt_correction
-            else self._image_corrected.copy()
+            else self._image_classification.copy()
         )
 
     def set_seeds(
@@ -1966,7 +2001,7 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
             self._seeds_dark[self._prominences_dark > peak_prominence]
         return seeds_light, seeds_dark
 
-    def _set_params_laminae_simplified(
+    def set_params_laminae_simplified(
             self,
             peak_prominence: float = 0,
             height0_mode: str = 'use_peak_widths',
@@ -2042,14 +2077,21 @@ use_age_model, not {height0_mode}')
 
         dataframe_params_dark: pd.DataFrame = set_params_laminae('dark')
 
-        for attr in ['_width_light', '_width_dark', '_prominences_light', '_prominences_dark']:
+        for attr in [
+            '_width_light',
+            '_width_dark',
+            '_prominences_light',
+            '_prominences_dark'
+        ]:
             self.__delattr__(attr)
 
         dataframe_params: pd.DataFrame = pd.concat(
             [dataframe_params_light, dataframe_params_dark]
         ).sort_values(by='seed', ignore_index=True)
         if downscale_factor != 1:
-            dataframe_params['seed'] = (dataframe_params['seed'] / downscale_factor).round()
+            dataframe_params['seed'] = (
+                    dataframe_params['seed'] / downscale_factor
+            ).round()
             dataframe_params['height'] = dataframe_params['height'] / downscale_factor
 
         # make sure data types are right
@@ -2057,6 +2099,7 @@ use_age_model, not {height0_mode}')
             {'seed': int, 'a': float, 'b': float, 'c': float, 'd': float,
              'height': float, 'success': bool, 'color': str}
         )
+
         self.params_laminae_simplified: pd.DataFrame = dataframe_params
 
     def _get_region_from_params(self, idx: int) -> tuple[np.ndarray[int], int, int]:
@@ -2179,12 +2222,21 @@ use_age_model, not {height0_mode}')
         mask_dark: np.ndarray[bool] = (region_classification == labels_to_keys['dark'])
         sum_lights: float = np.sum(mask_light * region_layer)
         sum_darks: float = np.sum(mask_dark * region_layer)
+
+        # catch edge case "empty layers"
+        # this should mean that there are no nans, since sum_darks + sum_lights
+        # should always be less than mask_extent (difference is the number of
+        # hole pixels) and hence continuity and brightness are well-defined
+        if sum_darks + sum_lights == 0:
+            return np.array([0, 0, 0])
+
         # only lights in layer --> hom = 1
         # only darks in layer --> hom = -1
         homogeneity: float = (sum_lights - sum_darks) / (sum_lights + sum_darks)
         # no holes --> 1, only holes --> 0
         mask_valid: np.ndarray[bool] = region_layer & (mask_light | mask_dark)
         mask_extent: np.ndarray[bool] = min_max_extent_layer(mask_valid)
+
         continuity: float = np.sum(mask_valid) / np.sum(mask_extent)
         # brightness: average grayscale intensity in region_layer
         #   --> values between 0 and 255
@@ -2228,7 +2280,7 @@ use_age_model, not {height0_mode}')
             luminance difference: brightness middle - neighbours
             for top / bottom only consider layer below / above as neighbour
             value range contrast:
-              max luminence diff: +/- 255
+              max luminance diff: +/- 255
               --> contrast in [-2, 2]
             so let's not take the average of center and neighbours but their sum
             this changes contrast by factor of 2, therefore contrast in [-1, 1]
@@ -2252,7 +2304,9 @@ use_age_model, not {height0_mode}')
         N_layers: int = params.shape[0]
 
         # initiate temporary arrays for hom, cont, bright
-        criteria_quality_columns: list[str] = ['homogeneity', 'continuity', 'brightness']
+        criteria_quality_columns: list[str] = [
+            'homogeneity', 'continuity', 'brightness'
+        ]
         criteria_array: np.ndarray[float] = np.zeros(
             (N_layers, len(criteria_quality_columns))
         )
@@ -2393,7 +2447,9 @@ use_age_model, not {height0_mode}')
         img_e *= self.mask_foreground
         return img_e
 
-    def get_image_simplified_classification(self) -> np.ndarray[int]:
+    def get_image_simplified_classification(
+            self, expanded: bool = False
+    ) -> np.ndarray[int]:
         """
         Get an image with light and dark pixels.
 
@@ -2405,7 +2461,11 @@ use_age_model, not {height0_mode}')
         assert check_attr(self, 'image_seeds'), \
             'call set_laminae_images_from_params'
 
-        isc: np.ndarray[int] = np.sign(self.image_seeds)
+        if expanded:
+            isc: np.ndarray[int] = np.sign(self.get_image_expanded_laminae())
+        else:
+            isc: np.ndarray[int] = np.sign(self.image_seeds)
+
         isc[isc == 1] = key_light_pixels
         isc[isc == -1] = key_dark_pixels
 
@@ -2429,28 +2489,18 @@ use_age_model, not {height0_mode}')
         kwargs : dict, optional
             Additional keyword arguments passed on to set_laminae_images
         """
-        if (not check_attr(self, 'age_span')) and (n_expected is None):
-            logger.warning(
-                f'reduce_laminae requires either an age_span ' +
-                'or the number of expected layers, exiting method'
-            )
-            return
-        assert check_attr(self, 'params_laminae_simplified'), \
-            'call _set_params_laminae_simplified'
-        assert 'quality' in self.params_laminae_simplified.columns, \
-            'internal error: quality criterion missing'
-        assert check_attr(self, 'age_span'), 'no age span set, call set_age_span'
-
         def reduce(df_: pd.DataFrame) -> pd.DataFrame:
             """
             Combine duplicate seed entries.
 
             Heights are summed, poly-coeffs are averaged, quality is maximized.
             """
+            # TODO: take weighted averages (weights=areas)
             df_: pd.DataFrame = df_.sort_values(by=['sseed', 'quality'])
-            grouper = df.groupby(by='sseed')
+            grouper = df_.groupby(by='sseed')
             summed: pd.DataFrame = grouper.sum()
-            highest: pd.DataFrame = grouper.tail(1)  # lowest quality is first so take last
+            # lowest quality is first so take last
+            highest: pd.DataFrame = grouper.tail(1)
 
             meaned: pd.Series = df_\
                 .drop(columns='color')\
@@ -2461,10 +2511,21 @@ use_age_model, not {height0_mode}')
             highest.reset_index(inplace=True, drop=True)
             meaned.reset_index(inplace=True, drop=True)
 
-            highest.loc[:, 'width'] = summed.loc[:, 'width']
+            highest.loc[:, 'height'] = summed.loc[:, 'height']
             highest.loc[:, ['a', 'b', 'c', 'd']] = meaned.loc[:, ['a', 'b', 'c', 'd']]
 
             return highest
+
+        assert check_attr(self, 'age_span') or (n_expected is None), (
+            'reduce_laminae requires either an age_span ' +
+            'or the number of expected layers, exiting method'
+        )
+        assert check_attr(self, 'params_laminae_simplified'), \
+            'call set_params_laminae_simplified'
+        assert 'quality' in self.params_laminae_simplified.columns, \
+            'internal error: quality criterion missing'
+        assert check_attr(self, 'age_span'), \
+            'no age span set, call set_age_span'
 
         df: pd.DataFrame = self.params_laminae_simplified.copy()
 
@@ -2474,6 +2535,7 @@ use_age_model, not {height0_mode}')
                 for c in df.color
         ])
         seeds: np.ndarray[int] = df.seed.to_numpy() * colors
+
         df.loc[:, 'sseed'] = seeds
 
         # remove duplicate layers (same seed and color)
@@ -2491,8 +2553,8 @@ use_age_model, not {height0_mode}')
             f'expecting {n_expected} each, ' +
             f'found {n_light=} and {n_dark=} layers'
         )
-        if (not n_light_excess) and (not n_dark_excess):
-            logger.info('Since number of layers is too low, exiting method call.')
+        if (not n_light_excess > 0) and (not n_dark_excess > 0):
+            logger.warning('Since number of layers is too low, exiting method call.')
             return
 
         logger.info(
@@ -2502,10 +2564,17 @@ use_age_model, not {height0_mode}')
 
         mask_light = df.loc[:, 'sseed'] > 0
         mask_dark = df.loc[:, 'sseed'] < 0
-        indices_light_too_low = df.loc[mask_light, 'quality'].nsmallest(n=n_light_excess).index
-        indices_dark_too_low = df.loc[mask_dark, 'quality'].nsmallest(n=n_dark_excess).index
+        indices_light_too_low = df\
+            .loc[mask_light, 'quality']\
+            .nsmallest(n=n_light_excess)\
+            .index
+        indices_dark_too_low = df\
+            .loc[mask_dark, 'quality']\
+            .nsmallest(n=n_dark_excess)\
+            .index
         drop_rows = np.concatenate((indices_dark_too_low, indices_light_too_low))
         df.drop(index=drop_rows, inplace=True)
+        df.sort_values(by='seed', inplace=True)
         df.reset_index(inplace=True, drop=True)
 
         self.params_laminae_simplified: pd.DataFrame = df
@@ -2533,7 +2602,8 @@ use_age_model, not {height0_mode}')
             axs = [ax]
             hold = True
 
-        # if called from outside (e.g. ax provided), only quality criteria will be plotted
+        # if called from outside (e.g. ax provided), only quality criteria
+        # will be plotted
         is_outside_call = len(axs) != 2
 
         if take_abs:
@@ -2559,11 +2629,17 @@ use_age_model, not {height0_mode}')
                         linewidth=.9)
         axs[0].grid('on')
         axs[0].set_xlim((0, width_img))
-        axs[0].legend(bbox_to_anchor=(0, 1, 1, 0.2), loc="lower left",
-                      mode="expand", borderaxespad=0, ncol=1 if is_outside_call else 3)
+        axs[0].legend(bbox_to_anchor=(0, 1, 1, 0.2),
+                      loc="lower left",
+                      mode="expand",
+                      borderaxespad=0,
+                      ncol=1 if is_outside_call else 3)
 
         if not is_outside_call:
-            axs[1].imshow(self.image_classification, interpolation='none', aspect='auto', cmap='gray')
+            axs[1].imshow(self.image_classification,
+                          interpolation='none',
+                          aspect='auto',
+                          cmap='gray')
             fig.tight_layout()
 
         if not hold:
@@ -2591,7 +2667,10 @@ use_age_model, not {height0_mode}')
         plt.show()
 
     def plot_overview(
-            self, fig: plt.Figure | None = None, axs: Iterable[plt.Axes] | None = None, hold=False
+            self,
+            fig: plt.Figure | None = None,
+            axs: Iterable[plt.Axes] | None = None,
+            hold=False
     ) -> None | tuple[plt.Figure, Iterable[plt.Axes]]:
         """Plot an overview graph."""
 
@@ -2641,7 +2720,7 @@ use_age_model, not {height0_mode}')
         self.set_seeds(**kwargs)
         # initiate params dataframe with seeds and params for distorted rects
         logger.info("finding distorted rects")
-        self._set_params_laminae_simplified(**kwargs)
+        self.set_params_laminae_simplified(**kwargs)
         # create output images for further analysis
         logger.info("creating image")
         # add quality criteria for each layer

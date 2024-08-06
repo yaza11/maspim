@@ -71,12 +71,20 @@ def plt_cv2_image(
         fig, ax = plt.subplots(layout="constrained")
     if ((cmode := infer_mode(image)) != 'L') and swap_rb:
         image = swap_RB(image.copy())
-        ax.imshow(image, interpolation='None')
+        kwargs_imshow = {}
+        cmap=None
     elif (cmode == 'L') and (cmap is None):
         cmap = 'gray'
-        ax.imshow(image, interpolation='None', cmap=cmap, **kwargs)
+        kwargs_imshow = kwargs
     else:
-        ax.imshow(image, interpolation='None', cmap=cmap, **kwargs)
+        kwargs_imshow = kwargs
+
+    ax.imshow(
+        rescale_values(image.astype(float), 0, 1),
+        interpolation='None',
+        cmap=cmap,
+        **kwargs_imshow
+    )
 
     if title is not None:
         ax.set_title(title)
