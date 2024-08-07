@@ -600,7 +600,7 @@ class ImageSample(Image):
         self._save_attrs.add('_image')
 
     def _post_load(self):
-        if check_attr(self, '_image'):
+        if not check_attr(self, '_image'):
             assert check_attr(self, 'path_image_file'), \
                 'loaded corrupted instance with neither image nor image_file'
             self._image = cv2.imread(self.path_image_file)

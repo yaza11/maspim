@@ -122,21 +122,36 @@ class MSI(Data):
             'cant handle grid with different distances in x and y'
         self._distance_pixels = float(d)
     
-    def inject_feature_table_from(self, upstream: Spectra | DataAnalysisExport):
+    def inject_feature_table_from(
+            self,
+            upstream: Spectra | DataAnalysisExport | pd.DataFrame,
+            supress_warnings: bool = False
+    ) -> None:
         """
         Set the feature table from an upstream object, such as Spectra or
         DataAnalysisExport.
         """
-        assert check_attr(upstream, 'feature_table'), \
-            'upstream object must have a feature table'
-        if not check_attr(
+        assert (
+            (is_df := isinstance(upstream, pd.DataFrame)) or
+            check_attr(upstream, 'feature_table')
+        ), 'upstream object must have a feature table'
+
+        if (not is_df) and (not check_attr(  # check if feature table is meaningful
                 upstream,
                 'feature_table',
                 True
-        ):
+        )) and (not supress_warnings):
             logger.warning('found empty feature table')
+        if is_df and (not supress_warnings):
+            logger.warning(
+                'Setting feature tables directly is discouraged. '
+                'Consider providing either a Spectra or DataAnalysisExport '
+                'object.'
+            )
 
-        self._feature_table: pd.DataFrame = upstream.feature_table.copy()
+        self._feature_table: pd.DataFrame = (
+            upstream if is_df else upstream.feature_table.copy()
+        )
     
 
 if __name__ == '__main__':

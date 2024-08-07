@@ -10,7 +10,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
-import pickle
 import psutil
 import logging
 
@@ -364,6 +363,26 @@ class Spectra(Convinience):
             self._mzs = reader.mzs
         self._intensities = np.zeros_like(self._mzs)
 
+    def _pre_save(self):
+        # only save feature table, if both exist
+        if (
+                check_attr(self, '_feature_table')
+                and check_attr(self, '_line_spectra')
+        ):
+            self._save_attrs.remove('_feature_table')
+
+    def _post_save(self):
+        self._save_attrs.add('_feature_table')
+
+    def _post_load(self):
+        if (  # set feature_table from the saved line_spectra
+                not check_attr(self, '_feature_table')
+                and check_attr(self, '_line_spectra')
+        ):
+            self._line_spectra: np.ndarray[float] = self.feature_table. \
+                drop(columns=['R', 'x', 'y']). \
+                to_numpy()
+
     @property
     def indices(self) -> np.ndarray[int]:
         check_attr(self, '_indices')
@@ -520,7 +539,8 @@ class Spectra(Convinience):
         for i, index in tqdm(
                 enumerate(self.indices),
                 desc='Adding spectra',
-                smoothing=50/self._n_spectra
+                smoothing=50/self._n_spectra,
+                total=self._n_spectra
         ):
             spectrum: np.ndarray[float] = self._get_spectrum(
                 reader=reader, index=index, only_intensity=True
@@ -548,7 +568,12 @@ class Spectra(Convinience):
         """
         self.reset_intensities()
 
-        for it, index in enumerate(self.indices):
+        for it, index in tqdm(
+                enumerate(self.indices),
+                desc='Adding aligned spectra',
+                smoothing=50/self._n_spectra,
+                total=self._n_spectra
+        ):
             spectrum: np.ndarray[float] = self._get_spectrum(
                 reader=reader, index=index, only_intensity=False
             )
@@ -1880,6 +1905,7 @@ class Spectra(Convinience):
             data=data,
             columns=np.around(self.kernel_params[:, 0], 4).astype(str)
         )
+        df.loc[:, 'tic_window'] = self._tic
 
         df: pd.DataFrame = self._add_rxys_to_df(df)
         # drop possible duplicates due to shift in optimizer
@@ -2192,12 +2218,6 @@ class Spectra(Convinience):
         self.set_targets(targets, reader=reader, **kwargs)
         self.filter_line_spectra(**kwargs)
         self.set_feature_table(**kwargs)
-
-    def _post_load(self):
-        if check_attr(self, '_feature_table'):
-            self._line_spectra: np.ndarray[float] = self.feature_table.\
-                drop(columns=['R', 'x', 'y']).\
-                to_numpy()
 
     def plot_summed(
             self,
@@ -2741,23 +2761,3 @@ class MultiSectionSpectra(Spectra):
         self.bin_spectra(readers=readers, **kwargs)
         self.filter_line_spectra(**kwargs)
         self.set_feature_table(readers=readers, **kwargs)
-
-    def _pre_save(self):
-        # only save feature table, if both exist
-        if (
-                check_attr(self, '_feature_table')
-                and check_attr(self, '_line_spectra')
-        ):
-            self._save_attrs.remove('_line_spectra')
-
-    def _post_save(self):
-        self._save_attrs.add('_line_spectra')
-
-    def _post_load(self):
-        if (  # set line_spectra from the saved feature table
-                not check_attr(self, '_line_spectra')
-                and check_attr(self, '_feature_table')
-        ):
-            self._line_spectra: np.ndarray[float] = self.feature_table. \
-                drop(columns=['R', 'x', 'y']). \
-                to_numpy()

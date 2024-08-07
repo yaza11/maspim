@@ -202,7 +202,9 @@ class DataBaseClass:
         return self.feature_table.columns
 
 
-class Data(Convinience, DataBaseClass):
+# need to inherit from DataBaseClass first, otherwise feature_table will be
+# taken from Convinience
+class Data(DataBaseClass, Convinience):
     """
     Class to manipulate and analyze MSI or XRF data.
 
@@ -213,6 +215,8 @@ class Data(Convinience, DataBaseClass):
     d_folder: str | None = None
 
     _distance_pixels: int | float | None = None
+
+    tilt_correction_applied: bool = False
 
     _pca_xy: pd.DataFrame | None = None
     _pca: PCA | None = None
@@ -228,7 +232,7 @@ class Data(Convinience, DataBaseClass):
 
     _save_attrs: set[str] = {
         'distance_pixels',
-        '_feature_table',  # it could be processed, so not necessarily redundant information
+        '_feature_table',  # could be processed, so not necessarily redundant information
         'depth_section',
         'age_span'
     }
@@ -354,7 +358,8 @@ class Data(Convinience, DataBaseClass):
             median: bool = False,
             coordinate_name: str = '_ROI',
             fill_value=0,
-            plts: bool = False
+            plts: bool = False,
+            **_
     ) -> None:
         """
         Add a column to the feature table from an image (ROI of sample)
@@ -1399,20 +1404,20 @@ class ZoneAnalyzer(DataBaseClass):
 
         if add_laminae_averages:
             raise NotImplementedError('Depricated')
-            from timeSeries.cTimeSeries import TimeSeries
-            TS = TimeSeries(self._section, self._window)
-            TS.load()
-            r_av_L = TS.get_corr_with_grayscale().copy()
-            r_av_C = TS.get_corr_with_grayscale(contrast=True).copy()
-            del TS
-
-            if not sign_criteria:
-                r_av_L = np.abs(r_av_L)
-                r_av_C = np.abs(r_av_C)
-            # add median seasonality
-            rankings['corr_av_L'] = r_av_L
-            rankings['corr_av_C'] = r_av_C
-            columns = list(columns) + ['corr_av_C', 'corr_av_L']
+            # from timeSeries.cTimeSeries import TimeSeries
+            # TS = TimeSeries(self._section, self._window)
+            # TS.load()
+            # r_av_L = TS.get_corr_with_grayscale().copy()
+            # r_av_C = TS.get_corr_with_grayscale(contrast=True).copy()
+            # del TS
+            #
+            # if not sign_criteria:
+            #     r_av_L = np.abs(r_av_L)
+            #     r_av_C = np.abs(r_av_C)
+            # # add median seasonality
+            # rankings['corr_av_L'] = r_av_L
+            # rankings['corr_av_C'] = r_av_C
+            # columns = list(columns) + ['corr_av_C', 'corr_av_L']
 
         if sign_criteria:
             signs = np.sign(self.rankings['intensity_div'])

@@ -308,6 +308,3 @@ class AgeModel(Convinience):
         new_age = np.concatenate([self.age, other.age])
         new = AgeModel(depth=new_depth, age=new_age)
         return new
-
-    def __repr__(self) -> str:
-        return str(self.df)

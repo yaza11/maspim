@@ -27,7 +27,7 @@ def return_existing(attr_name: str) -> Callable:
 
     def return_existing_decorator(fallback_function):
         def return_existing_wrapper(self, *args, **kwargs):
-            if hasattr(self, attr_name):
+            if check_attr(self, attr_name):
                 return getattr(self, attr_name)
             else:
                 return fallback_function(self, *args, **kwargs)
@@ -51,13 +51,58 @@ def check_attr(obj, attr_name: str, check_nonempty: bool = False) -> bool:
     return valid and np.any(getattr(obj, attr_name))
 
 
+def _format_float(v: float | Any, precision=4) -> str:
+    v_str: str = str(v)
+    return (str(round(float(v), precision))
+            if ('.' in v_str) and (v_str.replace('.', '').isdigit())
+            else v_str)
+
+
+def _format_iterable(v: Iterable, n=10) -> str:
+    v_str = '[' + ', '.join([_format_float(e) for i, e in enumerate(v) if i < n])
+    v_str += ', ...]' if len(v) > n else ']'
+    return v_str
+
+
+def object_to_string(obj: object | dict, pad=0) -> str:
+    out: list[str] = []
+    if isinstance(obj, dict):
+        dict_items = obj.items()
+    else:
+        dict_items = obj.__dict__.items()
+    for i, (k, v) in enumerate(dict_items):
+        if isinstance(v, np.ndarray):
+            v_str = f'Numpy array of type {v.dtype}, with shape {v.shape}'
+        elif isinstance(v, pd.DataFrame):
+            v_str = (f'Pandas DataFrame with columns {_format_iterable(v.columns)}, '
+                     f'indices {_format_iterable(v.index)} '
+                     f'and shape {v.shape}')
+        elif isinstance(v, dict):
+            v_str = ('\n' + ' ' * (len(k) + 2))\
+                .join([f'{k}: {v}' for k, v in v.items()])
+        elif isinstance(v, list | tuple | set):
+            v_str = _format_iterable(v)
+        else:
+            v_str = str(v)
+        if i == 0:
+            out.append(f'{k}: {v_str}')
+        else:
+            out.append(' ' * pad + f'{k}: {v_str}')
+    return '\n'.join(out)
+
+
 class Convinience:
     path_d_folder: str | None = None
     path_folder: str | None = None
-    feature_table: pd.DataFrame | None = None
 
     _save_attrs: set[str] | None = None
     _save_in_d_folder: bool = False
+
+    @property
+    def feature_table(self) -> pd.DataFrame | None:
+        raise NotImplementedError(
+            f'{self.__class__.__name__} does not implement a feature_table property'
+        )
 
     def _get_disc_folder_and_file(self) -> tuple[str, str]:
         assert (check_attr(self, 'path_folder')
@@ -85,17 +130,7 @@ class Convinience:
         return self._get_disc_folder_and_file()[1]
 
     def __repr__(self) -> str:
-        out: list[str] = []
-        for k, v in self.__dict__.items():
-
-            if isinstance(v, np.ndarray):
-                v_str = f'Numpy array of type {v.dtype}, with shape {v.shape}'
-            elif isinstance(v, pd.DataFrame):
-                v_str = '\n' + v.to_string()
-            else:
-                v_str = str(v)
-            out.append(f'{k}: {v_str}')
-        return '\n'.join(out)
+        return object_to_string(self)
 
     def _pre_load(self):
         pass

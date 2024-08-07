@@ -50,7 +50,7 @@ from msi_workflow.imaging.register.helpers import Mapper
 
 from msi_workflow.timeSeries.time_series import TimeSeries
 from msi_workflow.timeSeries.proxy import UK37
-from msi_workflow.util.convinience import check_attr
+from msi_workflow.util.convinience import check_attr, object_to_string
 from msi_workflow.util.read_msi_align import get_teaching_points
 
 PIL_Image.MAX_IMAGE_PIXELS = None
@@ -653,7 +653,7 @@ class ProjectBaseClass:
     _corrected_tilt: bool = False
 
     def __repr__(self) -> str:
-        return Convinience.__repr__(self)
+        return object_to_string(self)
 
     def _update_files(self):
         """Placeholder for children"""
@@ -900,11 +900,12 @@ class ProjectBaseClass:
         """
         # create _image_roi using image from image_sample
         self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
+        if self.age_span is not None:
+            self._image_roi.age_span = self.age_span
+
         self._image_roi.require_classification(**kwargs)
         self._image_roi.set_punchholes(**kwargs)
 
-        if self.age_span is not None:
-            self._image_roi.age_span = self.age_span
         self._image_roi.save()
 
         self._update_files()
@@ -929,9 +930,9 @@ class ProjectBaseClass:
 
     def set_image_classified(
             self,
-            peak_prominence: float = .1,
-            max_slope: float = .1,
+            peak_prominence: float = .01,
             downscale_factor: float = 1 / 16,
+            reduce_laminae: bool = True,
             **kwargs
     ) -> None:
         """
@@ -943,13 +944,13 @@ class ProjectBaseClass:
         peak_prominence: float (default =0.1)
             The relative peak prominence above which peaks in the brightness
             function are considered as relevant.
-        max_slope: float (default =0.1)
-            Maximum allowed slope of laminae. A slope of 0.1 corresponds to
-            10 % or arctan(0.1) = 5.7 degrees
         downscale_factor: float (default = 1 / 16)
             Downscaling factor to be applied to the image before tuning the
             parameters. The closer this value is to 0, the worse the
             resolution, but the faster the convergence.
+        reduce_laminae: bool, optional
+            Reduce the number of layers to that predicted by the age model.
+            The default is True.
 
         Returns
         -------
@@ -964,10 +965,11 @@ class ProjectBaseClass:
         logger.info('setting laminae in ImageClassified ...')
         self._image_classified.set_laminae_params_table(
             peak_prominence=peak_prominence,
-            max_slope=max_slope,
             downscale_factor=downscale_factor,
             **kwargs
         )
+        if reduce_laminae:
+            self._image_classified.reduce_laminae(**kwargs)
         self._image_classified.save()
         self._update_files()
 
@@ -1011,19 +1013,31 @@ class ProjectBaseClass:
         if self._is_laminated:
             self.require_image_classified(overwrite=overwrite, **kwargs)
 
-    def add_image_attributes(self):
+    def add_image_attributes(self, **kwargs):
+        def add_or_warn(obj_name: str, func, **kwargs_):
+            if check_attr(self, obj_name):
+                func(**kwargs_)
+            else:
+                logger.warning(
+                    'Unable to call {func.__name__} because {obj_name} is not '
+                    'initialized. Call require_{obj_name} first.'
+                )
+
         self.add_tic()
-        if self._image_handler is not None:
-            self.add_pixels_ROI()
-        if self._image_sample is not None:
-            self.add_photo()
-        if self._image_roi is not None:
-            self.add_holes()
-            self.add_light_dark_classification()
-        if self._image_classified is not None:
-            self.add_laminae_classification()
-        if self._xray is not None:
-            self.add_xray()
+
+        add_or_warn('_image_handler', self.add_pixels_ROI)
+        add_or_warn('_image_sample', self.add_photo, **kwargs)
+        add_or_warn('_image_roi', self.add_holes, **kwargs)
+        add_or_warn(
+            '_image_roi', self.add_light_dark_classification, **kwargs
+        )
+        if self._is_laminated:
+            add_or_warn(
+                '_image_classified',
+                self.add_laminae_classification,
+                **kwargs
+            )
+        add_or_warn('_xray', self.add_xray)
 
     def require_data_object(self, *args, **kwargs):
         """Overwritten by children"""
@@ -1036,7 +1050,7 @@ class ProjectBaseClass:
     def add_tic(self, imaging_info_xml: ImagingInfoXML | None = None):
         """Add the total ion count (TIC) for each pixel to the feature table
         of the data obj."""
-        assert self._data_object is not None, "No data object"
+        assert self._data_object is not None, "Set data object first with require_data_object"
 
         if imaging_info_xml is None:
             imaging_info_xml: ImagingInfoXML = ImagingInfoXML(
@@ -1045,8 +1059,11 @@ class ProjectBaseClass:
         ft_imaging: pd.DataFrame = imaging_info_xml.feature_table.loc[
             :, ['R', 'x', 'y', 'tic', 'minutes']
         ]
-        self.data_object.feature_table = pd.merge(
-            self.data_object.feature_table, ft_imaging, how="left"
+        self.data_object.inject_feature_table_from(
+            pd.merge(self.data_object.feature_table,
+                     ft_imaging,
+                     how="left"),
+            supress_warnings=True
         )
 
     def add_pixels_ROI(self) -> None:
@@ -1071,7 +1088,7 @@ class ProjectBaseClass:
             data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh
         )
 
-    def add_photo(self, median: bool = False) -> None:
+    def add_photo(self, median: bool = False, **_) -> None:
         """
         Add the gray-level values of the photo to the feature table of the data_object.
 
@@ -1109,10 +1126,12 @@ class ProjectBaseClass:
         -------
         None
         """
+        kwargs_ = kwargs.copy()
+        kwargs['median'] = False
         assert self._image_roi is not None, 'set _image_roi first'
         assert self._data_object is not None, 'set data_object first'
         image = self.image_roi.image_binary
-        self.data_object.add_attribute_from_image(image, 'valid', median=False, **kwargs)
+        self.data_object.add_attribute_from_image(image, 'valid', **kwargs)
 
     def add_light_dark_classification(self, **kwargs) -> None:
         """
@@ -1133,14 +1152,15 @@ class ProjectBaseClass:
 
     def add_laminae_classification(self, **kwargs) -> None:
         """
-        Add light and dark laminae classification to the feature table of the data_object.
-        This only considers the foreground (valid) pixels.
+        Add light and dark laminae classification to the feature table of the
+        data_object. This only considers the foreground (valid) pixels.
 
         This requires that the ImageClassified instance has already been set.
 
-        The new column inside the feature table of the data_object is called 'classification_s'.
-        A column called 'classification_se' is also added, which is the classification image but laminae have been
-        expanded to fill the entire image, except holes.
+        The new column inside the feature table of the data_object is called
+        'classification_s'. A column called 'classification_se' is also added,
+        which is the classification image but laminae have been expanded to
+        fill the entire image, except holes.
 
         Returns
         -------
@@ -1148,6 +1168,15 @@ class ProjectBaseClass:
         """
         assert self._image_classified is not None, 'call set_image_classified'
         assert self._data_object is not None, 'set data_object first'
+
+        assert (  # image classified either not tilt corrected or data object transformed
+            (not self._image_classified.use_tilt_correction)
+            or self._data_object.tilt_correction_applied
+        ), (
+            'found image_classified but use_tilt_correction is set to True and '
+            'data object was not tilt-corrected. Please first '
+            "transform the data_object's feature table"
+        )
 
         image: np.ndarray[int] = self.image_classified.image_seeds
         image_e: np.ndarray[int] = self.image_classified.get_image_expanded_laminae()
@@ -1241,55 +1270,58 @@ class ProjectBaseClass:
             self.data_object.feature_table[depth_col]
         )
 
-    def set_xray(
-            self, path_image_file,
-            depth_section: tuple[float, float] | None = None,
-            obj_color: str = 'dark',
-            **_
-    ):
+    def _get_xray_primer(self, **kwargs) -> XRay:
+        if kwargs.get('depth_section') is None:
+            assert self.depth_span is not None, \
+                'set depth span or pass the depth_section argument'
+
+        return XRay(**kwargs)
+
+    def set_xray(self, **kwargs):
         """
         Set the X-Ray object from the specified image file and depth section.
 
         The object is accessible with p.xray with p being the project.
         This method performs all processing steps.
 
-        Parameters
-        ----------
-        path_image_file: str
-            The image file with the XRay measurement.
-        depth_section: tuple[float, float] | None
-            The depth section covered by the photo as a tuple in cm.
-            This is required if the object is not loaded from disk
-        obj_color: str (default= 'dark')
-            The relative brightness of the object compared to background.
-            Options are 'dark', 'light'.
-        """
-        if depth_section is None:
-            assert self.depth_span is not None, \
-                'set depth span or pass the depth_section argument'
 
-        self._xray: XRay = XRay(
-            path_image_file=path_image_file,
-            depth_section=depth_section,
-            obj_color=obj_color
-        )
-        # try to load from disk
-        folder: str = os.path.dirname(path_image_file)
-        name: str = 'XRay.pickle'
-        if os.path.exists(os.path.join(folder, name)):
-            self._xray.load()
-        else:
-            self._xray._require_image_sample_area()
-            self._xray.remove_bars()
-            self._xray.save()
+        """
+        assert (path_image_file := kwargs.get('path_image_file')) is not None, \
+            'Providing an image file is required for setting the xray instance'
+        assert os.path.exists(path_image_file), f'could not find {path_image_file=}'
+
+        self._xray = self._get_xray_primer(**kwargs)
+
+        self._xray._require_image_sample_area()
+        self._xray.remove_bars()
+        self._xray.save()
 
         self._update_files()
 
-    @property
-    def xray(self):
-        assert self._xray is not None, 'set xray first by calling set_xray'
+    def require_xray(self, overwrite: bool = False, **kwargs) -> XRay:
+        if check_attr(self, '_xray'):
+            return self._xray
+
+        try_load: bool = ~overwrite
+        # try to load from disk
+        if kwargs.get('path_folder') is not None:
+            path_folder: str = kwargs['get_folder']
+        elif kwargs.get('path_image_file') is not None:
+            path_folder: str = os.path.dirname(kwargs['path_image_file'])
+        else:
+            try_load = False
+        name: str = 'XRay.pickle'
+        if try_load and os.path.exists(os.path.join(path_folder, name)):
+            self._xray = self._get_xray_primer(**kwargs)
+            self._xray.load()
+            return self._xray
+
+        self.set_xray(**kwargs)
         return self._xray
 
+    @property
+    def xray(self):
+        return self.require_xray()
 
     def data_object_apply_tilt_correction(self) -> None:
         assert not self._corrected_tilt, 'tilt has already been corrected'
@@ -1928,7 +1960,7 @@ class ProjectBaseClass:
             self,
             comp: str | float | int,
             source: str,
-            tolerance: float,
+            tolerance: float = 3e-3,
             da_export_file: str | None = None,
             plot_on_background: bool = False,
             title: str | None = None,
@@ -2374,7 +2406,7 @@ class ProjectMSI(ProjectBaseClass):
 
     def set_hdf_file(
             self, reader: ReadBrukerMCF | None = None, **kwargs
-    ) -> hdf5Handler:
+    ) -> None:
         handler = hdf5Handler(self.path_d_folder)
         logger.info(f'creating hdf5 file in {self.path_d_folder}')
 
@@ -2386,8 +2418,6 @@ class ProjectMSI(ProjectBaseClass):
         # update files
         self._update_files()
 
-        return handler
-
     def get_hdf_reader(self) -> hdf5Handler:
         reader = hdf5Handler(self.path_d_folder)
         return reader
@@ -2395,10 +2425,8 @@ class ProjectMSI(ProjectBaseClass):
     def require_hdf_reader(self, overwrite: bool = False) -> hdf5Handler:
         if (not check_attr(self, 'Spectra_file')) or overwrite:
             reader: ReadBrukerMCF = self.get_mcf_reader()
-            reader: hdf5Handler = self.set_hdf_file(reader)
-        else:
-            reader: hdf5Handler = self.get_hdf_reader()
-        return reader
+            self.set_hdf_file(reader)
+        return self.get_hdf_reader()
 
     def get_reader(self, prefer_hdf: bool = True) -> ReadBrukerMCF | hdf5Handler:
         if check_attr(self, 'Spectra_file') and prefer_hdf:
@@ -2519,11 +2547,11 @@ class ProjectMSI(ProjectBaseClass):
     def da_export(self):
         return self.require_da_export()
 
-    def set_data_object(self, source='spectra'):
+    def set_data_object(self, source='spectra', **kwargs):
         self._data_object: MSI = MSI(
             self.path_d_folder, path_mis_file=self.path_mis_file
         )
-        self._data_object.set_distance_pixels()
+        self._data_object.set_distance_pixels(kwargs.get('distance_pixels'))
         if source == 'spectra':
             assert (
                     check_attr(self.spectra, 'feature_table')
@@ -2532,15 +2560,14 @@ class ProjectMSI(ProjectBaseClass):
             self._data_object.inject_feature_table_from(self.spectra)
         elif source == 'da_export':
             assert (
-                    check_attr(self.spectra, 'feature_table')
-                    or check_attr(self.spectra, 'line_spectra')
+                    check_attr(self.da_export, 'feature_table')
             ), 'set spectra object first'
             # use msi_feature_extraction
             self._data_object.inject_feature_table_from(self._da_export)
         else:
             raise NotImplementedError()
 
-    def require_data_object(self, overwrite=False):
+    def require_data_object(self, overwrite=False, **kwargs):
         call_set = True
         if (self._data_object is not None) and (not overwrite):
             return self._data_object
@@ -2553,7 +2580,7 @@ class ProjectMSI(ProjectBaseClass):
             if check_attr(self.data_object, 'feature_table'):
                 call_set = True
         if call_set:
-            self.set_data_object()
+            self.set_data_object(**kwargs)
 
         return self._data_object
 
@@ -2752,17 +2779,17 @@ class IonImagePlotter:
                 self._project.path_folder
             )
 
-        self._data_object._feature_table = df
-        self._data_object._feature_table.columns = self._data_object._feature_table.columns.astype(str)
+        self._data_object.inject_feature_table_from(df, supress_warnings=True)
+        self._data_object.feature_table.columns = self._data_object.feature_table.columns.astype(str)
         if not check_attr(self._project, '_data_object'):
             return
 
         if 'x_ROI' in self._project.data_object.columns:
             self._data_object.feature_table.loc[:, ['x_ROI', 'y_ROI']] = \
-                self._project.data_object.loc[:, ['x_ROI', 'y_ROI']]
+                self._project.data_object.feature_table.loc[:, ['x_ROI', 'y_ROI']]
         if 'valid' in self._project.data_object.columns:
             self._data_object.feature_table.loc[:, 'valid'] = \
-                self._project.data_object.loc[:, 'valid']
+                self._project.data_object.feature_table.loc[:, 'valid']
 
     def plot_comp(
             self,
