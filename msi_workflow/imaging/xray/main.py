@@ -1,16 +1,22 @@
 """
 This module implements the XRay class, which offers to obtain xray regions from specific depths.
 """
+import functools
+import math
 import os
+
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
 
 from scipy.stats import linregress
+from skimage.transform import rotate
 
 from msi_workflow.imaging.main import ImageSample, ImageROI
 from msi_workflow.imaging.util.image_convert_types import ensure_image_is_gray
 from msi_workflow.imaging.util.image_plotting import plt_cv2_image
+from msi_workflow.util.convinience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -19,30 +25,34 @@ class XRay(ImageSample):
     """
     XRay class. Build around the image sample class.
 
-    This class allows to obtain ImageSample objects for specific sections within the X-Ray scan.
+    This class allows to obtain ImageSample objects for specific sections
+    within the X-Ray scan.
 
     Example usage
     -------------
     create a new object
     >>> xray = XRay(
-    >>>     path='your/path/to/the/image/file',
+    >>>     path_image_file='your/path/to/the/image/file',
     >>>     depth_section=(100, 200),  # span of the entire image in cm
     >>>     obj_color = 'dark'  # sediment color compared to background
     >>> )
     set and get the sample area
-    >>> xray.sget_sample_area()
+    >>> xray.set_sample_area()
     oftentimes the plastic liner is included in the determined sample area
-    because it has the same color as the sediment. In that case the following method can help
+    because it has the same color as the sediment. In that case the following
+    method can help
     >>> xray.remove_bars()
     save result into folder where the image file is from
     >>> xray.save()
 
-    if loaded from file, it is not necessary to specify the object color and depth section arguments again
-    >>> xray = XRay(path='your/path/to/the/image/file')
+    if loaded from file, it is not necessary to specify the object color and
+    depth section arguments again
+    >>> xray = XRay(path_image_file='your/path/to/the/image/file')
     >>> xray.load()
 
     obtain an ImageROI object for a specific depth section
-    the depth section can be specified in multiple ways but always expects values in same unit as the depth_section
+    the depth section can be specified in multiple ways but always expects
+    values in same unit as the depth_section
     specified upon initialization
     >>> img: ImageROI = xray.get_ImageROI_from_section((100, 105))
     or
@@ -64,22 +74,29 @@ class XRay(ImageSample):
         '_hw',
         'depth_section',
         '_image_ROI',
-        '_bars_removed'
+        '_bars_removed',
+        '_angle',
+        '_center_xy',
+        '_use_rotated'
     }
+
+    _use_rotated: bool | None = None
 
     def __init__(
             self,
-            depth_section: tuple[float, float],
+            depth_section: tuple[float, float] | None = None,
             path_folder: str | None = None,
             image: np.ndarray[float | int] | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
-            obj_color: str | None = None
+            obj_color: str | None = None,
+            use_rotated: bool = True
     ) -> None:
         """
         Initialize the object.
 
-        If it is intended to load the object from disc after initialization, it suffices to provide the path_image_file.
+        If it is intended to load the object from disc after initialization,
+        it suffices to provide the path_image_file.
 
         Parameters
         ----------
@@ -89,7 +106,12 @@ class XRay(ImageSample):
             The depth section covered by the photo as a tuple in cm.
             This is required if the object is not loaded from disc
         obj_color: str (default= 'dark')
-            The relative brightness of the object compared to background. Options are 'dark', 'light'.
+            The relative brightness of the object compared to background.
+            Options are 'dark', 'light'.
+        use_rotated: bool, optional
+            If this is set to True, will use the main contour to find the
+            rotation angle of the photo and use images where the rotation has
+            been corrected.
         """
 
         super().__init__(
@@ -102,6 +124,7 @@ class XRay(ImageSample):
 
         self.depth_section = depth_section
         self._bars_removed: bool = False
+        self._use_rotated: bool = use_rotated
 
     def _section_args_to_tuple(
             self,
@@ -134,9 +157,97 @@ class XRay(ImageSample):
             section_end = section_start + section_length
 
         assert section_start < section_end, \
-            f'first value should be the depth closer to the surface, not {(section_start, section_end)}'
+            ('first value should be the depth closer to the surface, not ' +
+             f'{(section_start, section_end)}')
 
         return section_start, section_end
+
+    def set_rotation(
+            self,
+            angle: float | None = None,
+            center_xy: tuple[int | float, int | float] | None = None
+    ) -> None:
+        """
+        Use cv's minAreaRect function on the main contour to find the angle or
+        to that provided on the input
+
+        """
+        if angle is None:
+            # angle in clockwise direction
+            center_xy, wh, angle = cv2.minAreaRect(self.main_contour)
+            angle = angle % 90
+            if angle > 45:
+                angle -= 90
+
+        logger.info(
+            f'found an angle of {angle:.1f} degrees ' +
+            f'centered at {center_xy}'
+        )
+
+        self._center_xy: tuple[int | float, int | float] = center_xy
+        self._angle: float = angle
+
+    def get_image_rotated(
+            self,
+            image: np.ndarray | str | None = None,
+    ) -> np.ndarray:
+        assert isinstance(image, np.ndarray | str | None), \
+            f'image should be an array, str or None, not {type(image)}'
+
+        center_x, center_y = self._center_xy
+        # fetch the input image
+        if image is None:
+            image = self._image
+        elif isinstance(image, str):
+            # getattribute also works with properties and raises attribute
+            # error if input does not exist
+            image: np.ndarray = self.__getattribute__(image)
+        if image.shape[:2] != self._image.shape[:2]:  # shift center
+            assert image.shape[:2] == self._xywh_ROI[:2][::-1], \
+                (f'image shape should either match the original image ' +
+                 f'({self._image.shape[:2]}) or the ROI ' +
+                 f'({self._xywh_ROI[:2][::-1]}), but is {image.shape[:2]}')
+            x_shift, y_shift, *_ = self._xywh_ROI
+            center_x -= x_shift
+            center_y -= y_shift
+
+        # angle: don't have to invert since rotate expects counter-clockwise
+        #   but minAreaRect defines clock-wise
+        # center: rotate expects order col, row
+        rotated = rotate(
+            image,
+            angle=self._angle,
+            center=(center_y, center_x),
+            preserve_range=True
+        ).astype(image.dtype)  # make sure image is of same type and preserves range
+
+        return rotated
+
+    def require_image_rotated(self) -> np.ndarray:
+        if not check_attr(self, '_angle'):
+            logger.info('No rotation set, calling set_rotation')
+            self.set_rotation()
+        if not check_attr(self, '_image_rotated'):
+            self._image_rotated = self.get_image_rotated()
+        return self._image_rotated
+
+    @property
+    def image(self) -> np.ndarray:
+        return self.require_image_rotated() if self._use_rotated else self._image
+
+    def require_image_grayscale_rotated(self) -> np.ndarray:
+        if not check_attr(self, '_angle'):
+            logger.info('No rotation set, calling set_rotation')
+            self.set_rotation()
+        if not check_attr(self, '_image_gray_scale_rotated'):
+            self._image_grayscale_rotated = self.get_image_rotated('_image_grayscale')
+        return (self.require_image_grayscale_rotated()
+                if self._use_rotated else
+                self._image_grayscale)
+
+    @property  # can no longer use cached since use_rotated may change
+    def image_grayscale(self) -> np.ndarray:
+        return ensure_image_is_gray(self.image).copy()
 
     def get_section(
             self,
@@ -150,14 +261,16 @@ class XRay(ImageSample):
         
         section_start can be a float or a tuple. If it is a tuple, 
         the first value will be used as start and the second as end depth. 
-        Otherwise, if section_end is not specified, it will be inferred from the section_length.
+        Otherwise, if section_end is not specified, it will be inferred from
+        the section_length.
 
         Parameters
         ----------
         section_start: int | float | tuple[int | float, int | float]
             The start of the section or end and start as tuple
         section_end: int | float | None (default = None)
-            The end of the section. If not specified, will be calculated from section_length
+            The end of the section. If not specified, will be calculated from
+            section_length
         section_length: int | float (default = 5)
             The length of the section. Will not be used if section_end is specified.
         plts: bool (default = False)

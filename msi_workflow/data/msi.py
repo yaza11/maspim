@@ -7,6 +7,7 @@ import logging
 
 from msi_workflow.exporting.from_mcf.spectrum import Spectra
 from msi_workflow.data.main import Data
+from msi_workflow.exporting.legacy.data_analysis_export import DataAnalysisExport
 from msi_workflow.project.file_helpers import search_keys_in_xml
 from msi_workflow.util.convinience import check_attr
 
@@ -38,7 +39,7 @@ class MSI(Data):
     Set the feature table (here assuming that a spectra object has been saved to disk before):
     >>> from msi_workflow import Spectra
     >>> spec = Spectra(path_d_folder='path/to/your/d_folder.d', load=True)
-    >>> msi.set_feature_table_from_spectra(spec)
+    >>> msi.inject_feature_table_from(spec)
 
     Now we are ready to do some analysis, e.g. nonnegative matrix factorization
     >>> msi.plot_nmf(k=5)
@@ -121,13 +122,21 @@ class MSI(Data):
             'cant handle grid with different distances in x and y'
         self._distance_pixels = float(d)
     
-    def set_feature_table_from_spectra(self, spectra: Spectra):
+    def inject_feature_table_from(self, upstream: Spectra | DataAnalysisExport):
         """
-        Set the feature table from a spectra object.
+        Set the feature table from an upstream object, such as Spectra or
+        DataAnalysisExport.
         """
-        assert check_attr(spectra, 'feature_table')
+        assert check_attr(upstream, 'feature_table'), \
+            'upstream object must have a feature table'
+        if not check_attr(
+                upstream,
+                'feature_table',
+                True
+        ):
+            logger.warning('found empty feature table')
 
-        self._feature_table: pd.DataFrame = spectra.feature_table.copy()
+        self._feature_table: pd.DataFrame = upstream.feature_table.copy()
     
 
 if __name__ == '__main__':

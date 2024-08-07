@@ -90,6 +90,8 @@ class Convinience:
 
             if isinstance(v, np.ndarray):
                 v_str = f'Numpy array of type {v.dtype}, with shape {v.shape}'
+            elif isinstance(v, pd.DataFrame):
+                v_str = '\n' + v.to_string()
             else:
                 v_str = str(v)
             out.append(f'{k}: {v_str}')

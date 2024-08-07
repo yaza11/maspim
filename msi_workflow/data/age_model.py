@@ -76,7 +76,7 @@ class AgeModel(Convinience):
     _save_attrs: set[str] = {
         'df',
         '_in_file',
-        'save_file',
+        '_save_file',
         'column_age',
         'column_depth'
     }
@@ -127,10 +127,10 @@ class AgeModel(Convinience):
             self._read_file(depth_offset, conversion_to_cm, **kwargs_read_file)
 
         self.path_folder: str | None = None
-        self.save_file: str | None = None
+        self._save_file: str | None = None
 
     def _set_files(self, path_file: str | None) -> None:
-        self.save_file: None | str = None if path_file is None else 'AgeModel.pickle'
+        self._save_file: None | str = None if path_file is None else 'AgeModel.pickle'
         if path_file is None:
             self.path_folder: None = None
             self._in_file: None = None
@@ -153,14 +153,14 @@ class AgeModel(Convinience):
 
     @property
     def path_file(self) -> str:
-        assert (self.path_folder is not None) and (self.save_file is not None)
-        return os.path.join(self.path_folder, self.save_file)
+        assert (self.path_folder is not None) and (self._save_file is not None)
+        return os.path.join(self.path_folder, self._save_file)
 
     @path_file.setter
     def path_file(self, path_file: str) -> None:
         self.path_folder: str = os.path.dirname(path_file)
-        self.save_file: str = os.path.basename(path_file)
-        self._in_file: str = self.save_file
+        self._save_file: str = os.path.basename(path_file)
+        self._in_file: str = self._save_file
 
     def _read_file(self, depth_offset: float | int, conversion_to_cm: float | int, **kwargs) -> None:
         """

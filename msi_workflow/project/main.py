@@ -221,7 +221,8 @@ class SampleImageHandlerMSI(Convinience):
     def set_photo_ROI(
             self,
             match_roi_data: bool = True,
-            plts: bool = False
+            plts: bool = False,
+            **_
     ) -> None:
         """
         Match image and data pixels and set extent in data and photo pixels.
@@ -650,6 +651,9 @@ class ProjectBaseClass:
     _is_laminated = None
     _is_MSI = None
     _corrected_tilt: bool = False
+
+    def __repr__(self) -> str:
+        return Convinience.__repr__(self)
 
     def _update_files(self):
         """Placeholder for children"""
@@ -2317,7 +2321,7 @@ class ProjectMSI(ProjectBaseClass):
     def path_mis_file(self):
         return os.path.join(self.path_folder, self.mis_file)
 
-    def set_image_handler(self, overwrite=False) -> None:
+    def set_image_handler(self, **kwargs) -> None:
         """
         Initialize and SampleImageHandlerMSI object and set the photo.
 
@@ -2332,13 +2336,15 @@ class ProjectMSI(ProjectBaseClass):
             path_mis_file=self.path_mis_file
         )
 
-        self._image_handler.set_extent_data()
-        self._image_handler.set_photo_ROI()
+        self._image_handler.set_extent_data(
+            reader=kwargs.get('reader'), imaging_xml=kwargs.get('imaging_xml')
+        )
+        self._image_handler.set_photo_ROI(**kwargs)
         self._image_handler.save()
         self._update_files()
         self._image_handler.set_photo()
 
-    def require_image_handler(self, overwrite: bool = False) -> SampleImageHandlerMSI:
+    def require_image_handler(self, overwrite: bool = False, **kwargs) -> SampleImageHandlerMSI:
         if (self._image_handler is not None) and (not overwrite):  # return existing
             return self._image_handler
         elif check_attr(self, 'SampleImageHandlerMSI_file') and (not overwrite):  # load and set image
@@ -2350,8 +2356,11 @@ class ProjectMSI(ProjectBaseClass):
             )
             self._image_handler.load()
             self._image_handler.set_photo()
-        if (not check_attr(self._image_handler, '_extent_spots')) or overwrite:  # make sure it has _extent_spots
-            self.set_image_handler()
+        if (
+                (not check_attr(self._image_handler, '_extent_spots'))
+                or overwrite
+        ):  # make sure it has _extent_spots
+            self.set_image_handler(**kwargs)
 
         return self._image_handler
 
@@ -2520,14 +2529,14 @@ class ProjectMSI(ProjectBaseClass):
                     check_attr(self.spectra, 'feature_table')
                     or check_attr(self.spectra, 'line_spectra')
             ), 'set spectra object first'
-            self._data_object.set_feature_table_from_spectra(self.spectra)
+            self._data_object.inject_feature_table_from(self.spectra)
         elif source == 'da_export':
             assert (
                     check_attr(self.spectra, 'feature_table')
                     or check_attr(self.spectra, 'line_spectra')
             ), 'set spectra object first'
             # use msi_feature_extraction
-            self._data_object._feature_table = get
+            self._data_object.inject_feature_table_from(self._da_export)
         else:
             raise NotImplementedError()
 

@@ -185,10 +185,17 @@ class Image(Convinience):
         """Return a copy of the original image"""
         return self._image.copy()
 
-    @functools.cached_property
+    def _require_image_grayscale(self):
+        if not check_attr(self, '_image_grayscale'):
+            self._image_grayscale = ensure_image_is_gray(self.image)
+        return self._image_grayscale
+
+    @property
     def image_grayscale(self) -> np.ndarray:
         """Return a grayscale version of the original image."""
-        return ensure_image_is_gray(self.image).copy()
+        # TODO: check if (and where) copy is necessary
+        # everywhere else the instances themselves are returned
+        return self._require_image_grayscale().copy()
 
     def set_foreground_thr_and_pixels(
             self, thr_method: str = 'otsu', plts: bool = False, **_
@@ -210,7 +217,7 @@ class Image(Convinience):
 
         """
         mask, thr = get_foreground_pixels_and_threshold(
-            image=self.image,
+            image=self._image,
             obj_color=self.obj_color,
             method=thr_method
         )

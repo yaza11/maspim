@@ -21,6 +21,7 @@ def plt_cv2_image(
         save_png: str | None = None,
         dpi: int = 300,
         no_ticks: bool = False,
+        grid: bool = False,
         **kwargs
 ) -> tuple[plt.Figure, plt.Axes] | None:
     """
@@ -52,6 +53,8 @@ def plt_cv2_image(
         The resolution of the saved image. Defaults to 300.
     no_ticks : bool, optional
         If True, will not label the x- and y-axis. Default is False.
+    grid: bool, optional
+        Whether to plot grid lines, the default is False.
     **kwargs : Any
         Optional parameters to pass to imshow.
 
@@ -72,7 +75,7 @@ def plt_cv2_image(
     if ((cmode := infer_mode(image)) != 'L') and swap_rb:
         image = swap_RB(image.copy())
         kwargs_imshow = {}
-        cmap=None
+        cmap = None
     elif (cmode == 'L') and (cmap is None):
         cmap = 'gray'
         kwargs_imshow = kwargs
@@ -85,14 +88,15 @@ def plt_cv2_image(
         cmap=cmap,
         **kwargs_imshow
     )
+    ax.grid(grid)
 
     if title is not None:
         ax.set_title(title)
     if no_ticks:
         ax.set_axis_off()
     else:
-        ax.set_xlabel(r'Pixel coordinates in $x$-direction')
-        ax.set_ylabel(r'Pixel coordinates in $y$-direction')
+        ax.set_xlabel(r'column index $x$')
+        ax.set_ylabel(r'row index $y$')
     if (hold == 'off') or (not hold):
         plt.show()
         if save_png is not None:

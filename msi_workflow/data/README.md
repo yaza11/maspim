@@ -55,7 +55,7 @@ Class to wrap and process mass spectrometry imaging data.
 
 This object needs a table with compounds as columns
 (plus the x and y coordiantes of the data pixels). Each row corresponds to a data pixel. The
-recommended way is to use the set_feature_table_from_spectra method, but it is always possible
+recommended way is to use the inject_feature_table_from method, but it is always possible
 to inject the data by
 ```python
 msi.feature_table = ft
@@ -79,10 +79,12 @@ msi = MSI(path_d_folder='path/to/your/d_folder.d', path_mis_file='path/to/your/m
 In that case the object will infere the data pixel resolution from the mis file.
 
 Set the feature table (here assuming that a spectra object has been saved to disk before):
+
 ```python
 from exporting.from_mcf.cSpectrum import Spectra
+
 spec = Spectra(path_d_folder='path/to/your/d_folder.d', load=True)
-msi.set_feature_table_from_spectra(spec)
+msi.inject_feature_table_from(spec)
 ```
 
 Now we are ready to do some analysis, e.g. nonnegative matrix factorization
