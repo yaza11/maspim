@@ -54,9 +54,13 @@ def find_holes_side(
     assert side in SIDES, f'side must be one of {SIDES} not {side}'
     # splitting image into top and bottom section
     width_sector: float = .5
+
     # ensure binary image
     if len(image.shape) != 2:
         image: np.ndarray = ensure_image_is_gray(image)
+    # invert image if it is dark
+    if obj_color == 'dark':
+        image = image.max() - image.copy()
     if len(np.unique(image)) > 2:
         logger.info('Converting provided image into binary')
         image: np.ndarray[np.uint8] = cv2.threshold(
@@ -76,12 +80,8 @@ def find_holes_side(
     size_k: int = size * 3
 
     # fill value used outside the image _extent (same as background)
-    if obj_color == 'dark':
-        fill_value: int = np.unique(image)[1]
-    else:
-        fill_value: int = np.unique(image)[0]
-    # could be np.uint8
-    fill_value: int = int(fill_value)
+    fill_value: int = int(np.unique(image)[0])
+
     image_padded = cv2.copyMakeBorder(
         src=image_section,
         top=size_k, bottom=size_k, left=size_k, right=size_k,
@@ -116,12 +116,9 @@ def find_holes_side(
     # pick max (for obj color dark) in upper half and lower half
     image_left: np.ndarray = image_square_filtered[:, :w // 2].copy()
     image_right: np.ndarray = image_square_filtered[:, w // 2:].copy()
-    if obj_color == 'dark':
-        hole_left: int = np.argmax(image_left)
-        hole_right: int = np.argmax(image_right)
-    else:
-        hole_left: int = np.argmin(image_left)
-        hole_right: int = np.argmin(image_right)
+
+    hole_left: int = np.argmin(image_left)
+    hole_right: int = np.argmin(image_right)
     score: float = (
         image_left.ravel()[hole_left] +
         image_right.ravel()[hole_right]
@@ -228,10 +225,7 @@ def find_holes(
     points = [points_b, points_t]
     scores = [score_b, score_t]
 
-    if obj_color == 'dark':  # pick higher score
-        idx = np.argmax(scores)
-    else:
-        idx = np.argmin(scores)
+    idx = np.argmin(scores)
     logger.info(f'found holes at {"bottom" if idx == 0 else "top"}')
     return points[idx], size
 

@@ -359,12 +359,14 @@ class Image(Convinience):
         Notes
         -----
         Defines _main_contour
-            The contour surrounding the sample as an array where each row describes a point.
+            The contour surrounding the sample as an array where each row
+            describes a point.
         """
         methods: tuple[str, ...] = (
             'take_largest', 'star_domain', 'filter_by_size', 'convex_hull'
         )
-        assert method in methods, f"{method=} is not an option. Valid options are {methods}"
+        assert method in methods, \
+            f"{method=} is not an option. Valid options are {methods}"
 
         image_binary: np.ndarray[int] = self.image_simplified
 
@@ -395,7 +397,9 @@ class Image(Convinience):
                 for i in range(3)
             ]
             center_points_y: list[int] = [round(image_binary.shape[0] / 2)] * 3
-            center_points: list[tuple[int, int]] = list(zip(center_points_x, center_points_y))
+            center_points: list[tuple[int, int]] = list(zip(
+                center_points_x, center_points_y
+            ))
             for center_point in center_points:
                 contour: np.ndarray[int] = star_domain_contour(
                     contour=contour,
@@ -435,7 +439,8 @@ class Image(Convinience):
         """
         Set the age span of the sample as a tuple (in yrs).
 
-        This allows a more precise definition of the kernel size used in the classification.
+        This allows a more precise definition of the kernel size used in the
+        classification.
 
         Parameters
         ----------
@@ -444,7 +449,8 @@ class Image(Convinience):
             Lower bound should come first.
         """
         assert age_span[0] < age_span[1], 'first value should be strictly lower'
-        assert len(age_span) == 2, 'provide an upper and lower value (e.g. age_span=[0, 100])'
+        assert len(age_span) == 2, \
+            'provide an upper and lower value (e.g. age_span=[0, 100])'
         self.age_span: tuple[float | int, float | int] = age_span
 
     def set_average_width_yearly_cycle(self, pixels: int | None = None) -> None:
@@ -958,17 +964,20 @@ class ImageSample(Image):
 
     def get_sample_area_from_xywh(self):
         """Get the region of the image corresponding to sample area from xywh."""
-        assert check_attr(self, '_xywh_ROI'), 'no roi found, call _require_image_sample_area'
+        assert check_attr(self, '_xywh_ROI'), 'no roi found, call require_image_sample_area'
         image: np.ndarray = self.image
         x, y, w, h = self._xywh_ROI
         return image[y:y + h, x:x + w].copy()
 
-    def _require_image_sample_area(
+    def require_image_sample_area(
             self, **kwargs
     ) -> tuple[np.ndarray[np.uint8], tuple[int, ...]]:
         """Set and return area of the sample in the image."""
         # does has _xywh_ROI and _image_ROI
-        if check_attr(self, '_xywh_ROI') and check_attr(self, '_image_roi'):
+        if (
+                check_attr(self, '_xywh_ROI')
+                and check_attr(self, '_image_roi')
+        ):
             pass
         elif check_attr(self, '_xywh_ROI'):  # only has _xywh_ROI
             self._image_roi: np.ndarray = self.get_sample_area_from_xywh()
@@ -978,12 +987,12 @@ class ImageSample(Image):
 
     @property
     def xywh_ROI(self):
-        return self._require_image_sample_area()[1]
+        return self.require_image_sample_area()[1]
 
     @property
     def image_sample_area(self) -> np.ndarray:
         """Return a copy of the sample area."""
-        x, y, w, h = self._require_image_sample_area()[1]
+        x, y, w, h = self.require_image_sample_area()[1]
         return self.image[y:y + h, x:x + w].copy()
 
     def plot_overview(self, **kwargs):
@@ -1517,7 +1526,7 @@ class ImageROI(Image):
 
         self._punchholes, self._punchhole_size = find_holes(
             img,
-            obj_color=self.obj_color,
+            obj_color='light',  # image binary takes object color into account
             **kwargs
         )
 
@@ -1533,18 +1542,81 @@ class ImageROI(Image):
         self._punchhole_size: int = interactive_image._punchhole_size
 
     def require_punchholes(
-            self, *args, **kwargs
+            self, *args, overwrite: bool = False, **kwargs
     ) -> tuple[list[np.ndarray[int], np.ndarray[int]] | tuple[tuple[int, int]], float]:
-        if not check_attr(self, "_punchholes"):
+        if (not check_attr(self, "_punchholes")) or overwrite:
             self.set_punchholes(*args, **kwargs)
         return self._punchholes, self._punchhole_size
 
+    @property
+    def punchholes(
+            self
+    ) -> list[np.ndarray[int], np.ndarray[int]] | tuple[tuple[int, int]]:
+        if not check_attr(self, '_punchholes'):
+            self.require_punchholes()
+        return self._punchholes
+
+    def plot_punchholes(
+            self,
+            image_name: str = 'image_grayscale',
+            fig: plt.Figure | None = None,
+            axs: Iterable[plt.Axes] | None = None,
+            hold=False
+    ) -> None | tuple[plt.Figure, plt.Axes]:
+        image = self.__getattribute__(image_name)
+
+        if fig is None:
+            assert axs is None, "If ax is provided, must also provide fig"
+            fig, axs = plt.subplots()
+        else:
+            assert axs is not None, "If fig is provided, must also provide ax"
+
+        hole_size: int = round(self._punchhole_size)
+
+        _, ax11 = plt_rect_on_image(
+            fig=fig,
+            ax=axs,
+            image=image,
+            box_params=region_in_box(
+                image=self.image_binary,
+                point_topleft=np.array(self._punchholes[0])[::-1] - hole_size / 2,
+                point_bottomright=np.array(self._punchholes[0])[::-1] + hole_size / 2
+            ),
+            no_ticks=True,
+            hold=True
+        )
+        fig, axs = plt_rect_on_image(
+            fig=fig,
+            ax=ax11,
+            image=image,
+            box_params=region_in_box(
+                image=self.image_binary,
+                point_topleft=np.array(self._punchholes[1])[::-1] - hole_size / 2,
+                point_bottomright=np.array(self._punchholes[1])[::-1] + hole_size / 2
+            ), no_ticks=True,
+            title='Detected punch-holes',
+            hold=True
+        )
+
+        if hold:
+            return fig, axs
+
+        plt.show()
+
+
+
     def plot_overview(
-            self, fig: plt.Figure | None = None, axs: Iterable[plt.Axes] | None = None, hold=False
+            self,
+            fig: plt.Figure | None = None,
+            axs: Iterable[plt.Axes] | None = None,
+            hold=False
     ) -> None | tuple[plt.Figure, Iterable[plt.Axes]]:
         """Plot the original, preprocessed, classified image and the punchholes."""
         if not check_attr(self, "_punchholes"):
-            logger.warning("Punchholes not set with required parameter 'remove_gelatine', this may affect performance.")
+            logger.warning(
+                "Punchholes not set with required parameter 'remove_gelatine', "
+                "this may affect performance."
+            )
         self.require_punchholes(remove_gelatine=True)
         hole_size: int = round(self._punchhole_size)
 
@@ -1559,11 +1631,20 @@ class ImageROI(Image):
         only_final = axs.shape == (1,)
 
         if not only_final:
-            plt_cv2_image(fig=fig, ax=axs[0, 0], image=self.image, title="Input image", no_ticks=True)
-            plt_cv2_image(fig=fig, ax=axs[0, 1], image=self._get_preprocessed_for_classification()[0],
+            plt_cv2_image(fig=fig,
+                          ax=axs[0, 0],
+                          image=self.image,
+                          title="Input image",
+                          no_ticks=True)
+            plt_cv2_image(fig=fig,
+                          ax=axs[0, 1],
+                          image=self._get_preprocessed_for_classification()[0],
                           title="Preprocessed image",
                           no_ticks=True)
-            plt_cv2_image(fig=fig, ax=axs[1, 0], image=self.image_classification, title="Classified image",
+            plt_cv2_image(fig=fig,
+                          ax=axs[1, 0],
+                          image=self.image_classification,
+                          title="Classified image",
                           no_ticks=True)
 
         _, ax11 = plt_rect_on_image(
@@ -1835,7 +1916,7 @@ class ImageClassified(Image):
 
         # load a mapping, apply it and return the result
         mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
-        if os.path.exists(mapper._get_disc_folder_and_file()[1]) and (not overwrite):
+        if os.path.exists(mapper.save_file) and (not overwrite):
             logger.info('loading tilt correction transformation')
             mapper.load()
             self._set_corrected_using_mapper(mapper)

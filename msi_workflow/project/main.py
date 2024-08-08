@@ -20,7 +20,7 @@ from msi_workflow.exporting.legacy.data_analysis_export import DataAnalysisExpor
 from msi_workflow.exporting.legacy.ion_image import (get_da_export_ion_image,
                                                      get_da_export_data)
 from msi_workflow.imaging.util.image_boxes import region_in_box
-from msi_workflow.imaging.util.image_plotting import plt_rect_on_image
+from msi_workflow.imaging.util.image_plotting import plt_rect_on_image, plt_cv2_image
 
 from msi_workflow.util import Convinience
 
@@ -44,14 +44,14 @@ from msi_workflow.imaging.util.image_convert_types import (
 )
 from msi_workflow.imaging.util.coordinate_transformations import rescale_values
 from msi_workflow.imaging.util.find_xrf_roi import find_ROI_in_image, plt_match_template_scale
-from msi_workflow.imaging.xray.main import XRay
+from msi_workflow.imaging.xray.main import XRay, XRayROI
 from msi_workflow.imaging.register.transformation import Transformation
 from msi_workflow.imaging.register.helpers import Mapper
 
 from msi_workflow.timeSeries.time_series import TimeSeries
 from msi_workflow.timeSeries.proxy import UK37
 from msi_workflow.util.convinience import check_attr, object_to_string
-from msi_workflow.util.read_msi_align import get_teaching_points
+from msi_workflow.util.read_msi_align import get_teaching_points, get_teaching_point_pairings_dict
 
 PIL_Image.MAX_IMAGE_PIXELS = None
 
@@ -636,16 +636,22 @@ class ProjectBaseClass:
     _age_model: AgeModel | None = None
     depth_span: tuple[float, float] | None = None
     age_span: tuple[float, float] | None = None
+
     holes_data = None
+    holes_xray = None
+
     _image_handler: SampleImageHandlerMSI | SampleImageHandlerXRF | None = None
     _image_sample: ImageSample = None
     _image_roi: ImageROI = None
     _image_classified: ImageClassified = None
+
     path_folder: str | None = None
     path_d_folder: str | None = None
+
     _spectra: Spectra = None
     _data_object: MSI | XRF = None
-    _xray: XRay = None
+    _xray_long: XRay | None = None
+    _xray: XRayROI | None = None
     _time_series: TimeSeries = None
     # flags
     _is_laminated = None
@@ -660,7 +666,9 @@ class ProjectBaseClass:
         raise NotImplementedError()
 
     def set_age_model(self, path_file: str | None = None, **kwargs_read) -> None:
-        self._age_model: AgeModel = AgeModel(path_file, **kwargs_read)
+        self._age_model: AgeModel = AgeModel(
+            path_file=path_file, **kwargs_read
+        )
         self._age_model.path_file = self.path_d_folder
         self._age_model.save()
 
@@ -700,7 +708,7 @@ class ProjectBaseClass:
             return self._age_model
         # if an age model save is located in the folder, load it
         elif check_attr(self, 'AgeModel_file') and (not overwrite):
-            self._age_model: AgeModel = AgeModel(self.path_d_folder)
+            self._age_model: AgeModel = AgeModel(path_file=self.path_d_folder)
         # if a file is provided, load it from the file provided
         elif (not overwrite) and (path_file is not None):
             self._age_model: AgeModel = AgeModel(path_file=path_file, **kwargs_read)
@@ -1150,6 +1158,53 @@ class ProjectBaseClass:
         image: np.ndarray[int] = self.image_roi.image_classification
         self.data_object.add_attribute_from_image(image, 'classification', **kwargs)
 
+    def data_object_apply_tilt_correction(self) -> None:
+        assert not self._corrected_tilt, 'tilt has already been corrected'
+        assert self._data_object is not None, 'set data_object.'
+        mapper = Mapper(
+            image_shape=(-1, -1),
+            path_folder=self.path_folder,
+            tag='tilt_correction'
+        )
+
+        if self.image_classified is None:
+            logger.warning('no image_classified set, not correcting tilts')
+            return
+        elif not self.image_classified.use_tilt_correction:
+            logger.warning(
+                'image classified set, but tilt correction set to False, '
+                'not correcting tilts'
+            )
+        if os.path.exists(mapper.save_file):
+            mapper.load()
+            # get transformed coordinates
+            XT, YT = mapper.get_transformed_coords()
+
+            # insert into feature table
+            self.data_object.add_attribute_from_image(
+                XT, 'x_ROI_T', fill_value=np.nan
+            )
+            self.data_object.add_attribute_from_image(
+                YT, 'y_ROI_T', fill_value=np.nan
+            )
+
+            # fit feature table
+            self.data_object.inject_feature_table_from(
+                transform_feature_table(self.data_object.feature_table),
+                supress_warnings=True
+            )
+            logger.info('successfully loaded mapper and applied tilt correction')
+
+            self._corrected_tilt: bool = True
+        else:
+            raise FileNotFoundError(
+                f'expected to find a Mapping at '
+                f'{mapper.save_file}, make sure to set '
+                f'the image_classification with use_tilt_correction set to True'
+            )
+        self.image_classified.set_corrected_image()
+        self._data_object.tilt_correction_applied = True
+
     def add_laminae_classification(self, **kwargs) -> None:
         """
         Add light and dark laminae classification to the feature table of the
@@ -1270,50 +1325,67 @@ class ProjectBaseClass:
             self.data_object.feature_table[depth_col]
         )
 
-    def _get_xray_primer(self, **kwargs) -> XRay:
-        if kwargs.get('depth_section') is None:
-            assert self.depth_span is not None, \
-                'set depth span or pass the depth_section argument'
-
-        return XRay(**kwargs)
-
-    def set_xray(self, **kwargs):
+    def set_xray(self, path_image_file: str, overwrite_long: bool = False, **kwargs):
         """
-        Set the X-Ray object from the specified image file and depth section.
+        Set the X-ray object from the specified image file and depth section.
 
         The object is accessible with p.xray with p being the project.
         This method performs all processing steps.
 
 
         """
-        assert (path_image_file := kwargs.get('path_image_file')) is not None, \
+        assert path_image_file is not None, \
             'Providing an image file is required for setting the xray instance'
         assert os.path.exists(path_image_file), f'could not find {path_image_file=}'
+        assert self.depth_span is not None, \
+            'set depth span or pass the depth_section argument'
 
-        self._xray = self._get_xray_primer(**kwargs)
+        self._xray_long = XRay(path_image_file=path_image_file, **kwargs)
+        if (
+                (not overwrite_long) and
+                os.path.exists(self._xray_long.save_file)
+        ):
+            self._xray_long.load()
+        else:
+            self._xray_long.require_image_rotated()
+            self._xray_long.require_image_sample_area(**kwargs)
+            self._xray_long.remove_bars(**kwargs)
+            self._xray_long.save()
 
-        self._xray._require_image_sample_area()
-        self._xray.remove_bars()
+        self._xray: XRayROI = self._xray_long.get_roi_from_section(
+            self.depth_span
+        )
         self._xray.save()
 
         self._update_files()
 
-    def require_xray(self, overwrite: bool = False, **kwargs) -> XRay:
+    def require_xray(self, overwrite: bool = False, **kwargs) -> ImageROI:
         if check_attr(self, '_xray'):
             return self._xray
 
-        try_load: bool = ~overwrite
+        try_load_long = True
+
         # try to load from disk
         if kwargs.get('path_folder') is not None:
-            path_folder: str = kwargs['get_folder']
+            path_folder: str = kwargs['path_folder']
         elif kwargs.get('path_image_file') is not None:
             path_folder: str = os.path.dirname(kwargs['path_image_file'])
-        else:
-            try_load = False
+        else:  # neither folder nor image file provided, cannot determine disk location
+            try_load_long = False
+        # first, try loading an XRayROI instance
+        if check_attr(self, 'XRayROI_file'):
+            self._xray = XRayROI.from_disk(path_folder=self.path_folder)
+            return self._xray
+        # try loading an XRay long instead
         name: str = 'XRay.pickle'
-        if try_load and os.path.exists(os.path.join(path_folder, name)):
-            self._xray = self._get_xray_primer(**kwargs)
-            self._xray.load()
+        if try_load_long and os.path.exists(os.path.join(path_folder, name)):
+            self._xray_long = XRay(**kwargs)
+            self._xray_long.load()
+            self._xray: XRayROI = self._xray_long.get_roi_from_section(
+                self.depth_span
+            )
+            self._xray.save()
+            self._update_files()
             return self._xray
 
         self.set_xray(**kwargs)
@@ -1323,53 +1395,9 @@ class ProjectBaseClass:
     def xray(self):
         return self.require_xray()
 
-    def data_object_apply_tilt_correction(self) -> None:
-        assert not self._corrected_tilt, 'tilt has already been corrected'
-        assert self._data_object is not None, 'set data_object.'
-        mapper = Mapper(
-            image_shape=(-1, -1),
-            path_folder=self.path_folder,
-            tag='tilt_correction'
-        )
-
-        if self.image_classified is None:
-            logger.warning('no image_classified set, not correcting tilts')
-            return
-        elif not self.image_classified.use_tilt_correction:
-            logger.warning(
-                'image classified set, but tilt correction set to False, '
-                'not correcting tilts'
-            )
-        if os.path.exists(mapper._get_disc_folder_and_file()[1]):
-            mapper.load()
-            # get transformed coordinates
-            XT, YT = mapper.get_transformed_coords()
-
-            # insert into feature table
-            self.data_object.add_attribute_from_image(
-                XT, 'x_ROI_T', fill_value=np.nan
-            )
-            self.data_object.add_attribute_from_image(
-                YT, 'y_ROI_T', fill_value=np.nan
-            )
-
-            # fit feature table
-            self.data_object.feature_table = transform_feature_table(
-                self.data_object.feature_table
-            )
-            logger.info('successfully loaded mapper and applied tilt correction')
-
-            self._corrected_tilt: bool = True
-        else:
-            raise FileNotFoundError(
-                f'expected to find a Mapping at '
-                f'{mapper._get_disc_folder_and_file()[1]}, make sure to set '
-                f'the image_classification with use_tilt_correction set to True'
-            )
-        self.image_classified.set_corrected_image()
-
     def set_punchholes_from_msi_align(
-            self, path_file_msi_align: str | None = None
+            self,
+            path_file_msi_align: str | None = None
     ):
         assert os.path.exists(path_file_msi_align), \
             f'Provided file {path_file_msi_align} does not exist'
@@ -1388,7 +1416,7 @@ class ProjectBaseClass:
         x_data: np.ndarray[float] = np.array(x_data) - x_ROI
         y_data: np.ndarray[float] = np.array(y_data) - y_ROI
 
-        # TODO: check if this is x, y or y, x
+        # TODO: check if this is (x, y) or (y, x)
         self.holes_data: list[np.ndarray[int], np.ndarray[int]] = [
             np.around(x_data).astype(int), np.around(y_data).astype(int)
         ]
@@ -1400,42 +1428,38 @@ class ProjectBaseClass:
         )
         # subtract the x and y ROI coordinates from the returned teaching points
         # since teaching points are set on the entire images
-        x_ROI, y_ROI, *_ = self.xray.xywh_ROI
+        x_ROI, y_ROI, *_ = self._xray_long.xywh_ROI
 
         x_xray: np.ndarray[float] = np.array(x_xray) - x_ROI
         y_xray: np.ndarray[float] = np.array(y_xray) - y_ROI
 
-        # find the three points corresponding to the image
-        # 1. by labels
-        x_xray_new = []
-        y_xray_new = []
-        if labels_xray is not None:
-            with open(path_file_msi_align, 'r') as f:
-                d: dict[str, Any] = json.load(f)
-                mapping: str = d['pair_tp_str']
-                mapping: dict[int, int] = {
-                    int(e.split()[0]): int(e.split()[1])
-                    for e in mapping.split('\n')
-                }
-                assert (len(list(mapping.keys()) + list(mapping.values()))
-                        == len(set(mapping.keys()) | set(mapping.values()))), \
-                    'Found duplicate labels, make sure there are no duplicates'
-                inverse_mapping: dict[int, int] = {v: k for k, v in mapping.items()}
-            for label in labels_data:
-                m = mapping if label in mapping else inverse_mapping
-                # should have exactly one match
-                idx: np.ndarray[int] = np.argwhere(labels_xray == m[label]).squeeze()
-                assert idx.size == 1
-                x_xray_new.append(x_xray[idx])
-                y_xray_new.append(y_xray[idx])
-        # 2. closest in terms of relative image coordinates
-        else:
-            for xd, yd in zip(x_data, y_data):
-                # TODO: scale coordinates
-                # TODO: center X-Ray around section corresponding to image
-                idx_min = np.argmin((x_xray - xd) ** 2 + (y_xray - yd) ** 2)
-                x_xray_new.append(x_xray[idx_min])
-                y_xray_new.append(y_xray[idx_min])
+        # find the three points corresponding to the image by labels
+        x_xray_new: list[int] = []
+        y_xray_new: list[int] = []
+
+        with open(path_file_msi_align, 'r') as f:
+            d: dict[str, Any] = json.load(f)
+
+        pairings = d['pair_tp_str']
+
+        mapping: dict[int, int] = get_teaching_point_pairings_dict(pairings)
+
+        inverse_mapping: dict[int, int] = {v: k for k, v in mapping.items()}
+
+        for label in labels_data:
+            m: dict[int, int] = mapping if label in mapping else inverse_mapping
+            # should have exactly one match
+            idx: np.ndarray[int] = np.argwhere(labels_xray == m[label]).squeeze()
+            assert idx.size == 1
+            x_xray_new.append(x_xray[idx])
+            y_xray_new.append(y_xray[idx])
+        # closest in terms of relative image coordinates
+        # for xd, yd in zip(x_data, y_data):
+        #     # TODO: scale coordinates
+        #     # TODO: center X-ray around section corresponding to image
+        #     idx_min = np.argmin((x_xray - xd) ** 2 + (y_xray - yd) ** 2)
+        #     x_xray_new.append(x_xray[idx_min])
+        #     y_xray_new.append(y_xray[idx_min])
 
         # TODO: check if this is x, y or y, x
         self.holes_xray: list[np.ndarray[int], np.ndarray[int]] = [
@@ -1446,9 +1470,10 @@ class ProjectBaseClass:
             self,
             side_xray: str | None = None,
             side_data: str | None = None,
+            overwrite_data: bool = False,
             plts: bool = False,
             **kwargs
-    ):
+    ) -> None:
         """
         Identify square-shaped holes at top or bottom of sample in xray section
         and MSI sample.
@@ -1456,53 +1481,58 @@ class ProjectBaseClass:
         Parameters
         ----------
         side_xray : str, optional
-            The side on which the holes are expected to be found in the xray sample, either 'top'
-            or 'bottom'.
+            The side on which the holes are expected to be found in the xray
+            sample, either 'top' or 'bottom'.
         side_data : str, optional
-            The side on which the holes are expected to be found in the data sample, either 'top'
-            or 'bottom'.
+            The side on which the holes are expected to be found in the data
+            sample, either 'top' or 'bottom'.
+        overwrite_data: bool, optional
+            The default is False. If this is set to False, will fetch punch-holes
+            from the ImageROI object that may have been defined manually earlier.
         plts : bool, optional
             If True, will plot inbetween and final results in the hole 
             identification.
         **kwargs : dict
             Additional kwargs passed on to the find_holes function.
-
-        Returns
-        -------
-        None.
-
         """
         assert self._xray is not None, 'call set_xray first'
         assert self._image_roi is not None, 'call set_image_roi first'
 
         if 'side' in kwargs:
-            raise ValueError('please provide "side_xray" and "side_data" seperately')
+            raise ValueError(
+                'please provide "side_xray" and "side_data" seperately'
+            )
 
-        img_xray: ImageROI = self.xray.get_ImageROI_from_section(
-            section_start=self.depth_span
+        self.xray.set_punchholes(
+            remove_gelatine=False, side=side_xray, plts=plts, **kwargs
         )
-        img_xray.set_punchholes(remove_gelatine=False, side=side_xray, plts=plts, **kwargs)
-        if not check_attr(self.image_roi, 'punchholes'):
+        self.xray.save()
+
+        if (not check_attr(self.image_roi, 'punchholes')) or overwrite_data:
             self.image_roi.set_punchholes(
                 remove_gelatine=True, side=side_data, plts=plts, **kwargs
             )
+            self.image_roi.save()
 
         # copy over to object attributes
-        self.holes_xray: list[np.ndarray[int], np.ndarray[int]] = img_xray._punchholes
-        self.holes_data: list[np.ndarray[int], np.ndarray[int]] = self.image_roi._punchholes
+        self.holes_xray: list[np.ndarray[int], np.ndarray[int]] = self.xray.punchholes
+        self.holes_data: list[np.ndarray[int], np.ndarray[int]] = self.image_roi.punchholes
 
     def add_depth_correction_with_xray(self, method: str = 'linear') -> None:
         """
-        Add a column with corrected depth based on the punchhole correlation with the xray image.
+        Add a column with corrected depth based on the punch hole correlation
+        with the xray image.
 
-        Depending on the specified method, 2 or 4 points are used for the depth correction:
+        Depending on the specified method, 2 or 4 points are used for the
+        depth correction:
             for the method linear, only the two punchholes are used
             for all other methods the top and bottom of the slice are also used
 
         Parameters
         ----------
         method: str (default 'linear')
-            Options are 'linear' / 'l', 'cubic' / 'c' and 'piece-wise linear' / 'pwl'
+            Options are 'linear' / 'l', 'cubic' / 'c'
+            and 'piece-wise linear' / 'pwl'
 
         Returns
         -------
@@ -1514,7 +1544,9 @@ class ProjectBaseClass:
             """Convert the index into the relative depth."""
             return idx / img_shape[1] * depth_section + self.depth_span[0]
 
-        def append_top_bottom(arr: np.ndarray, img_shape: tuple[int, ...]) -> np.ndarray:
+        def append_top_bottom(
+                arr: np.ndarray, img_shape: tuple[int, ...]
+        ) -> np.ndarray:
             """Insert the indices for the top and bottom of the slice."""
             # insert top
             arr = np.insert(arr, 0, 0)
@@ -1529,27 +1561,34 @@ class ProjectBaseClass:
         assert self.holes_data is not None, 'call set_punchholes'
         assert self._data_object is not None, 'set data_object object first'
         assert 'depth' in self.data_object.feature_table.columns, 'set depth column'
-        assert self.depth_span is not None, 'set the depth section'
+        assert check_attr(self, '_image_roi'), 'call require_image_roi'
+        assert check_attr(self, '_xray'), 'call require_xray'
 
         depth_section: float | int = self.depth_span[1] - self.depth_span[0]
 
-        img_xray_shape: tuple[int, ...] = self.xray.get_section(
-            self.depth_span[0], self.depth_span[1]
-        ).shape
-        # eliminate gelatine pixels
-        img_data_shape = self.image_roi.image_grayscale.shape
+        img_xray_shape: tuple[int, int] = self._xray.image.shape[:2]
+        img_data_shape: tuple[int, int] = self._image_roi.image.shape[:2]
 
         # use holes as tie-points
-        idxs_xray: np.ndarray[int] = np.array([point[1] for point in self.holes_xray])
-        idxs_data: np.ndarray[int] = np.array([point[1] for point in self.holes_data])
+        idxs_xray: np.ndarray[int] = np.array(
+            [point[1] for point in self.holes_xray]
+        )
+        idxs_data: np.ndarray[int] = np.array(
+            [point[1] for point in self.holes_data]
+        )
 
         depths: pd.Series = self.data_object.feature_table['depth']
 
         if method not in ('linear', 'l'):
-            idxs_xray: np.ndarray[int] = append_top_bottom(idxs_xray, img_xray_shape)
-            idxs_data: np.ndarray[int] = append_top_bottom(idxs_data, img_data_shape)
+            idxs_xray: np.ndarray[int] = append_top_bottom(
+                idxs_xray, img_xray_shape
+            )
+            idxs_data: np.ndarray[int] = append_top_bottom(
+                idxs_data, img_data_shape
+            )
 
-        # depths xray --> assumed to be not deformed, therefore linear depth increase
+        # depths xray --> assumed to be not deformed, therefore linear depth
+        # increase
         if method in ('linear', 'l'):
             # linear function to fit xray depth to msi depth
             coeffs = np.polyfit(
@@ -1591,18 +1630,34 @@ class ProjectBaseClass:
 
         self.data_object.feature_table['depth_corrected'] = depths_new
 
-    def add_xray(self, plts=False, is_piecewise=True, **_):
+    def _get_xray_transform(self) -> tuple[Mapper, bool]:
+        # try to load mapper
+        mapper = Mapper(path_folder=self.path_folder, tag='xray')
+        if loaded := os.path.exists(mapper.save_file):
+            mapper.load()
+        return mapper, loaded
+
+    def set_xray_transform(
+            self,
+            plts=False,
+            is_piecewise=True,
+            method='punchholes',
+            flip_xray: bool | None = None,
+            **_
+    ) -> None:
         """
-        Add the X-Ray measurement as a new column to the feature table of the data object.
+        This function may only be called if a data, _image_roi and xray object
+        have been set, the depth span specified and the punch holes been added
+        to the feature table.
 
-        This function may only be called if a data, _image_roi and xray object have been set, the depth span specified
-        and the punchholes been added to the feature table.
-
-        This method will use the punchchole positions and, depending on the method, the top and bottom of the sample
-        to first fit the X-Ray measurement to match the MSI one and then add the transformed X-Ray image to the
-        feature table. The piece-wise transformation requires that the teaching points span the entire ROI. Hence,
-        the corners of the ROI are used as additional teaching points. The trafo object currently does not support
-        other transformations than piece-wise linear, affine and holomoprhic.
+        This method will use the punch hole positions and, depending on the
+        method, the top and bottom of the sample to first fit the X-ray
+        measurement to match the MSI one and then add the transformed X-ray
+        image to the feature table. The piece-wise transformation requires that
+        the teaching points span the entire ROI. Hence, the corners of the ROI
+        are used as additional teaching points. The trafo object currently does
+        not support other transformations than piece-wise linear, affine and
+        holomorphic.
 
         Parameters
         ----------
@@ -1616,44 +1671,34 @@ class ProjectBaseClass:
         """
         assert self._data_object is not None, 'set data_object object first'
         assert 'x_ROI' in self.data_object.feature_table.columns, 'call add_pixels_ROI'
-        assert self._xray is not None, 'call set_xray first'
-        assert self._image_roi is not None, 'call set_image_roi first'
-        assert self.depth_span is not None, 'set the depth section'
-        assert self.holes_data is not None, 'call add_depth_correction_with_xray'
-
-        img_xray: np.ndarray[int] = ensure_image_is_gray(
-            self.xray.get_section(self.depth_span[0], self.depth_span[1])
-        )
-        roi_xray: ImageROI = ImageROI(
-            image=img_xray, path_folder=None, obj_color=self.xray.obj_color
-        )
-
-        plt.figure()
-        plt.imshow(img_xray)
-        plt.title('input image')
-        plt.show()
-
-        # try to load mapper
-        mapper = Mapper(path_folder=self.path_folder, tag='xray')
-        if os.path.exists(mapper._get_disc_folder_and_file()[1]):
-            is_loaded: bool = True
-            mapper.load()
-        else:
-            is_loaded: bool = False
-            # eliminate gelatine pixels
-            img_data: np.ndarray[int] = (
-                    self.image_roi._require_simplified_image()
-                    * self.image_roi._require_foreground_thr_and_pixels()[1]
+        assert check_attr(self, '_image_roi'), 'call require_image_roi'
+        assert check_attr(self, '_xray'), 'call require_xray'
+        if method == 'punchholes':
+            assert self.holes_data is not None, 'call set_punchholes first'
+        if (method == 'punchholes') and (flip_xray is not None):
+            logger.warning(
+                'flipping will be ignored for punch hole method and instead '
+                'inferred from the mappings'
             )
 
+        # use transformer to handle rescaling
+        t: Transformation = Transformation(
+            source=self.xray.image,
+            target=self.image_roi.image,
+            source_obj_color=self.xray.obj_color,
+            target_obj_color=self.image_roi.obj_color
+        )
+        if method == 'punchholes':
             points_xray: list[np.ndarray[int], np.ndarray[int]] = self.holes_xray.copy()
             points_data: list[np.ndarray[int], np.ndarray[int]] = self.holes_data.copy()
 
-            cont_data: np.ndarray[int] = self.image_roi._require_main_contour()
-            cont_xray: np.ndarray[int] = roi_xray._require_main_contour()
+            # provide contours explicitly in case they were defined with
+            # non-default parameters
+            cont_data: np.ndarray[int] = self.image_roi.main_contour
+            cont_xray: np.ndarray[int] = self.xray.main_contour
 
-            t: Transformation = Transformation(roi_xray, self.image_roi)
-            t._transform_from_punchholes(
+            t.estimate(
+                method=method,
                 is_piecewise=is_piecewise,
                 points_source=points_xray,
                 points_target=points_data,
@@ -1661,42 +1706,42 @@ class ProjectBaseClass:
                 contour_target=cont_data,
                 is_rescaled=False
             )
+        elif method == 'bounding_box':
+            if flip_xray:
+                t.estimate(method='flip_ud')
+            t.estimate(
+                method=method,
+                plts=plts
+            )
+        else:
+            raise KeyError(f'method {method} not valid for xray transformation')
 
+        mapper = t.to_mapper(
+            path_folder=self.path_folder,
+            tag='xray'
+        )
+        mapper.save()
+
+        if not plts:
+            return
+
+        warped_xray = t.fit()
+
+        if method == 'punchholes':
             plt.figure()
-            plt.imshow(t.fit())
+            plt.imshow(warped_xray)
             plt.title('warped in transformer')
             plt.show()
 
-            mapper = t.to_mapper(
-                path_folder=self.path_folder,
-                tag='xray'
-            )
-            mapper.save()
-
-        # use (new) transformer to handle rescaling
-        t: Transformation = Transformation(source=roi_xray, target=self.image_roi)
-
-        warped_xray: np.ndarray[float] = mapper.fit(
-            t.source.image, preserve_range=True
-        )
-
-        plt.figure()
-        plt.imshow(t.source.image)
-        plt.title('xray before warp')
-
-        plt.figure()
-        plt.imshow(warped_xray)
-        plt.title('xray after warp')
-
-        # add to feature table
-        self.data_object.add_attribute_from_image(warped_xray, 'xray')
-
-        if plts and not is_loaded:
             # tie points on msi image
-            plt.figure()
-            plt.plot(cont_data[:, 0, 0], cont_data[:, 0, 1])
-            plt.imshow(img_data)
-            plt.scatter(
+            fig, ax = plt.subplots()
+            ax.plot(cont_data[:, 0, 0], cont_data[:, 0, 1])
+            plt_cv2_image(self.image_roi.image,
+                          hold=True,
+                          fig=fig,
+                          ax=ax,
+                          swap_rb=False)
+            ax.scatter(
                 [point[1] for point in points_data],
                 [point[0] for point in points_data],
                 color='r'
@@ -1704,39 +1749,78 @@ class ProjectBaseClass:
             plt.show()
 
             # tie points on xray section
-            plt.figure()
-            plt.imshow(img_xray)
-            plt.plot(cont_xray[:, 0, 0], cont_xray[:, 0, 1])
-            plt.scatter(
-                [point[1] for point in points_xray],
-                [point[0] for point in points_xray],
+            fig, ax = plt.subplots()
+            plt_cv2_image(t.source.image,
+                          hold=True,
+                          fig=fig,
+                          ax=ax,
+                          swap_rb=False)
+            ax.plot(cont_xray[:, 0, 0] * t.source_rescale_width,
+                    cont_xray[:, 0, 1] * t.source_rescale_height)
+            ax.scatter(
+                [point[1] * t.source_rescale_width for point in points_xray],
+                [point[0] * t.source_rescale_height for point in points_xray],
                 c='red'
             )
             plt.show()
 
-            # warped xray image on top of msi
-            plt.figure()
-            img_xray = warped_xray.copy()
-            img_xray = (255 - img_xray).astype(np.uint8)  # invert
-            mask = img_xray == 255
-            img_xray[mask] = 0
-            # img_xray = cv2.equalizeHist(img_xray)
+        # warped xray image on top of msi
+        plt.figure()
+        img_xray = warped_xray.copy()
+        if self.image_roi.obj_color != self.xray.obj_color:
+            img_xray = img_xray.max() - img_xray
+        img_xray = rescale_values(img_xray, 0, 255).astype(np.uint8)  # invert
+        # img_xray = cv2.equalizeHist(img_xray)
 
-            img_roi = self.image_roi.image_grayscale.astype(float)
-            img_roi *= self.image_roi._require_foreground_thr_and_pixels()[1]
-            img_roi = rescale_values(img_roi, 0, 255).astype(int)
-            # img_roi = cv2.equalizeHist(img_roi.astype(np.uint8))
+        img_roi = self.image_roi.image_grayscale.astype(float)
+        img_roi *= self.image_roi.mask_foreground
+        img_roi = rescale_values(img_roi, 0, 255).astype(int)
+        # img_roi = cv2.equalizeHist(img_roi.astype(np.uint8))
 
-            img_cpr = np.stack([
-                img_xray,
-                img_roi // 2 + img_xray // 2,
-                img_roi
-            ], axis=-1)
-            plt.imshow(img_cpr)
-            plt.title('warped image')
-            plt.show()
-        elif plts:
-            logger.warning('Cannot create plots if mapper is loaded.')
+        img_cpr = np.stack([
+            img_xray,
+            img_roi // 2 + img_xray // 2,
+            img_roi
+        ], axis=-1).astype(int)
+        plt_cv2_image(img_cpr, swap_rb=False, title='warped image')
+
+    def require_xray_transform(self, **kwargs) -> Mapper:
+        mapper, loaded = self._get_xray_transform()
+        if not loaded:
+            self.set_xray_transform(**kwargs)
+            mapper, loaded = self._get_xray_transform()
+            assert loaded, 'encountered internal error'
+        return mapper
+
+    def add_xray(self, plts: bool = False):
+        """
+        Add the X-ray measurement as a new column to the feature table of the
+        data object.
+        """
+        assert check_attr(self, '_image_roi'), 'call require_image_roi'
+        assert check_attr(self, '_xray'), 'call require_xray'
+        mapper, loaded = self._get_xray_transform()
+        assert loaded, 'Unable to load mapper, call require_xray_transform first'
+
+        # use transformer to handle rescaling
+        t: Transformation = Transformation(
+            source=self.xray.image,
+            target=self.image_roi.image,
+            source_obj_color=self.xray.obj_color,
+            target_obj_color=self.image_roi.obj_color
+        )
+
+        warped_xray: np.ndarray[float] = mapper.fit(
+            t.source.image_grayscale, preserve_range=True
+        )
+
+        if plts:
+            plt_cv2_image(self.xray.image, title='input image', swap_rb=False)
+            plt_cv2_image(t.source.image, title='xray before warp', swap_rb=False)
+            plt_cv2_image(warped_xray, title='xray after warp', swap_rb=False)
+
+        # add to feature table
+        self.data_object.add_attribute_from_image(warped_xray, 'xray')
 
     def combine_with_project(
             self, project: Self, tag: str, plts: bool = False, **kwargs
@@ -1749,7 +1833,7 @@ class ProjectBaseClass:
 
         mapper = Mapper(path_folder=self.path_folder, tag=tag)
 
-        if os.path.exists(mapper._get_disc_folder_and_file()[1]):
+        if os.path.exists(mapper.save_file):
             mapper.load()
         else:
             target: np.ndarray = self.image_classified.image
@@ -1979,6 +2063,18 @@ class ProjectBaseClass:
             **kwargs
         )
 
+    def plot_punchholes(self):
+        assert (
+                check_attr(self, 'holes_data')
+                and check_attr(self, 'holes_xray')), \
+            'Call set_punchholes before calling this method'
+        fig, axs = plt.subplots(nrows=2)
+        self.image_roi.plot_punchholes(fig=fig, axs=axs[0], hold=True)
+        self.xray.plot_punchholes(fig=fig, axs=axs[1], hold=True)
+        axs[0].set_title('Data')
+        axs[1].set_title('X-ray')
+        plt.show()
+
     def plot_overview(self):
         """Plot figures representing the current state of the project."""
         fig, axs = plt.subplots(
@@ -2101,7 +2197,8 @@ class ProjectXRF(ProjectBaseClass):
             'ImageROI.pickle',
             'ImageClassified.pickle',
             'SampleImageHandlerXRF.pickle',
-            'AgeModel.pickle'
+            'AgeModel.pickle',
+            'XRayROI.pickle'
         }
 
         dict_files = {}

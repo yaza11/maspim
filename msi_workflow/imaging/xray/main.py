@@ -21,6 +21,11 @@ from msi_workflow.util.convinience import check_attr
 logger = logging.getLogger(__name__)
 
 
+class XRayROI(ImageROI):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+
 class XRay(ImageSample):
     """
     XRay class. Build around the image sample class.
@@ -54,11 +59,11 @@ class XRay(ImageSample):
     the depth section can be specified in multiple ways but always expects
     values in same unit as the depth_section
     specified upon initialization
-    >>> img: ImageROI = xray.get_ImageROI_from_section((100, 105))
+    >>> img: ImageROI = xray.get_roi_from_section((100, 105))
     or
-    >>> img: ImageROI = xray.get_ImageROI_from_section(section_start=100, section_end=105)
+    >>> img: ImageROI = xray.get_roi_from_section(section_start=100, section_end=105)
     or
-    >>> img: ImageROI = xray.get_ImageROI_from_section(section_start=100, section_length=5)
+    >>> img: ImageROI = xray.get_roi_from_section(section_start=100, section_length=5)
 
     using the same syntax, it is also possible to only return the array
     >>> img: np.ndarray = xray.get_section((100, 105))
@@ -318,13 +323,13 @@ class XRay(ImageSample):
 
         return roi[:, mask]
 
-    def get_ImageROI_from_section(
+    def get_roi_from_section(
             self,
             section_start: int | float | tuple[int | float, int | float],
             section_end: int | float | None = None,
             section_length: int | float = 5,
             **kwargs: dict
-    ) -> ImageROI:
+    ) -> XRayROI:
         """
         Get an ImageROI object from a specific section.
 
@@ -349,7 +354,7 @@ class XRay(ImageSample):
             section_start, section_end, section_length
         )
         img: np.ndarray[int] = self.get_section(depth_section, **kwargs)
-        roi: ImageROI = ImageROI(
+        roi: XRayROI = XRayROI(
             path_folder=os.path.dirname(self.path_image_file),
             image=img,
             obj_color=self.obj_color

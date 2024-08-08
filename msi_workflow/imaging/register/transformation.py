@@ -1,4 +1,6 @@
 """Module for finding transformations between sample regions."""
+from copy import deepcopy
+
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,6 +19,7 @@ from msi_workflow.imaging.util.coordinate_transformations import (
     kartesian_to_polar, polar_to_kartesian, rescale_values)
 from msi_workflow.imaging.util.image_plotting import plt_contours, plt_cv2_image
 from msi_workflow.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
+from msi_workflow.util.convinience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -451,6 +454,14 @@ class Transformation:
         self.trafos: list = []
         self.trafo_types: list = []
 
+    @property
+    def source_rescale_height(self) -> float:
+        return self._factors_rescaling[0]
+
+    @property
+    def source_rescale_width(self) -> float:
+        return self._factors_rescaling[1]
+
     def _handle_rescaling(
             self, image_roi: ImageROI, keep_ratio: bool, **kwargs
     ) -> ImageROI:
@@ -571,6 +582,11 @@ class Transformation:
 
         return source_new
 
+    def _transform_flip_ud(self) -> None:
+        """Transformation that flips the source image upside down"""
+        self.trafos.append(np.flipud)
+        self.trafo_types.append('flip_ud')
+
     def _transform_from_punchholes(
             self,
             points_source: list[np.ndarray[int], np.ndarray[int]],  # xray
@@ -607,9 +623,13 @@ class Transformation:
             Whether the input points and contours of the source are rescaled
             according to the input handling of the initializer. Default is False
         """
+        points_source = deepcopy(points_source)
+        points_target = deepcopy(points_target)
+
         if contour_source is None:
             contour_source: np.ndarray[int] = self.source.main_contour.copy()
         elif not is_rescaled:
+            contour_source: np.ndarray[int | float] = contour_source.copy()
             contour_source[:, 0, 1] = (
                     contour_source[:, 0, 1].astype(float)
                     * self._factors_rescaling[0]
@@ -638,7 +658,7 @@ class Transformation:
                 f'at {side_target} for target, flipping X-Ray'
             )
             side_source = side_target
-            # define warping that flips to and bottom
+
             h: int = self.source_shape[0] - 1  # index starts at 0
             contour_source[:, 0, 1] = h - contour_source[:, 0, 1]
             # format [array([y, x]), array([y, x])]
@@ -646,8 +666,7 @@ class Transformation:
                 np.array(([h - p[0], p[1]])) for p in points_source
             ]
 
-            self.trafos.append(np.flipud)
-            self.trafo_types.append('flip_ud')
+            self._transform_flip_ud()
 
         # append points from line-contour intersection
         points_source.append(
@@ -680,14 +699,14 @@ class Transformation:
             # msi_workflow and dst swapped??
             pwc.estimate(dst, src)
             M: PiecewiseAffineTransform = pwc
-            transform_type: Any = PiecewiseAffineTransform
+            transform_type: str = 'piecewise_affine'
         else:
             # perform affine transformation
             M: np.ndarray[float] = cv2.getAffineTransform(
                 np.array(points_source).astype(np.float32)[:, ::-1],
                 np.array(points_target).astype(np.float32)[:, ::-1]
             )  # source: xray, target: msi
-            transform_type = cv2.getAffineTransform
+            transform_type = 'affine'
         self.trafos.append(M)
         self.trafo_types.append(transform_type)
 
@@ -984,7 +1003,12 @@ class Transformation:
     def estimate(self, method: str, *args, **kwargs):
         """Estimate the specified transformation and add it to the stack."""
         methods: tuple[str, ...] = (
-            'punchholes', 'bounding_box', 'image_flow', 'tilt', 'laminae'
+            'punchholes',
+            'bounding_box',
+            'image_flow',
+            'tilt',
+            'laminae',
+            'flip_ud'
         )
         assert method in methods, f'method must be in {methods}, not {method}'
 
@@ -998,21 +1022,23 @@ class Transformation:
             self._transform_from_tilt_correct(*args, **kwargs)
         elif method == 'laminae':
             self._transform_from_laminae(*args, **kwargs)
+        elif method == 'flip_ud':
+            self._transform_flip_ud()
         else:
             raise NotImplementedError()
 
     def fit(self, img: np.ndarray = None) -> np.ndarray:
         """Apply all transformations on the stack to an input image."""
-        def apply_(img, M, transform_type):
+        def apply_(img, M, transform_type: str):
             if transform_type == 'perspective':
                 warped = cv2.warpPerspective(
                     img, M, dsize=(self.target_shape[1], self.target_shape[0])
                 )
-            elif transform_type == cv2.getAffineTransform:
+            elif transform_type == 'affine':
                 warped = cv2.warpAffine(
                     img, M, dsize=(self.target_shape[1], self.target_shape[0])
                 )
-            elif transform_type == PiecewiseAffineTransform:
+            elif transform_type == 'piecewise_affine':
                 warped = warp(img, M, output_shape=self.target_shape[:2])
             elif transform_type in ('laminae', 'image_flow', 'flip_ud', 'tilt_correction'):
                 warped = M(img)
