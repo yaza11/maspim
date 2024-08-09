@@ -29,7 +29,7 @@ class hdf5Handler(ReaderBaseClass):
     >>> brukerReader.create_reader()
     >>> brukerReader.create_indices()
     >>> brukerReader.set_meta_data()
-    >>> brukerReader.set_QTOF_window()  # very important, otherwise the saved file will be huge
+    >>> brukerReader.set_casi_window()  # very important, otherwise the saved file will be huge
     >>> hdf = hdf5Handler('some/d/folder.d')
     This creates the disk file
     >>> hdf.write(brukerReader)

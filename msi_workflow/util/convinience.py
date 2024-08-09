@@ -104,13 +104,18 @@ class Convinience:
             f'{self.__class__.__name__} does not implement a feature_table property'
         )
 
-    def _get_disc_folder_and_file(self) -> tuple[str, str]:
+    def _get_disc_folder_and_file(
+            self, tag: str | None = None
+    ) -> tuple[str, str]:
         assert (check_attr(self, 'path_folder')
                 or check_attr(self, 'path_file')), \
             'object does not have a path_folder attribute'
 
         class_name: str = str(self.__class__).split('.')[-1][:-2]
-        file_name: str = class_name + '.pickle'
+        if tag is not None:
+            file_name: str = f'{class_name}_{tag}.pickle'
+        else:
+            file_name: str = f'{class_name}.pickle'
 
         if self._save_in_d_folder:
             assert check_attr(self, 'path_d_folder'), \
@@ -138,10 +143,10 @@ class Convinience:
     def _post_load(self):
         pass
 
-    def load(self):
+    def load(self, tag: str | None = None):
         self._pre_load()
 
-        folder, file = self._get_disc_folder_and_file()
+        folder, file = self._get_disc_folder_and_file(tag=tag)
 
         if not os.path.exists(file):
             raise FileNotFoundError(
@@ -155,11 +160,14 @@ class Convinience:
             if type(obj) is not dict:  # legacy
                 obj: dict[str, Any] = obj.__dict__
             # filter out attributes that are not supposed to be saved
-            if check_attr(self, '_save_attrs'):
+            if has_save_attr := check_attr(self, '_save_attrs'):
                 load_attr: set[str] = self._save_attrs & set(obj.keys())
             else:  # load everything
                 load_attr: set[str] = set(obj.keys())
-            if len(discarded := obj.keys() - self._save_attrs) > 0:
+            if (
+                    has_save_attr and
+                    (len(discarded := obj.keys() - self._save_attrs) > 0)
+            ):
                 logger.warning(f'discarded attributes {discarded} when loading {file}')
             # generate new dict, that only has the desired attributes
             obj_new: dict[str, Any] = {key: obj[key] for key in load_attr}
@@ -177,14 +185,16 @@ class Convinience:
     def _post_save(self):
         pass
 
-    def save(self):
+    def save(self, tag: str | None = None):
         """Save class __dict__ instance to file."""
         self._pre_save()
 
-        folder, file = self._get_disc_folder_and_file()
+        folder, file = self._get_disc_folder_and_file(tag)
 
         # discard all attributes that are not flagged as relevant
-        keep_attributes: set[str] = set(self.__dict__.keys()) & self._save_attrs
+        keep_attributes: set[str] = set(self.__dict__.keys())
+        if self._save_attrs is not None:
+            keep_attributes &= self._save_attrs
 
         # new dict with only the desired attributes
         save_dict: dict[str, Any] = {key: self.__dict__[key] for key in keep_attributes}

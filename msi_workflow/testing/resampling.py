@@ -16,7 +16,7 @@ reader = ReadBrukerMCF(path_d_folder=d_folder)
 reader.create_reader()
 reader.create_indices()
 reader.set_meta_data()
-reader.set_QTOF_window()
+reader.set_casi_window()
 
 spec_orig = reader.get_spectrum(1, limits=reader.limits)
 

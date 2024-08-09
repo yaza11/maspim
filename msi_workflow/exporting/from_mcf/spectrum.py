@@ -27,7 +27,7 @@ from msi_workflow.exporting.from_mcf.helper import get_mzs_for_limits
 from msi_workflow.res.calibrants import get_calibrants
 from msi_workflow.util import Convinience
 from msi_workflow.util.convinience import check_attr
-from msi_workflow.project.file_helpers import ImagingInfoXML, get_rxy
+from msi_workflow.project.file_helpers import ImagingInfoXML, get_rxy, get_spots
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +352,7 @@ class Spectra(Convinience):
             if (not check_attr(reader, 'metaData')) and is_rtms:
                 reader.set_meta_data()
             if not check_attr(reader, 'limits'):
-                reader.set_QTOF_window()
+                reader.set_casi_window()
             limits = reader.limits
         self._limits = limits
 
@@ -1596,13 +1596,20 @@ class Spectra(Convinience):
         self._kernel_params[:, 2] = tolerances
 
         if plts:
+            ys = np.zeros_like(self.mzs)
+            mask = np.zeros_like(self.mzs, dtype=bool)
             plt.figure()
             plt.plot(self.mzs, self.intensities, label='original')
             for i in range(len(self._peaks)):
                 y = self._kernel_func(self.mzs, *self.kernel_params[i, :])
-                mask = (np.abs(self.kernel_params[i, 0] - self.mzs)
-                        <= (10 * self.kernel_params[i, -1]))
-                plt.plot(self.mzs[mask], y[mask])
+                mask_kernel = (np.abs(self.kernel_params[i, 0] - self.mzs)
+                        <= (20 * self.kernel_params[i, -1]))
+
+                mask |= mask_kernel
+
+                ys += self._kernel_func(self.mzs, *self.kernel_params[i, :])
+
+                plt.plot(self.mzs[mask_kernel], y[mask_kernel])
             plt.vlines(
                 targets,
                 ymin=0,
@@ -1612,6 +1619,15 @@ class Spectra(Convinience):
                 label='targets'
             )
             plt.xlabel('m/z in Da')
+            plt.ylabel('Intensity')
+            plt.legend()
+            plt.show()
+
+            plt.figure()
+            plt.plot(ys[mask], label='kernels')
+            plt.plot(self.intensities[mask], label='intensities')
+            plt.xlabel('broken m/z line')
+            plt.xticks([])
             plt.ylabel('Intensity')
             plt.legend()
             plt.show()
@@ -1820,7 +1836,7 @@ class Spectra(Convinience):
     def _add_rxys_to_df(
             self,
             df: pd.DataFrame,
-            reader: ReadBrukerMCF | None = None,
+            reader: ReadBrukerMCF | ImagingInfoXML | hdf5Handler | pd.DataFrame | None = None,
             **_
     ) -> pd.DataFrame:
         """
@@ -1839,21 +1855,30 @@ class Spectra(Convinience):
             Reader from which to obtain the spot data. Defaults to evoking new ImagingInfoXML
             object.
         """
-        if (reader is not None) and (type(reader) is ReadBrukerMCF):
+        if (reader is not None) and isinstance(reader, ReadBrukerMCF):
             reader.create_spots()
             names: np.ndarray[str] = reader.spots.names
+            if not check_attr(reader, 'indices'):
+                reader.create_indices()
+            imaging_indices = reader.indices
         else:
-            reader: ImagingInfoXML = ImagingInfoXML(
+            reader: pd.DataFrame = get_spots(
                 path_d_folder=self.path_d_folder
             )
             names: np.ndarray[str] = reader.spotName
 
+            if isinstance(reader, ImagingInfoXML | ReadBrukerMCF | hdf5Handler):
+                imaging_indices = reader.indices
+            else:
+                assert isinstance(reader, pd.DataFrame)
+                imaging_indices = reader.index
+
         RXYs = get_rxy(names)
 
         # search indices of spectra object in reader
-        if self._n_spectra != len(reader.indices):
+        if self._n_spectra != len(imaging_indices):
             mask: np.ndarray[bool] = np.array(
-                [np.argwhere(idx == reader.indices)[0][0] for idx in self.indices]
+                [np.argwhere(idx == imaging_indices)[0][0] for idx in self.indices]
             )
         else:
             mask: np.ndarray[bool] = np.ones_like(self.indices, dtype=bool)
@@ -1864,7 +1889,7 @@ class Spectra(Convinience):
         return df
 
     def set_feature_table(
-            self, integrate_area: bool = False, **_
+            self, integrate_area: bool = False, **kwargs
     ) -> pd.DataFrame:
         """
         Turn the line_spectra into the familiar df with R, x, y columns.
@@ -1891,7 +1916,8 @@ class Spectra(Convinience):
             Feature table with the spot-wise and compound wise intensities
             together with the R, x, y columns.
         """
-        assert check_attr(self, '_line_spectra'), 'create line spectra with bin_spectra'
+        assert check_attr(self, '_line_spectra'), \
+            'create line spectra with bin_spectra'
 
         if integrate_area:
             assert self._binning_by == 'area', \
@@ -1907,7 +1933,7 @@ class Spectra(Convinience):
         )
         df.loc[:, 'tic_window'] = self._tic
 
-        df: pd.DataFrame = self._add_rxys_to_df(df)
+        df: pd.DataFrame = self._add_rxys_to_df(df, **kwargs)
         # drop possible duplicates due to shift in optimizer
         df: pd.DataFrame = df.loc[:, ~df.columns.duplicated()].copy()
 
@@ -2223,7 +2249,7 @@ class Spectra(Convinience):
             self,
             plt_kernels: bool = False,
             plt_lines: bool = False,
-            mz_limits: tuple[float] | None = None
+            limits: tuple[float] | None = None
     ) -> None:
         """
         Plot the summed up intensities with synthetic spectrum estimated
@@ -2243,7 +2269,7 @@ class Spectra(Convinience):
         plt_lines: bool, optional
             If spectra have been binned, this option will plot vertical lines at the peak centers where
             there height corresponds to the summed intensity across all spectra.
-        mz_limits: tuple[float] | None, optional.
+        limits: tuple[float] | None, optional.
             By default, the entire mass range is plotted. With this parameter it can be decreased.
         """
         # calculate approximated signal by summing up kernels
@@ -2266,9 +2292,9 @@ class Spectra(Convinience):
         if check_attr(self, '_binning_by') and plt_lines:
             plt.stem(self.kernel_params[:, 0], self.get_heights().sum(axis=0),
                      markerfmt='', linefmt='red')
-        if mz_limits is not None:
-            plt.xlim(mz_limits)
-            mask: np.ndarray[bool] = (self.mzs >= mz_limits[0]) & (self.mzs <= mz_limits[1])
+        if limits is not None:
+            plt.xlim(limits)
+            mask: np.ndarray[bool] = (self.mzs >= limits[0]) & (self.mzs <= limits[1])
             plt.ylim((0, self.intensities[mask].max()))
         plt.legend()
         plt.xlabel(r'$m/z$ in Da')
@@ -2429,7 +2455,7 @@ class ClusteringManager:
     def __init__(self, reader: ReadBrukerMCF, **kwargs_spectra):
         assert check_attr(reader, 'indices'), 'call create_indices'
         assert check_attr(reader, 'limits'), \
-            'call set_QTOF_window or define mass limits'
+            'call set_casi_window or define mass limits'
         self.path_d_folder: str = reader.path_d_folder
         self.indices = reader.indices
         self.N_spectra = len(self.indices)

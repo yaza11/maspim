@@ -1,3 +1,5 @@
+import os
+
 import scipy
 import numpy as np
 import pandas as pd
@@ -104,6 +106,7 @@ class DataAnalysisExport(Convinience):
         assert (peak_th >= 0) and (peak_th <= 1)
 
         self.path_file = path_file
+        self.path_folder = os.path.dirname(path_file)
         self._peak_th = float(peak_th)
         self._normalization = normalization
 

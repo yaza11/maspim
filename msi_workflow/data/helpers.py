@@ -132,6 +132,7 @@ def plot_comp_on_image(
         fig: plt.Figure | None = None,
         ax: plt.Axes | None = None,
         hold: bool = False,
+        cmap='inferno',
         **kwargs
 ):
     assert 'x_ROI' in data_frame.columns
@@ -170,7 +171,7 @@ def plot_comp_on_image(
         fig, ax = plt.subplots()
     # plot background image
     ax.imshow(background_image)
-    im = ax.imshow(img_mz, alpha=np.sqrt(img_mz), cmap='inferno')
+    im = ax.imshow(img_mz, alpha=np.sqrt(img_mz), cmap=cmap)
     ax.set_axis_off()
     if title is not None:
         ax.set_title(title)

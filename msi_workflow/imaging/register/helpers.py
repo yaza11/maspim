@@ -204,12 +204,18 @@ class Mapper(Convinience):
 
         return new
 
-    def _get_disc_folder_and_file(self):
+    def _get_disc_folder_and_file(self, tag: str | None = None) -> tuple[str, str]:
         assert hasattr(self, 'path_folder') or hasattr(self, 'path_file'), \
             'object does not have a path_folder attribute'
 
+        if (tag is None) and (self._tag is not None):
+            tag = self._tag
+
         class_name: str = str(self.__class__).split('.')[-1][:-2]
-        file_name: str = f'{class_name}_{self._tag}.pickle'
+        if tag is not None:
+            file_name: str = f'{class_name}_{tag}.pickle'
+        else:
+            file_name: str = f'{class_name}.pickle'
 
         folder: str = self.path_folder
 

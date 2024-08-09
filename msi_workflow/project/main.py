@@ -35,7 +35,8 @@ from msi_workflow.data.age_model import AgeModel
 
 from msi_workflow.project.file_helpers import (
     get_folder_structure, find_files, get_mis_file, get_d_folder,
-    search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy
+    search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy,
+    get_spots
 )
 
 from msi_workflow.imaging.main import ImageSample, ImageROI, ImageClassified
@@ -166,7 +167,7 @@ class SampleImageHandlerMSI(Convinience):
     def set_extent_data(
             self,
             reader: ReadBrukerMCF | None = None,
-            imaging_xml: ImagingInfoXML | None = None
+            spot_info: ImagingInfoXML | pd.DataFrame | None = None
     ) -> None:
         """
         Get spot names from MCFREader and set extent of pixels based on that.
@@ -176,8 +177,9 @@ class SampleImageHandlerMSI(Convinience):
         reader : ReadBrukerMCF, optional
             Reader to get the pixel indices. The default is None. If not speci-
             fied, this method will create a new ImagingInfoXML instance in this scope.
-        imaging_xml : ImagingInfoXML, optional
-            An ImagingInfoXML instance. If not specified, this method will create a new instance.
+        spot_info : ImagingInfoXML, optional
+            An ImagingInfoXML instance. If not specified, this method will
+            call get_spots to try fetching spots from the xml or sqlite file.
 
         Returns
         -------
@@ -185,11 +187,11 @@ class SampleImageHandlerMSI(Convinience):
 
         """
         if (reader is None) or (not check_attr(reader, 'spots')):  # no reader specified or reader does not have spots
-            if imaging_xml is None:  # create new instance
-                imaging_xml: ImagingInfoXML = ImagingInfoXML(
+            if spot_info is None:  # create new instance
+                spot_info: pd.DataFrame = get_spots(
                     path_d_folder=self.path_d_folder
                 )
-            pixel_names = imaging_xml.spotName  # get pixel names from reader
+            pixel_names = spot_info.spotName  # get pixel names from reader
         else:
             pixel_names = reader.spots.names  # get pixel names from reader
         # initialize the _extent
@@ -648,6 +650,7 @@ class ProjectBaseClass:
     path_folder: str | None = None
     path_d_folder: str | None = None
 
+    _da_export: DataAnalysisExport | None = None
     _spectra: Spectra = None
     _data_object: MSI | XRF = None
     _xray_long: XRay | None = None
@@ -804,7 +807,7 @@ class ProjectBaseClass:
             self,
             obj_color: str | None = None,
             use_extent_from_mis: bool = True,
-            **kwargs_area: dict
+            **kwargs: dict
     ) -> None:
         """
         Set image_sample from image_handler.
@@ -820,8 +823,8 @@ class ProjectBaseClass:
         use_extent_from_mis: bool, optional
             If True, will determine the image extent from the measurement area
             defined in the mis file and the optimizer otherwise.
-        kwargs_area: dict, optional
-            keyword arguments passed on to ImageSample.sget_sample_area
+        kwargs: dict, optional
+            keyword arguments passed on to ImageSample.sget_sample_area and save
 
         Returns
         -------
@@ -855,8 +858,8 @@ class ProjectBaseClass:
         else:
             extent_x: None = None
 
-        self._image_sample.set_sample_area(extent_x=extent_x, **kwargs_area)
-        self._image_sample.save()
+        self._image_sample.set_sample_area(extent_x=extent_x, **kwargs)
+        self._image_sample.save(kwargs.get('tag'))
 
         self._update_files()
 
@@ -864,8 +867,12 @@ class ProjectBaseClass:
             self,
             obj_color: str | None = None,
             overwrite: bool = False,
-            **kwargs_area: dict
+            **kwargs: dict
     ) -> ImageSample:
+        kwargs_area = kwargs.copy()
+        if 'tag' in kwargs_area:
+            kwargs_area.pop('tag')
+
         call_set: bool = True
         if (self._image_sample is not None) and (not overwrite):  # return existing
             return self._image_sample
@@ -879,7 +886,7 @@ class ProjectBaseClass:
                 image_type='pil',
                 obj_color=obj_color
             )
-            self._image_sample.load()
+            self._image_sample.load(kwargs.get('tag'))
             call_set = False
             if not check_attr(self._image_sample, '_xywh_ROI'):
                 logger.warning(
@@ -890,7 +897,10 @@ class ProjectBaseClass:
 
         if call_set or overwrite:  # either overwrite or loaded partially processed obj
             self.set_image_sample(
-                obj_color=self._image_sample.obj_color if self._image_sample is not None else None,  # use eventually stored obj_color
+                obj_color=(
+                    self._image_sample.obj_color
+                    if self._image_sample is not None
+                    else obj_color),  # use eventually stored obj_color
                 **kwargs_area
             )
 
@@ -914,7 +924,7 @@ class ProjectBaseClass:
         self._image_roi.require_classification(**kwargs)
         self._image_roi.set_punchholes(**kwargs)
 
-        self._image_roi.save()
+        self._image_roi.save(kwargs.get('tag'))
 
         self._update_files()
 
@@ -924,7 +934,7 @@ class ProjectBaseClass:
         elif check_attr(self, 'ImageROI_file') and (not overwrite):
             logger.info('loading ImageROI')
             self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
-            self._image_roi.load()
+            self._image_roi.load(kwargs.get('tag'))
             if self.age_span is not None:
                 self._image_roi.age_span = self.age_span
         else:
@@ -978,7 +988,7 @@ class ProjectBaseClass:
         )
         if reduce_laminae:
             self._image_classified.reduce_laminae(**kwargs)
-        self._image_classified.save()
+        self._image_classified.save(kwargs.get('tag'))
         self._update_files()
 
     def require_image_classified(
@@ -991,7 +1001,7 @@ class ProjectBaseClass:
             self._image_classified: ImageClassified = ImageClassified.from_parent(
                 self.image_roi, **kwargs
             )
-            self._image_classified.load()
+            self._image_classified.load(kwargs.get('tag'))
             self._image_classified.age_span = self.age_span
 
         if (not check_attr(self._image_classified, 'params_laminae_simplified')) or overwrite:
@@ -1015,7 +1025,7 @@ class ProjectBaseClass:
         kwargs: Any
             keywords for the setters.
         """
-        self.require_image_handler(overwrite=overwrite)
+        self.require_image_handler(overwrite=overwrite, **kwargs)
         self.require_image_sample(overwrite=overwrite, **kwargs)
         self.require_image_roi(overwrite=overwrite, **kwargs)
         if self._is_laminated:
@@ -1345,17 +1355,17 @@ class ProjectBaseClass:
                 (not overwrite_long) and
                 os.path.exists(self._xray_long.save_file)
         ):
-            self._xray_long.load()
+            self._xray_long.load(kwargs.get('tag'))
         else:
             self._xray_long.require_image_rotated()
             self._xray_long.require_image_sample_area(**kwargs)
             self._xray_long.remove_bars(**kwargs)
-            self._xray_long.save()
+            self._xray_long.save(kwargs.get('tag'))
 
         self._xray: XRayROI = self._xray_long.get_roi_from_section(
             self.depth_span
         )
-        self._xray.save()
+        self._xray.save(kwargs.get('tag'))
 
         self._update_files()
 
@@ -1380,11 +1390,11 @@ class ProjectBaseClass:
         name: str = 'XRay.pickle'
         if try_load_long and os.path.exists(os.path.join(path_folder, name)):
             self._xray_long = XRay(**kwargs)
-            self._xray_long.load()
+            self._xray_long.load(kwargs.get('tag'))
             self._xray: XRayROI = self._xray_long.get_roi_from_section(
                 self.depth_span
             )
-            self._xray.save()
+            self._xray.save(kwargs.get('tag'))
             self._update_files()
             return self._xray
 
@@ -1506,13 +1516,13 @@ class ProjectBaseClass:
         self.xray.set_punchholes(
             remove_gelatine=False, side=side_xray, plts=plts, **kwargs
         )
-        self.xray.save()
+        self.xray.save(kwargs.get('tag'))
 
         if (not check_attr(self.image_roi, 'punchholes')) or overwrite_data:
             self.image_roi.set_punchholes(
                 remove_gelatine=True, side=side_data, plts=plts, **kwargs
             )
-            self.image_roi.save()
+            self.image_roi.save(kwargs.get('tag'))
 
         # copy over to object attributes
         self.holes_xray: list[np.ndarray[int], np.ndarray[int]] = self.xray.punchholes
@@ -2021,7 +2031,7 @@ class ProjectBaseClass:
         self._time_series.feature_table_standard_deviations = ft_seeds_std
         self._time_series.feature_table_successes = ft_seeds_success
 
-        self._time_series.save()
+        self._time_series.save(kwargs.get('tag'))
 
         self._update_files()
 
@@ -2030,7 +2040,7 @@ class ProjectBaseClass:
             return self._time_series
         elif check_attr(self, 'TimeSeries_file') and (not overwrite):
             self._time_series = TimeSeries(self.path_d_folder)
-            self._time_series.load()
+            self._time_series.load(kwargs.get('tag'))
         if (not check_attr(self._time_series, 'feature_table')) or overwrite:
             self.set_time_series(**kwargs)
 
@@ -2258,7 +2268,7 @@ class ProjectXRF(ProjectBaseClass):
 
         self._update_files()
 
-    def require_image_handler(self, overwrite=False) -> SampleImageHandlerXRF:
+    def require_image_handler(self, overwrite=False, **_) -> SampleImageHandlerXRF:
         call_set: bool = True
         if (self._image_handler is not None) and (not overwrite):
             return self._image_handler
@@ -2304,7 +2314,7 @@ class ProjectXRF(ProjectBaseClass):
                 measurement_name=self.measurement_name,
                 **kwargs
             )
-            self._data_object.load()
+            self._data_object.load(kwargs.get('tag'))
             call_set = False
             if not check_attr(self._data_object, 'feature_table'):
                 logger.info('loaded object does not have feature table, setting new one')
@@ -2398,9 +2408,9 @@ class ProjectMSI(ProjectBaseClass):
         targets_d_folder = [
             'peaks.sqlite',
             'spectra_object.pickle',
+            'Spectra.pickle',
             'MSI.pickle',
-            'AgeModel.pickle',
-            'Spectra.hdf5'
+            'AgeModel.pickle'
         ]
         targets_folder = [
             'ImageSample.pickle',
@@ -2434,6 +2444,11 @@ class ProjectMSI(ProjectBaseClass):
             k_new = k.split('.')[0] + '_file'
             dict_files[k_new] = v
 
+        if os.path.exists(os.path.join(self.path_d_folder, 'Spectra.pickle')):
+            dict_files['hdf_file'] = 'Spectra.pickle'
+
+
+
         self.__dict__ |= dict_files
 
     def _update_files(self):
@@ -2466,7 +2481,7 @@ class ProjectMSI(ProjectBaseClass):
         )
 
         self._image_handler.set_extent_data(
-            reader=kwargs.get('reader'), imaging_xml=kwargs.get('imaging_xml')
+            reader=kwargs.get('reader'), spot_info=kwargs.get('spot_info')
         )
         self._image_handler.set_photo_ROI(**kwargs)
         self._image_handler.save()
@@ -2483,7 +2498,7 @@ class ProjectMSI(ProjectBaseClass):
                 path_d_folder=self.path_d_folder,
                 path_mis_file=self.path_mis_file
             )
-            self._image_handler.load()
+            self._image_handler.load(kwargs.get('tag'))
             self._image_handler.set_photo()
         if (
                 (not check_attr(self._image_handler, '_extent_spots'))
@@ -2493,12 +2508,14 @@ class ProjectMSI(ProjectBaseClass):
 
         return self._image_handler
 
-    def get_mcf_reader(self) -> ReadBrukerMCF:
-        reader = ReadBrukerMCF(self.path_d_folder)
+    def get_mcf_reader(self, **kwargs) -> ReadBrukerMCF:
+        reader = ReadBrukerMCF(self.path_d_folder, **kwargs)
         reader.create_reader()
         reader.create_indices()
+        reader.create_spots()
         reader.set_meta_data()
-        reader.set_QTOF_window()
+        if 'limits' not in kwargs:
+            reader.set_casi_window()
         return reader
 
     def set_hdf_file(
@@ -2520,13 +2537,13 @@ class ProjectMSI(ProjectBaseClass):
         return reader
 
     def require_hdf_reader(self, overwrite: bool = False) -> hdf5Handler:
-        if (not check_attr(self, 'Spectra_file')) or overwrite:
+        if (not check_attr(self, 'hdf_file')) or overwrite:
             reader: ReadBrukerMCF = self.get_mcf_reader()
             self.set_hdf_file(reader)
         return self.get_hdf_reader()
 
     def get_reader(self, prefer_hdf: bool = True) -> ReadBrukerMCF | hdf5Handler:
-        if check_attr(self, 'Spectra_file') and prefer_hdf:
+        if check_attr(self, 'hdf_file') and prefer_hdf:
             reader = self.get_hdf_reader()
         else:
             reader = self.get_mcf_reader()
@@ -2544,14 +2561,15 @@ class ProjectMSI(ProjectBaseClass):
     ):
         if reader is None:
             reader = self.require_hdf_reader()
-        if not full:
-            logger.info('Setting partially initialized spectra object')
-            return
         # create spectra object
         if spectra is None:
             self._spectra: Spectra = Spectra(reader=reader)
         else:
             self._spectra = spectra
+
+        if not full:
+            logger.info('Setting partially initialized spectra object')
+            return
 
         if not np.any(self._spectra.intensities.astype(bool)):
             logger.info('spectra object does not have a summed intensity')
@@ -2577,14 +2595,14 @@ class ProjectMSI(ProjectBaseClass):
         if plts:
             self._spectra.plot_summed()
 
-        self._spectra.save()
+        self._spectra.save(kwargs.get('tag'))
         self._update_files()
 
     def require_spectra(self, overwrite: bool = False, **kwargs) -> Spectra:
-        call_set: bool = True
         if (self._spectra is not None) and (not overwrite):
             return self._spectra
-        elif (
+        # load from existing file
+        if (
             (
                 check_attr(self, 'spectra_object_file')
                 or check_attr(self, 'Spectra_file')
@@ -2593,19 +2611,25 @@ class ProjectMSI(ProjectBaseClass):
             self._spectra: Spectra = Spectra(
                 path_d_folder=self.path_d_folder, initiate=False
             )
-            self._spectra.load()
-            call_set = False
-            if check_attr(self._spectra, 'feature_table'):
+            self._spectra.load(kwargs.get('tag'))
+
+            # if feature_table or line spectra are set, we are good to return
+            if check_attr(self._spectra, '_feature_table'):
                 logger.info('loaded fully initialized spectra object')
-            elif check_attr(self._spectra, 'line_spectra'):
+                return self._spectra
+            if check_attr(self._spectra, '_line_spectra'):
                 logger.info('loaded fully initialized spectra object')
                 self._spectra.set_feature_table()
-                call_set = True
-        if call_set or overwrite:
-            self.set_spectra(
-                spectra=self._spectra,  # continue from loaded spectra or None
-                **kwargs
-            )
+                return self._spectra
+            # if full is set to False, we can also return
+            logger.info('loaded partially initialized spectra object')
+            if ('full' in kwargs) and (kwargs.get('full') is False):
+                return self._spectra
+
+        self.set_spectra(
+            spectra=self._spectra,  # continue from loaded spectra or None
+            **kwargs
+        )
         return self._spectra
 
     @property
@@ -2615,6 +2639,9 @@ class ProjectMSI(ProjectBaseClass):
     def set_da_export(self, path_file: str, **kwargs):
         self._da_export = DataAnalysisExport(path_file=path_file, **kwargs)
         self._da_export.set_feature_table()
+        self._da_export.save(kwargs.get('tag'))
+
+        self._update_files()
 
     def require_da_export(self, overwrite=False, **kwargs):
         call_set: bool = True
@@ -2628,7 +2655,7 @@ class ProjectMSI(ProjectBaseClass):
             self._da_export: DataAnalysisExport = DataAnalysisExport(
                 path_file=''
             )
-            self._da_export.load()
+            self._da_export.load(kwargs.get('tag'))
             call_set = False
             if check_attr(self._da_export, 'feature_table'):
                 logger.info('loaded fully initialized spectra object')
@@ -2672,7 +2699,7 @@ class ProjectMSI(ProjectBaseClass):
             self._data_object: MSI = MSI(
                 self.path_d_folder, path_mis_file=self.path_mis_file
             )
-            self._data_object.load()
+            self._data_object.load(kwargs.get('tag'))
             call_set = False
             if check_attr(self.data_object, 'feature_table'):
                 call_set = True
@@ -2769,7 +2796,7 @@ class IonImagePlotter:
 
     def _pixel_table_from_xml(self) -> pd.DataFrame:
         """Construct a feature table from the xml file."""
-        imaging_info: ImagingInfoXML = ImagingInfoXML(
+        imaging_info: pd.DataFrame = get_spots(
             path_d_folder=self._project.path_d_folder
         )
         names: np.ndarray[str] = imaging_info.spotName

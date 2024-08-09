@@ -13,6 +13,7 @@ from msi_workflow.imaging.main import Image, ImageSample, ImageROI, ImageClassif
 from msi_workflow.imaging.util.image_plotting import plt_cv2_image
 
 from msi_workflow.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
+from msi_workflow.exporting.legacy.data_analysis_export import DataAnalysisExport
 from msi_workflow.exporting.legacy.parser import extract_mzs as da_export_extract_mzs
 from msi_workflow.exporting.from_sqlite.parser import extract_mzs as sqlite_extract_mzs
 from msi_workflow.exporting.from_mcf.spectrum import Spectra

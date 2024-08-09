@@ -7,6 +7,7 @@ import logging
 from typing import Iterable
 
 from msi_workflow.exporting.from_mcf.helper import get_r_home, ReaderBaseClass, Spots, Spectrum
+from msi_workflow.util.convinience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,11 @@ class ReadBrukerMCF(ReaderBaseClass):
     create an hdf5 file, if you can affort the disk space (See the documentation of hdf5Reader).
     """
 
-    def __init__(self, path_d_folder: str):
+    def __init__(
+            self,
+            path_d_folder: str,
+            limits: tuple[float, float] | None = None
+    ):
         """
         Initializer
 
@@ -74,9 +79,12 @@ class ReadBrukerMCF(ReaderBaseClass):
         """
         self.path_d_folder: str = path_d_folder
 
+        if limits is not None:
+            self.limits: tuple[float, float] = limits
+
     def create_reader(self):
         """Create a new BrukerMCFReader object."""
-        logger.info('creating BrukerMCF reader, this may take a while ...')
+        logger.warning('creating BrukerMCF reader, this may take a while ...')
         self.reader = rtms.newBrukerMCFReader(self.path_d_folder)
         logger.info('done creating reader')
 
@@ -109,20 +117,55 @@ class ReadBrukerMCF(ReaderBaseClass):
             'Value': np.array(metaData[4])
         })
 
-    def set_QTOF_window(self):
-        """Set mass window limits from QTOF values in metadata."""
-        assert hasattr(self, 'metaData'), 'call set_meta_data first'
+    def set_casi_window(self):
+        """Set mass window limits from cassy values in metadata.
+
+        Continuous Accumulation of Selected Ions (CASI)
+        """
+        assert check_attr(self, 'metaData'), 'call set_meta_data first'
+
+        if check_attr(self, 'limits'):
+            logger.warning(f'overwriting previous mass window: {self.limits}')
+
         # find entries
+        # not sure what DC and CID do, but for measurements without valid
+        # cassy window Q1DC and Q1CID are both 'off', whereas Q1DC is 'on' for
+        # measurements where
+        idx_dc: pd.Series = self.metaData.PermanentName == 'Q1DC'
+        idx_cid: pd.Series = self.metaData.PermanentName == 'Q1CID'
         idx_center: pd.Series = self.metaData.PermanentName == 'Q1Mass'
         idx_size: pd.Series = self.metaData.PermanentName == 'Q1Res'
-        assert ((n_entries_center := idx_center.sum()) == 1) and ((n_entries_size := idx_size.sum()) == 1), \
-            (f'found {n_entries_center} entries for Q1Mass and {n_entries_size} for Q1Res in metadata, ' +
-            'are you sure your data was obtained using a QTOF?')
+
+        # check if the number of entries is 1
+        n_entries_size = idx_size.sum()
+        assert (
+                ((n_entries_center := idx_center.sum()) == 1)
+                and (n_entries_size == 1)
+        ), (
+                f'found {n_entries_center} entries for Q1Mass and {n_entries_size} '
+                f'for Q1Res in metadata, ' +
+                'are you sure your data was obtained using a QTOF?'
+        )
+        # check if either dc or cid value is 'on'
+        if (
+                (self.metaData.loc[idx_dc, 'Value'].iat[0] == 'off')
+                and (self.metaData.loc[idx_cid, 'Value'].iat[0] == 'off')
+        ):
+            logger.error(
+                'CID and DC value are set to "off" which probably means that '
+                'no QTOF was used. Consider setting the limits manually.'
+            )
+
         # only keep value (not 1320.0 m/z)
         mass_center: float = float(
             self.metaData.loc[idx_center, 'Value'].iat[0].split()[0])
         mass_window_size: float = float(
             self.metaData.Value[idx_size].iat[0].split()[0])
+        if mass_window_size < 1e-9:
+            raise ValueError(
+                f'found unrealistic mass window parameters, consider specifying'
+                f' the mass window manually'
+            )
         self.limits: tuple[float, float] = (
             mass_center - mass_window_size / 2,
             mass_center + mass_window_size / 2
@@ -181,7 +224,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         spectrum: Spectrum
             The spectrum corresponding to the spot.
         """
-        assert hasattr(self, 'spots'), 'create spots with create_spots first'
+        assert check_attr(self, 'spots'), 'create spots with create_spots first'
         # find corresponding index
         # index in spots may be shifted or have missing values
         # index corresponding to name in the spots table

@@ -1524,10 +1524,14 @@ class ImageROI(Image):
         if remove_gelatine:
             img *= self.image_simplified
 
+        kwargs_ = kwargs.copy()
+        if 'obj_color' in kwargs_:
+            kwargs_.pop('obj_color')
+
         self._punchholes, self._punchhole_size = find_holes(
             img,
             obj_color='light',  # image binary takes object color into account
-            **kwargs
+            **kwargs_
         )
 
     def _user_punchholes(self) -> None:

@@ -1,10 +1,13 @@
 import os
 import re
+import sqlite3
+
 import numpy as np
 import pandas as pd
 
 from typing import Iterable
 from textdistance import damerau_levenshtein as textdistance
+
 
 def find_matches(
         substrings: str | list[str] | None = None, 
@@ -222,6 +225,23 @@ class ImagingInfoXML:
             self.set_feature_table()
         return self._feature_table
 
+
+def get_spots(path_d_folder: str) -> pd.DataFrame:
+    if os.path.exists(os.path.join(path_d_folder, 'ImagingInfo.xml')):
+        ii = ImagingInfoXML(path_d_folder=path_d_folder)
+        df = ii.feature_table
+        return df.loc[:, ['spotName', 'R', 'x', 'y']]
+    elif os.path.exists(file := os.path.join(path_d_folder, 'peaks.sqlite')):
+        conn = sqlite3.connect(file)
+        df = pd.read_sql_query(
+            "SELECT SpotName,RegionNumber,XIndexPos,YIndexPos from Spectra",
+            conn
+        )
+        df.columns = ['spotName', 'R', 'x', 'y']
+        return df
+    raise FileNotFoundError(
+        f'Could not find peaks.sqlite or ImagingInfo.xml in {path_d_folder}'
+    )
 
 if __name__ == '__main__':
     substring = 'S0343c'
