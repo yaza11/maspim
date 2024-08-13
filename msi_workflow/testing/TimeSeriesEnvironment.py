@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 
 
 def plt_PCA(TS, pca, pcs, N_top=3, title_appendix='', **kwargs):
-    index_loadings = TS.get_data_columns()
+    index_loadings = TS._get_data_columns()
     loadings = pd.DataFrame(
         pca.components_.T,
         columns=['PC' + str(i) for i in range(np.shape(pcs)[1])],
@@ -56,7 +56,7 @@ def plt_PCA(TS, pca, pcs, N_top=3, title_appendix='', **kwargs):
 
 def pca_on_time_series(TS):
     # pca on table
-    ft = TS.get_contrasts_table().loc[:, TS.get_data_columns()]
+    ft = TS.get_contrasts_table().loc[:, TS._get_data_columns()]
     assert not np.any(np.isnan(ft)), 'ft contains nans'
 
     # scale
@@ -111,7 +111,7 @@ def combine_windows(section):
         ts = TimeSeries(section, window)
         ts.set_time_series_tables(use_common_mzs=True)
 
-        cols = ts.get_data_columns() + ['seed']
+        cols = ts._get_data_columns() + ['seed']
 
         ts.correct_distortion()
         ts = overwrite_seed(ts)
@@ -290,7 +290,7 @@ if __name__ == '__main__':
     # TS.feature_table_zone_averages['1'] = 127.5 * (1 + np.sign(TS.feature_table_zone_averages.contrast))
     # TS.feature_table_zone_averages['2'] = 127.5 * (1 - np.sign(TS.feature_table_zone_averages.contrast))
     # TS.feature_table_zone_averages['0'] = 127.5
-    # # TS.plt_against_grayscale(['1', '2', '0'], plt_contrasts=True)
-    # TS.plt_against_grayscale(['1'], plt_contrasts=True)
+    # # TS.plot_against_grayscale(['1', '2', '0'], contrasts=True)
+    # TS.plot_against_grayscale(['1'], contrasts=True)
     # s = TS.get_seasonalities(norm_weights=False, exclude_low_success=False)
     # print(s.loc[['1', '2', '0']])

@@ -2246,7 +2246,8 @@ class ProjectXRF(ProjectBaseClass):
             'ImageClassified.pickle',
             'SampleImageHandlerXRF.pickle',
             'AgeModel.pickle',
-            'XRayROI.pickle'
+            'XRayROI.pickle',
+            'TimeSeries.pickle'
         }
 
         dict_files = {}
@@ -2455,10 +2456,10 @@ class ProjectMSI(ProjectBaseClass):
         # try finding savefiles inside d-folder
         targets_d_folder = [
             'peaks.sqlite',
-            'spectra_object.pickle',
             'Spectra.pickle',
             'MSI.pickle',
-            'AgeModel.pickle'
+            'AgeModel.pickle',
+            'TimeSeries.pickle'
         ]
         targets_folder = [
             'ImageSample.pickle',

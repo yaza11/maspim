@@ -1,6 +1,7 @@
 """Functions for converting coordinates."""
 import warnings
 import numpy as np
+import pandas as pd
 
 
 def kartesian_to_polar(v_x, v_y=None) -> tuple:
@@ -57,19 +58,19 @@ def polar_to_kartesian(
 
 
 def rescale_values(
-        a: np.ndarray,
+        a: np.ndarray | pd.DataFrame,
         new_min: float,
         new_max: float,
         old_min: float | None = None,
         old_max: float | None = None,
         axis: int | None = None
-) -> np.ndarray:
+) -> np.ndarray | pd.DataFrame:
     """
     Rescale values to specified range. Ignores nans.
 
     Parameters
     ----------
-    a : np.ndarray
+    a : np.ndarray | pd.DataFrame
         Array to be rescaled.
     new_min: float
         New lowest min value
@@ -84,13 +85,16 @@ def rescale_values(
     axis: int, optional
         Axis along which to rescale. Defaults to all.
     """
-    assert new_max > new_min, 'max has to be bigger than min'
+    assert np.all(new_max >= new_min), 'max has to be bigger than min'
+    if np.any(new_min == new_max, axis=axis):
+        warnings.warn('found same min and max in rescaled values')
+
     if old_max is None:
         old_max = np.nanmax(a, axis=axis)
     if old_min is None:
         old_min = np.nanmin(a, axis=axis)
     if np.any(old_min == old_max, axis=axis):
-        warnings.warn('found same min and max in rescale_values')
+        warnings.warn('found same min and max in  input values')
     return (a - old_min) / (old_max - old_min) * (new_max - new_min) + new_min
 
 

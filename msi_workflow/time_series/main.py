@@ -3,27 +3,32 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
-from typing import Iterable, Self
+from typing import Iterable, Self, Callable, Any
 from sklearn.preprocessing import StandardScaler
 from scipy.signal import detrend
 from scipy.signal.windows import blackman
 from astropy.timeseries import LombScargle
+from tqdm import tqdm
 
 from msi_workflow.data.combine_feature_tables import combine_feature_tables
+from msi_workflow.data.main import DataBaseClass
+from msi_workflow.time_series.distances import sign_corr, sign_weighted_corr
 from msi_workflow.util.convinience import Convinience, check_attr
-from msi_workflow.res.constants import elements, YD_transition, contrasts_scaling
+from msi_workflow.res.constants import elements, YD_transition
 from msi_workflow.imaging.util.coordinate_transformations import rescale_values
 
 
 logger = logging.getLogger('msi_workflow.' + __name__)
 
 
-class TimeSeries(Convinience):
+class TimeSeries(DataBaseClass, Convinience):
     _save_in_d_folder: bool = True
 
     _feature_table: pd.DataFrame | None = None
     _feature_table_successes: pd.DataFrame | None = None
     _feature_table_standard_deviations: pd.DataFrame | None = None
+    _contrasts: pd.DataFrame | None = None
+
     _data_columns: list[str] | None = None
 
     _save_attrs = {
@@ -52,6 +57,24 @@ class TimeSeries(Convinience):
         self._feature_table_successes: pd.DataFrame = pd.DataFrame()
         self._feature_table_standard_deviations: pd.DataFrame = pd.DataFrame()
 
+
+    def _sort_tables(self) -> None:
+        if check_attr(self, '_feature_table'):
+            self._feature_table = self._feature_table\
+                .sort_values(by='depth')\
+                .reset_index(drop=True)
+        if check_attr(self, '_feature_table_standard_deviations'):
+            self._feature_table_standard_deviations = self._feature_table_standard_deviations \
+                .sort_values(by='depth') \
+                .reset_index(drop=True)
+        if check_attr(self, '_feature_table_successes'):
+            self._feature_table_successes = self._feature_table_successes \
+                .sort_values(by='depth') \
+                .reset_index(drop=True)
+
+    def _post_load(self) -> None:
+        self._sort_tables()
+
     def _set_files(self, path_folder: str) -> None:
         if path_folder is None:
             return
@@ -73,11 +96,6 @@ class TimeSeries(Convinience):
     @property
     def age(self) -> pd.Series:
         return self.feature_table.age
-
-    @property
-    def feature_table(self) -> pd.DataFrame:
-        assert check_attr(self, '_feature_table')
-        return self._feature_table
 
     @property
     def successes(self) -> pd.DataFrame:
@@ -102,6 +120,8 @@ class TimeSeries(Convinience):
         self._feature_table_successes = successes
         self._feature_table_standard_deviations = deviations
 
+        self._sort_tables()
+
     def combine_duplicate_seed(self, weighted=False):
         """Combining layers with same seeds, information about quality is lost."""
         if weighted:
@@ -111,7 +131,7 @@ that before using this option'
             )
             seeds = self.feature_table.seed.copy()
             # take weighted average of rows that have the same xROI
-            #   mult every comp in each layer by its n
+            #   mult every comps in each layer by its n
             cols = self.data_columns + [
                 'L', 'x_ROI', 'quality', 'homogeneity', 'continuity',
                 'contrast', 'quality'
@@ -141,18 +161,24 @@ that before using this option'
 
         return wmean, ns
 
-    def get_feature_table_standard_errors(self) -> pd.DataFrame:
+    def get_standard_errors(self) -> pd.DataFrame:
         # standard error: sigma / sqrt(n)
         feature_table_standard_errors = (
-            self.deviations.loc[:, self.data_columns].div(
+            self.deviations.div(
                 np.sqrt(self.successes.loc[:, 'N_total']),
                 axis='rows'
             )
         )
         return feature_table_standard_errors
 
-    def get_data_columns(self) -> list[str]:
-        columns = self.feature_table.columns
+    @property
+    def errors(self) -> pd.DataFrame:
+        if not check_attr(self, '_standard_errors'):
+            self._standard_errors = self.get_standard_errors()
+        return self._standard_errors
+
+    def _get_data_columns(self) -> list[str]:
+        columns = self.columns
         columns_xrf = [col for col in columns if
                        col in list(elements.Abbreviation)]
         columns_msi = [col for col in columns if str(
@@ -163,12 +189,12 @@ that before using this option'
     @property
     def data_columns(self):
         if not check_attr(self, '_data_columns'):
-            self._data_columns = self.get_data_columns()
+            self._data_columns = self._get_data_columns()
         return self._data_columns
 
     def get_weighted(
             self,
-            feature_table: pd.DataFrame,
+            feature_table: pd.DataFrame | None,
             use_L_contrasts: bool,
             **_
     ) -> pd.DataFrame:
@@ -180,10 +206,8 @@ that before using this option'
         feature_table : pd.DataFrame
             The feature table in which to add the weights.
         use_L_contrasts : bool
-            If True, will use contrasts signed by homogeinity, otherwise the
+            If True, will use contrasts signed by homogeneity, otherwise the
             geometric mean of the quality.
-        **kwargs : dict
-            Will be ignored.
 
         Returns
         -------
@@ -191,33 +215,35 @@ that before using this option'
             The feature table weighted by the quality.
 
         """
+        if feature_table is None:
+            feature_table = self.feature_table
+
         # get quality column
         if not use_L_contrasts:
             logger.info('using geometric mean of quality')
-            q = self.feature_table.quality
+            q: pd.Series = (feature_table.quality
+                            if 'quality' in feature_table
+                            else self.feature_table.quality)
             # calc geometric mean
-            q = q.abs().pow(1 / 3)
+            q: pd.Series = q.abs().pow(1 / 3)
         # use contrasts of grayscale
         else:
             logger.info('using signed contrasts for quality')
             # try to take criteria from feature table
-            if ('contrast' in feature_table.columns) and \
-                    ('homogeneity' in feature_table.columns):
-                logger.info('taking contrast, hom from passed ft.')
-                c = feature_table.contrast.copy()
-                h = feature_table.homogeneity.copy()
-            else:
-                logger.info('taking contrast, hom from get-fcts.')
-                c = self.feature_table.contrast
-                h = self.feature_table.homogeneity
-            q = c * np.sign(h) * contrasts_scaling
+            c: pd.Series = (feature_table.contrast
+                            if 'contrast' in feature_table.columns
+                            else self.feature_table.contrast)
+            h: pd.Series = (feature_table.homogeneity
+                            if 'homogeneity' in feature_table.columns
+                            else self.feature_table.homogeneity)
+            q: pd.Series = c * np.sign(h)
 
         # set qs below 0 to 0
-        mask_less_than_zero = q < 0
+        mask_less_than_zero: pd.Series = q < 0
         q[mask_less_than_zero] = 0
 
-        # weigh data by geometric mean of quality
-        data_weighted = feature_table.multiply(q, axis=0)
+        # weigh data by quality
+        data_weighted: pd.DataFrame = feature_table.multiply(q, axis=0)
         # add weights columns
         data_weighted['weights'] = q
         return data_weighted
@@ -225,7 +251,8 @@ that before using this option'
     def get_contrasts_table(
             self,
             feature_table: pd.DataFrame | None = None,
-            subtract_mean=False
+            subtract_mean: bool = False,
+            columns: Iterable | None = None
     ) -> pd.DataFrame:
         """
         Return the contrasts for each layer in the averages table.
@@ -236,36 +263,49 @@ that before using this option'
             The feature table for which to calculate the conrasts.
             The default is None.
             This will default to get_feature_table_zone_averages
+        subtract_mean: bool, optional
+            Will subtract the mean of each time series before calculating the
+            contrasts. This will default to False.
+        columns: Iterable, optional
+            The columns of which to take the contrasts. Defaults to all.
 
         Returns
         -------
         ft_contrast : pd.DataFrame
             The contrasts for each component and layer.
             Reflecting boundary conditions will be applied.
-            x, x_ROI, seed will be copied over from get_feature_table_zone_averages,
-            contrast will from get_feature_table_zone_averages will be renamed to L
+            x, x_ROI, seed will be copied over from
+            get_feature_table_zone_averages, contrast will from
+            get_feature_table_zone_averages will be renamed to L
         """
-        if feature_table is None:
-            feature_table = self.feature_table
+        if columns is not None:
+            pass
+        elif feature_table is None:
+            columns: pd.Index = self.columns
+        else:
+            columns = feature_table.columns
 
-        columns = feature_table.columns
+        if feature_table is None:
+            feature_table: pd.DataFrame = self.feature_table.loc[:, columns]
 
         # contrast calculation
-        brightnesses = feature_table.to_numpy()
+        brightnesses: np.ndarray = feature_table.to_numpy()
         if subtract_mean:
             brightnesses = np.subtract(brightnesses, brightnesses.mean(axis=0))
-        # add boundary
-        brightnesses_bound = np.pad(brightnesses, ((1, 1), (0, 0)), mode='reflect')
+        # add reflecting boundary condition
+        brightnesses_bound = np.pad(brightnesses,
+                                    ((1, 1), (0, 0)),
+                                    mode='reflect')
         # define slices
         slice_center = np.index_exp[1:-1, :]
         slice_up = np.index_exp[:-2, :]
         slice_down = np.index_exp[2:, :]
         # get neighbour, center values
-        neighbour_up = brightnesses_bound[slice_up]
-        neighbour_down = brightnesses_bound[slice_down]
-        neighbours = (neighbour_up + neighbour_down) / 2
-        center = brightnesses_bound[slice_center]
-        # calc contrast (prevent division by zero)
+        neighbour_up: np.ndarray = brightnesses_bound[slice_up]
+        neighbour_down: np.ndarray = brightnesses_bound[slice_down]
+        neighbours: np.ndarray = (neighbour_up + neighbour_down) / 2
+        center: np.ndarray = brightnesses_bound[slice_center]
+        # calc contrast (prevent division by zero), invalid values will be 0
         contrast = np.divide(
             center - neighbours,
             center + neighbours,
@@ -279,18 +319,115 @@ that before using this option'
             columns=columns
         )
         # copy depth over from av intensity calculation
-        ft_contrast['x'] = self.feature_table.x.copy()
-        ft_contrast['x_ROI'] = self.feature_table.x_ROI.copy()
-        ft_contrast['seed'] = self.feature_table.seed.copy()
-        ft_contrast['L'] = self.feature_table.contrast.copy()
+        if 'x' in columns:
+            ft_contrast['x'] = self.feature_table.x.copy()
+        if 'x_ROI' in columns:
+            ft_contrast['x_ROI'] = self.feature_table.x_ROI.copy()
+        if 'seed' in columns:
+            ft_contrast['seed'] = self.feature_table.seed.copy()
+        if 'L' in columns:
+            ft_contrast['L'] = self.feature_table.contrast.copy()
 
         return ft_contrast
+
+    def _get_contrast_errors(self) -> pd.DataFrame:
+        """
+
+        Notes
+        -----
+        Contrasts for i-th layer c[i] is calculated as follows:
+                    l[i] - (l[i+1] + l[i-1]) / 2
+            c[i] = -------------------------------
+                    l[i] + (l[i+1] + l[i-1]) / 2
+
+                    2 * l[i] - (l[i+1] + l[i-1])
+            c[i] = -------------------------------
+                    2 * l[i] + (l[i+1] + l[i-1])
+        where l[i] is the intensity at the i-th layer. By the error propagation
+        formula we get
+                              4 * (l[i+1] + l[i-1])
+            part l[i] =  ------------------------------
+                          (2 * l[i] + l[i+1] + l[i-1]) ** 2
+
+                                           4 * l[i]
+            part l[i + 1] =  -----------------------------------
+                              (2 * l[i] + l[i+1] + l[i-1]) ** 2
+
+                                           4 * l[i]
+            part l[i - 1] =  -----------------------------------
+                              (2 * l[i] + l[i+1] + l[i-1]) ** 2
+
+        https://www.wolframalpha.com/input?i=d%2Fdx+%28x+-+%28y+%2B+z%29+%2F+2%29+%2F+%28x+%2B+%28y+%2B+z%29+%2F+2%29
+        https://www.wolframalpha.com/input?i=d%2Fdy+%28x+-+%28y+%2B+z%29+%2F+2%29+%2F+%28x+%2B+%28y+%2B+z%29+%2F+2%29
+        https://www.wolframalpha.com/input?i=d%2Fdz+%28x+-+%28y+%2B+z%29+%2F+2%29+%2F+%28x+%2B+%28y+%2B+z%29+%2F+2%29
+
+        So overall
+
+            Delta c[i] =   part l[i] * Delta l[i]
+                         + part l[i+1] * Delta l[i+1]
+                         + part l[i-1] * Delta l[i-1]
+        """
+        columns = list(set(self.columns) & set(self.errors.columns))
+        feature_table: pd.DataFrame = self.feature_table.loc[:, columns]
+
+        # contrast calculation
+        brightnesses: np.ndarray = feature_table.to_numpy()
+        # add reflecting boundary condition
+        brightnesses_bound: np.ndarray = np.pad(brightnesses,
+                                                ((1, 1), (0, 0)),
+                                                mode='reflect')
+        # define slices
+        slice_center = np.index_exp[1:-1, :]
+        slice_up = np.index_exp[:-2, :]
+        slice_down = np.index_exp[2:, :]
+        # get neighbour, center values
+        neighbour_up: np.ndarray = brightnesses_bound[slice_up]
+        neighbour_down: np.ndarray = brightnesses_bound[slice_down]
+        center: np.ndarray = brightnesses_bound[slice_center]
+
+        v: np.ndarray = 2 * center + neighbour_down + neighbour_up
+        part_center: np.ndarray = np.divide(
+            4 * (neighbour_up + neighbour_down),
+            v ** 2,
+            out=np.zeros_like(center),
+            where=v != 0
+        )
+        part_up: np.ndarray = np.divide(
+            4 * center,
+            v ** 2,
+            out=np.zeros_like(center),
+            where=v != 0
+        )
+        part_down: np.ndarray = part_up
+
+        errors: np.ndarray = self.errors.loc[:, columns].to_numpy()
+        errors: np.ndarray = np.pad(errors,
+                                    ((1, 1), (0, 0)),
+                                    mode='reflect')
+
+        errors_center: np.ndarray = errors[slice_center]
+        errors_up: np.ndarray = errors[slice_up]
+        errors_down: np.ndarray = errors[slice_down]
+
+        errors: np.ndarray = (part_center * errors_center
+                              + part_down * errors_down
+                              + part_up * errors_up)
+
+        errors_df = pd.DataFrame(data=errors, columns=columns)
+
+        return errors_df
+
+    @property
+    def contrasts(self) -> pd.DataFrame:
+        if not check_attr(self, '_contrasts'):
+            self._contrasts = self.get_contrasts_table()
+        return self._contrasts
 
     def get_envelope(self, comp: str) -> tuple[np.ndarray, np.ndarray]:
         """
         Return envelopes in the contrast signal for a given compound.
 
-        This function finds local extrma and linearly interpolates values for
+        This function finds local extrema and linearly interpolates values for
         every index.
 
         Parameters
@@ -308,14 +445,18 @@ that before using this option'
         """
         # https://stackoverflow.com/questions/34235530/how-to-get-high-and-low-envelope-of-a-signal
         comp = self.get_closest_mz(comp)
-        v = self.get_contrasts_table().loc[:, comp]
+        v = self.contrasts.loc[:, comp]
         idxs_local_mins = (np.diff(np.sign(np.diff(v))) > 0).nonzero()[0] + 1
         idxs_local_maxs = (np.diff(np.sign(np.diff(v))) < 0).nonzero()[0] + 1
 
         # interpolate to all indices
-        idxs = np.arange(len(v), dtype=int)
-        envelope_min = np.interp(idxs, idxs_local_mins, v[idxs_local_mins])
-        envelope_max = np.interp(idxs, idxs_local_maxs, v[idxs_local_maxs])
+        idxs: np.ndarray[int] = np.arange(len(v), dtype=int)
+        envelope_min: np.ndarray = np.interp(idxs,
+                                             idxs_local_mins,
+                                             v[idxs_local_mins])
+        envelope_max: np.ndarray = np.interp(idxs,
+                                             idxs_local_maxs,
+                                             v[idxs_local_maxs])
         return envelope_min, envelope_max
 
     def get_seasonality(self, comp, window_size, dt=.5, plts=False):
@@ -374,27 +515,73 @@ that before using this option'
 
     def get_seasonalities(
             self,
-            ft=None,
-            cols=None,
-            weighted=True,
-            exclude_low_success=True,
-            mult_N=True,
-            norm_weights=False,
-            subtract_mean=False
-    ):
-        if (cols is None) and (ft is None):
-            cols = self.data_columns
-        elif cols is None:
-            cols = ft.columns
-        if ft is None:
-            ft = self.get_contrasts_table(subtract_mean=subtract_mean).loc[:, cols]
+            ft: pd.DataFrame | None = None,
+            cols: Iterable | None = None,
+            weighted: bool = True,
+            exclude_low_success: bool = True,
+            mult_n: bool = True,
+            norm_weights: bool = False,
+            **kwargs
+    ) -> pd.Series:
+        """
+        Method for calculating seasonalities of each compound based on
+        contrasts and layer qualities.
 
-        # multiply contrasts of comp with sign seed (comp with high summer
-        # seasonality should only have positive signs, winter comp only negative after multiplication)
+        Parameters
+        ----------
+        ft: pd.DataFrame, optional
+            Feature table of contrasts. Will call get_contrast_table with the
+            provided kwargs.
+        cols: Iterable, optional
+            Columns for which to calculate the seasonalities. If not provided,
+            will use the data_colunms
+        weighted: bool, optional
+            If True, will weigh the time series by qualities. Will use kwargs,
+            if provided.
+        exclude_low_success: bool, optional
+            Fill layers which are below the required success amount to nan.
+            The default is True.
+        mult_n: bool, optional
+            If exclude_low_success is set to True, this option becomes available.
+            If this is set to True (which is the default), the weighted table
+            will be multiplied with the ratio of successful pixels within th
+            layer.
+        norm_weights: bool, optional
+            If this is set to True, the sum values will be bound between -1 and
+            1. If False (default), the median score for the seasonality will
+            be returned.
+        kwargs: Any
+            Additional keyword arguments for methods mentioned above.
+
+        Returns
+        -------
+        seasonalities: pd.Series
+            The seasonalities for each compound specified by cols.
+        """
+        if cols is not None:
+            pass
+        elif ft is not None:
+            cols = ft.columns
+        else:
+            cols = self.data_columns
+
+        if ft is None:
+            ft = self.get_contrasts_table(
+                subtract_mean=kwargs.get('subtract_mean', False)
+            ).loc[:, cols]
+        # make sure we don't modify the input ft
+        ft: pd.DataFrame = ft.copy()
+
+        # multiply contrasts of comps with sign seed (comps with high summer
+        # seasonality should only have positive signs, winter comps only
+        # negative after multiplication)
         ft = ft.multiply(np.sign(self.feature_table.seed), axis=0)
         # weigh contrasts by quality
         if weighted:
-            ft = self.get_weighted(ft, use_L_contrasts=True)
+            ft = self.get_weighted(
+                ft,
+                use_L_contrasts=kwargs.get('use_L_contrasts', True)
+            )
             weights = ft.weights
             ft = ft.loc[:, cols]
             if norm_weights:
@@ -402,22 +589,35 @@ that before using this option'
                 ft /= scaling
 
         if exclude_low_success:
-            ft_succ = self.feature_table.loc[:, cols].copy()
-            ft[ft_succ < self.n_successes_required] = np.nan
-
-        # multiply with ratio of successful layers
-        if exclude_low_success and mult_N:
-            r_succs = (ft_succ > self.n_successes_required).sum(axis=0) / ft_succ.shape[0]
-            ft = ft.multiply(r_succs, axis=1)
+            ft_succ = self.successes.loc[:, cols].copy()
+            if mult_n:
+                # multiply with ratio of successful layers
+                r_succs = (
+                        (ft_succ > self.n_successes_required).sum(axis=0)
+                        / ft_succ.shape[0]
+                )
+                ft = ft.multiply(r_succs, axis=1)
+            else:
+                ft[ft_succ < self.n_successes_required] = np.nan
 
         # take median
         if norm_weights:
-            seasonalities = ft.sum(axis=0)
+            seasonalities: pd.Series = ft.sum(axis=0)
         else:
-            seasonalities = ft.median(axis=0)
+            seasonalities: pd.Series = ft.median(axis=0)
         return seasonalities
 
-    def scale_data(self, norm_mode, data, y_bounds=None):
+    def scale_data(
+            self,
+            norm_mode: str,
+            data: np.ndarray | pd.DataFrame,
+            errors: np.ndarray | pd.DataFrame | None = None,
+            y_bounds: tuple[int | float, int | float] | None = None
+    ):
+        modes = ['normal_distribution', 'upper_lower', 'contrast', 'none']
+        assert norm_mode in modes, \
+            f"choose one of {modes}, not {norm_mode=}"
+
         # std = 1, mean = 0
         if norm_mode.lower() == 'normal_distribution':
             if y_bounds is None:
@@ -440,392 +640,154 @@ that before using this option'
                 y_bounds = (data.min().min(), data.max().max())
             data_scaled = data
         else:
-            raise KeyError(f"choose one of 'normal_distribution', \
-'upper_lower', 'none', 'contrast' for norm_mode, not {norm_mode=}")
+            raise KeyError('internal error')
+
+        if errors is not None:
+            pre_scale_mins: np.ndarray = np.array(data.min(axis=0))
+            pre_scale_maxs: np.ndarray = np.array(data.max(axis=0))
+            old_mins = (pre_scale_mins[None, :]
+                        * np.ones(data.shape[0])[:, None])
+            old_maxs = (pre_scale_maxs[None, :]
+                        * np.ones(data.shape[0])[:, None])
+
+            post_scale_mins: np.ndarray = np.array(data_scaled.min(axis=0))
+            post_scale_maxs: np.ndarray = np.array(data_scaled.max(axis=0))
+            new_mins = (post_scale_mins[None, :]
+                        * np.ones(data.shape[0])[:, None])
+            new_maxs = (post_scale_maxs[None, :]
+                        * np.ones(data.shape[0])[:, None])
+
+            errors_scaled = rescale_values(errors,
+                                           new_mins,
+                                           new_maxs,
+                                           old_mins,
+                                           old_maxs)
+        else:
+            errors_scaled = None
 
         # make sure comps_scaled is dataframe (e.g. StandardScalar does not return dataframe)
         if not isinstance(data_scaled, pd.DataFrame):
             data_scaled = pd.DataFrame(
                 data=data_scaled, columns=data.columns, index=data.index
             )
-        return data_scaled, y_bounds
-
-    def plot_comp(
-            self,
-            comp: float | str | Iterable[float | str],
-            color_seasons: bool = False,
-            exclude_layers_low_successes: bool = False,
-            title: str | None = None,
-            norm_mode: str = 'normal_distribution',
-            y_bounds: tuple[float, float] = None,
-            plt_contrasts: bool = False,
-            **_
-    ) -> None:
-        """Plot a specific compound or list of compounds"""
-        t: pd.Series = self.age
-        # put comp in list if it is only one
-        if isinstance(comp, float | str):
-            comp = [comp]
-        assert type(comp) is list, 'pass comps as list type'
-
-        # find closest mz for comps in feature table
-        comp: list = [
-            self.get_closest_mz(c)
-            if (c not in self.feature_table.columns)
-            else c
-            for c in comp
-        ]
-
-        # get data for relevant columns
-        data = self.feature_table.loc[:, comp].copy()
-
-        # contrasts will be returned from feature_table_zone_averages as it is already in there
-        if plt_contrasts:
-            logger.info(f'getting contrasts for {data.columns}')
-            data = self.get_contrasts_table(feature_table=data)
-
-        data_scaled, y_bounds = self.scale_data(
-            norm_mode=norm_mode, data=data, y_bounds=y_bounds)
-
-        plt.figure(figsize=(10, 2))
-
-        # mask to keep track of which layers have a compound with enough successful spectra
-        mask_any = np.zeros_like(t, dtype=bool)
-        for idx, comp in enumerate(comp):
-            if exclude_layers_low_successes and (comp in self.successes.columns):
-                mask_enough_successes = self.successes \
-                                            .loc[:, comp] >= self.n_successes_required
-            else:
-                mask_enough_successes = np.ones_like(t, dtype=bool)
-            v = data.loc[mask_enough_successes, comp]
-
-            plt.plot(
-                t[mask_enough_successes],
-                data_scaled.loc[mask_enough_successes, comp],
-                label=fr'{comp}',
-                color=f'C{idx + 2}'
-            )
-            # add successful layers to mask
-            mask_any |= mask_enough_successes
-
-        # season_to_color = {-1: 'darkkhaki', 1: 'lightgoldenrodyellow'}
-        season_to_color = {-1: 'blue', 1: 'red'}
-        if color_seasons:
-            shades = self.feature_table.quality.to_numpy()
-            shades[(shades < 0) | np.isnan(shades)] = 0
-            shades = shades ** (1 / 3)
-            shades = rescale_values(shades, new_min=0, new_max=1)
-            seeds = (np.sign(self.feature_table.seed) * t).to_numpy()[mask_any]
-            seasons = np.sign(seeds)[:-1]
-            bounds = np.abs(seeds)[:-1] + np.diff(np.abs(seeds)) / 2
-            bounds = np.insert(bounds, [0, -1], [t.min(), t.max()])
-            ax = plt.gca()
-
-            for idx in range(seasons.shape[0]):
-                c_index = seasons[idx]
-                # skip nan vals
-                if c_index not in season_to_color:
-                    continue
-
-                ax.axvspan(
-                    bounds[idx],
-                    bounds[idx + 1],
-                    facecolor=season_to_color[c_index],
-                    alpha=shades[idx],
-                    edgecolor='none',
-                    zorder=-1
-                )
-
-        # add vertical line to mark the transition
-        if (t.min() < YD_transition) and (YD_transition < t.max()):
-            logger.info('Pl-H transition in slice!')
-            plt.vlines(YD_transition, y_bounds[0], y_bounds[1], linestyles='solid', alpha=.75, label='Pl-H boundary',
-                       color='black', linewidth=2)
-
-        plt.xlim((t.min(), t.max()))
-        plt.ylim(y_bounds)
-        plt.xlabel('age (yr B2K)')
-        plt.ylabel('scaled intensity')
-        if title is None:
-            title = f'excluded layers with less than {self.n_successes_required}: {exclude_layers_low_successes}, scaled mode: {norm_mode}'
-            if plt_contrasts:
-                title += ', contrasts'
-        plt.title(title)
-        plt.grid(True)
-        plt.legend()
-
-        plt.tight_layout()
-        plt.show()
-
-    def plt_against_grayscale(
-            self,
-            comps: float | str | Iterable[float | str],
-            color_seasons: bool = False,
-            exclude_layers_low_successes: bool = False,
-            title: str | None = None,
-            norm_mode: str = 'normal_distribution',
-            y_bounds: tuple[float, float] = None,  # plotting and scaling
-            plt_contrasts: bool = False,
-            annotate_correlations=True,
-            hold=False,
-            **_
-    ) -> None:
-        """Plot a specific compound or list of compounds against grayscale."""
-        t: pd.Series = self.age
-        # put comp in list if it is only one
-        if isinstance(comps, float | str):
-            comps = [comps]
-        assert type(comps) is list, 'pass comps as list type'
-
-        # find closest mz for comps in feature table
-        comps: list = [self.get_closest_mz(comp)
-                       if (comp not in self.feature_table.columns)
-                       else comp
-                       for comp in comps]
-
-        # make sure L is in comps
-        if 'L' not in comps:
-            comps.append('L')
-
-        # get data for relevant columns
-        data = self.feature_table.loc[:, comps].copy()
-
-        # contrasts will be returned from feature_table_zone_averages as it is already in there
-        if plt_contrasts:
-            logger.info(f'getting contrasts for {data.columns}')
-            data = self.get_contrasts_table(feature_table=data)
-
-        data_scaled, y_bounds = self.scale_data(
-            norm_mode=norm_mode, data=data, y_bounds=y_bounds)
-
-        # split off L
-        L = data_scaled.L
-        data_scaled = data_scaled.drop(columns='L')
-        comps.remove('L')
-
-        plt.figure(figsize=(10, 2))
-
-        # weights to use for the weighted sign correlation calculation
-        if plt_contrasts and annotate_correlations:
-            w = contrasts_scaling * \
-                self.feature_table.contrast * \
-                np.sign(self.feature_table.homogeneity)
-            w[w < 0] = 0
-
-        seas = self.get_seasonalities(cols=comps)
-
-        # mask to keep track of which layers have a compound with enough successful spectra
-        mask_any = np.zeros_like(t, dtype=bool)
-        for idx, comp in enumerate(comps):
-            if exclude_layers_low_successes and (comp in self.successes.columns):
-                mask_enough_successes = self.successes \
-                                            .loc[:, comp] >= self.n_successes_required
-            else:
-                mask_enough_successes = np.ones_like(t, dtype=bool)
-            v = data.loc[mask_enough_successes, comp]
-            if plt_contrasts and annotate_correlations:
-                # get corr with L
-                rho = data.L.loc[mask_enough_successes].corr(v, method='pearson')
-                # get corr of signs
-                s = self.sign_corr(
-                    data.L.loc[mask_enough_successes], v)
-
-                ws = self.sign_weighted_corr(
-                    data.L.loc[mask_enough_successes],
-                    v,
-                    w[mask_enough_successes]
-                )
-                sea = seas[comp]
-                label = fr'{comp} ($\rho_L$={rho:.2f}, $f_L=${s:.2f}, $w_L=${ws:.2f}, $seas=${sea:.3f})'
-            else:
-                label = fr'{comp}'
-
-            plt.plot(
-                t[mask_enough_successes],
-                data_scaled.loc[mask_enough_successes, comp],
-                label=label,
-                color=f'C{idx + 2}'
-            )
-            # add successful layers to mask
-            mask_any |= mask_enough_successes
-
-        if plt_contrasts:
-            s = self.sign_corr(
-                self.feature_table.contrast[mask_any],
-                self.feature_table.seed[mask_any]
-            )
-
-            ws = self.sign_weighted_corr(
-                self.feature_table.contrast[mask_any],
-                self.feature_table.seed[mask_any],
-                w[mask_any]
-            )
-            label = fr'L ($f_s=${s:.2f}, $w_s=${ws:.2f})'
-        else:
-            label = 'L'
-
-        plt.plot(
-            t[mask_any],
-            L[mask_any],
-            label=label,
-            color='k',
-            alpha=.5
-        )
-
-        # season_to_color = {-1: 'darkkhaki', 1: 'lightgoldenrodyellow'}
-        season_to_color = {-1: 'blue', 1: 'red'}
-        if color_seasons:
-            shades = self.feature_table.quality.to_numpy()
-            shades[shades < 0] = 0
-            shades = shades ** (1 / 3)
-            shades = rescale_values(shades, new_min=0, new_max=1)
-            seeds = (np.sign(self.feature_table.seed) * t).to_numpy()[mask_any]
-            seasons = np.sign(seeds)[:-1]
-            bounds = np.abs(seeds)[:-1] + np.diff(np.abs(seeds)) / 2
-            bounds = np.insert(bounds, [0, -1], [t.min(), t.max()])
-            ax = plt.gca()
-
-            for idx in range(seasons.shape[0]):
-                ax.axvspan(bounds[idx], bounds[idx + 1], facecolor=season_to_color[seasons[idx]], alpha=shades[idx],
-                           edgecolor='none', zorder=-1)
-
-        # add vertical line to mark the transition
-        if (t.min() < YD_transition) and (YD_transition < t.max()):
-            logger.info('Pl-H transition in slice!')
-            plt.vlines(YD_transition, y_bounds[0], y_bounds[1], linestyles='solid', alpha=.75, label='Pl-H boundary',
-                       color='black', linewidth=2)
-
-        plt.xlim((t.min(), t.max()))
-        plt.ylim(y_bounds)
-        plt.xlabel('age (yr B2K)')
-        plt.ylabel('scaled intensity')
-        if title is None:
-            title = f'excluded layers with less than {self.n_successes_required}: {exclude_layers_low_successes}, scaled mode: {norm_mode}'
-            if plt_contrasts:
-                title += ', contrasts'
-        plt.title(title)
-        plt.grid(True)
-        plt.legend()
-
-        plt.tight_layout()
-        if not hold:
-            plt.show()
-
-    def plt_top(self, series_scores: pd.Series, N_top=5, title='', **kwargs):
-        # sorted lowest to highest
-        series_scores = series_scores.sort_values()
-        self.plt_against_grayscale(list(series_scores.index[:N_top]), title=f'Top {N_top} dark' + title, **kwargs)
-        self.plt_against_grayscale(list(series_scores.index[-N_top:][::-1]), title=f'Top {N_top} light' + title,
-                                   **kwargs)
-
-    def sign_corr(self, a: Iterable, b: Iterable) -> float:
-        """
-        Return the fraction of like signs over overall signs.
-
-        The value is normed to be between -1 and 1 where 1 is returned, if all
-        signs match and -1 if all signs oppose. Nans will be ignored.
-        a and b must have the same length.
-
-        Parameters
-        ----------
-        a : Iterable
-            DESCRIPTION.
-        b : Iterable
-            DESCRIPTION.
-
-        Returns
-        -------
-        float
-            number of same signs over number of entries.
-
-        """
-        assert len(a) == len(b), 'a and b must have same length'
-        r = np.nanmean(np.sign(a) == np.sign(b)) * 2 - 1
-        return r
-
-    def sign_weighted_corr(self, a: np.ndarray, b: np.ndarray, w: np.ndarray) -> float:
-        """
-        Return the fraction of like signs over overall signs.
-
-        The value is normed to be between -1 and 1 where 1 is returned, if all
-        signs match and -1 if all signs oppose. Nans will be ignored.
-        a and b must have the same length.
-
-        Parameters
-        ----------
-        a : Iterable
-            DESCRIPTION.
-        b : Iterable
-            DESCRIPTION.
-        w : Iterable
-            The weights for each dimension
-
-        Returns
-        -------
-        float
-            number of same signs over number of entries weighted.
-
-        """
-        assert len(a) == len(b), 'a and b must have same length'
-        assert len(a) == len(w), 'weights must have same length as a and b'
-        assert np.min(w) >= 0, 'weights should be bigger than 0'
-
-        r = np.sum((np.sign(a) == np.sign(b)) * w) / len(w) * 2 - 1
-        return r
+        return data_scaled, y_bounds, errors_scaled
 
     def get_sign_weighted_table(
-            self, feature_table: pd.DataFrame | None = None, use_L_contrasts=True, **kwargs
+            self,
+            feature_table: pd.DataFrame | None = None,
+            use_L_contrasts=True,
+            **kwargs
     ) -> pd.DataFrame:
         """Return table of weighted sign correlations."""
         if feature_table is None:
             feature_table = self.feature_table
 
         # get the weights
-        w = self.get_weighted(feature_table, use_L_contrasts=use_L_contrasts, **kwargs).weights
+        w = self.get_weighted(
+            feature_table,
+            use_L_contrasts=use_L_contrasts,
+            **kwargs
+        ).weights
         N_w = len(w)
 
         def swc(a, b):
-            """Calculat weighted sign correlation of a and b."""
+            """Calculate weighted sign correlation of a and b."""
             return np.sum((np.sign(a) == np.sign(b)) * w) / N_w * 2 - 1
 
         return feature_table.corr(method=swc)
 
-    def get_sign_table(
+    def get_sign_corr_table(
             self, feature_table: pd.DataFrame | None = None
     ) -> pd.DataFrame:
         """Return table of sign correlations."""
-        if feature_table is None:
-            feature_table = self.feature_table
-
-        def sc(a, b):
+        def sc(a: np.ndarray, b: np.ndarray) -> float:
             """Calculate sign correlation of a and b."""
             return np.mean(np.sign(a) == np.sign(b)) * 2 - 1
+
+        if feature_table is None:
+            feature_table = self.feature_table
 
         return feature_table.corr(method=sc)
 
     def get_corr_with_grayscale(
-            self, method='pearson', comps=None, contrast=False, weighted=False
+            self,
+            method: str | Callable = 'pearson',
+            feature_table: pd.DataFrame | None = None,
+            cols: Iterable | None = None,
+            contrast: bool = False,
+            weighted: bool = False,
+            **kwargs
     ) -> pd.Series:
-        raise NotImplementedError('something is wrong with if else here')
-        if weighted:
-            ft = self.sget_data_quality_weighted()
-        else:
-            ft = self.feature_table
-        if contrast:
-            if weighted:
-                ft = self.get_contrasts_table(feature_table=ft)
-            else:
-                ft = self.get_contrasts_table()
-        else:
-            ft = self.feature_table
-        L = ft.L
+        """
+        Calculate the correlation with the grayscale values for each compound.
 
-        if comps is None:
-            comps = self.data_columns
-        corr_with_L = ft.loc[:, comps].corrwith(L, method=method)
+        Parameters
+        ----------
+        method: str | Callable, optional
+            Correlation method passed on to the pandas corrwith method. Default
+            is "pearson"
+        feature_table: pd.DataFrame, optional
+            Feature table for which to calcualte the correlations. If not
+            provided, will use the instances feature_table attribute. Please
+            note that if you want to calculate the correlation of contrasts,
+            you can either provide the feature table of contrasts and set
+            contrast to False or provide the original values and set contrast
+            to True
+        cols: Iterable, optional
+            Columns for which to calculate the correlations. But make sure that
+            "L" is included, it will be attempted to take the L values from the
+            class attribute, but this is less save.
+        contrast: bool, optional
+            Wether to calculate contrasts from the feature table. The default
+            is False.
+        weighted: bool, optional
+            Wether to weigh the feature table (applied after contrasts). The
+            default is False
+        kwargs: Any
+            Additional keywords for get_weights
+
+        Returns
+        -------
+        corr_with_L: pd.Series
+            The correlations with the L values for each compound.
+        """
+        if cols is None:
+            cols: set = set(self.data_columns) | set('L')
+        if feature_table is None:
+            feature_table: pd.DataFrame = self.feature_table
+        feature_table: pd.DataFrame = feature_table.copy().loc[:, cols]
+
+        if 'L' not in feature_table.columns:
+            logger.warning('"L" not in feature table, attempting to fetch it'
+                           'from the class attribute')
+            assert feature_table.shape[0] == self.feature_table.shape[0], \
+                ('Trying to add L from feature table failed because input feature'
+                 'table does not have the same length. Please make sure the '
+                 'input feature table has the grayscale values')
+            feature_table.loc[:, 'L'] = self.feature_table.L
+
+        if contrast:
+            feature_table: pd.DataFrame = self.get_contrasts_table(
+                feature_table=feature_table
+            )
+
+        if weighted:
+            feature_table = self.get_weighted(
+                feature_table=feature_table,
+                use_L_contrasts=kwargs.get('use_L_contrasts', True)
+            )
+
+        L: pd.Series = feature_table.L
+
+        corr_with_L = feature_table.loc[:, cols].corrwith(L, method=method)
+
         return corr_with_L
 
-    def power(self, targets: list[str] | None = None, plts: bool = False) -> pd.DataFrame:
+    def power(
+            self,
+            targets: list[str] | None = None,
+            plts: bool = False
+    ) -> pd.DataFrame:
         if targets is None:
             targets = self.data_columns
         t: pd.Series[float] = self.feature_table.age
@@ -836,7 +798,8 @@ that before using this option'
         weights: np.ndarray[float] = blackman(N_points).reshape((N_points,))
         ys = (ys.T * weights.T).T
 
-        res: list[tuple] = [LombScargle(t, ys[:, idx]).autopower() for idx in range(len(targets))]
+        res: list[tuple] = [LombScargle(t, ys[:, idx]).autopower()
+                            for idx in range(len(targets))]
         frequencies: list[np.ndarray] = [r[0] for r in res]
         powers: list[np.ndarray] = [r[1] for r in res]
         # f_w, spec_w = LombScargle(t, y_w).autopower()
@@ -864,7 +827,11 @@ that before using this option'
             axs[1].legend()
             axs[1].set_xlabel('Frequency in 1 / yrs')
             axs[1].set_ylabel('Power')
-            axs[1].vlines(1, ymin=0, ymax=np.max(np.array(powers)), color='black', linestyle='--')
+            axs[1].vlines(1,
+                          ymin=0,
+                          ymax=np.max(np.array(powers)),
+                          color='black',
+                          linestyle='--')
             plt.show()
 
         assert all(np.allclose(frequencies[0], f) for f in frequencies)
@@ -874,10 +841,6 @@ that before using this option'
         df['f'] = frequencies[0]
 
         return df
-
-    def correct_distortion(self):
-        ...
-        raise NotImplemented('Depricated')
 
     def split_at_depth(self, depth: float | int) -> tuple[Self, Self]:
         """
@@ -914,14 +877,18 @@ that before using this option'
                 TSl.__setattr__(attr, ftl)
         return TSu, TSl
 
-    def get_stats(self):
+    def get_stats(self) -> pd.DataFrame:
         cols = self.data_columns
         features = [
             'seasonality',
             'av', 'v_I_std', 'h_I_std',
             'contrast_med', 'contrast_std'
         ]
-        df = pd.DataFrame(data=np.empty((len(features), len(cols)), dtype=float), columns=cols, index=features)
+        df = pd.DataFrame(
+            data=np.empty((len(features), len(cols)), dtype=float),
+            columns=cols,
+            index=features
+        )
 
         df.loc['seasonality', cols] = self.get_seasonalities()
         df.loc['av', cols] = self.feature_table.loc[:, cols].mean(axis=0)
@@ -943,6 +910,257 @@ that before using this option'
                                        ].abs().std(axis=0)
 
         return df
+
+    def _get_plot_data(
+            self,
+            comps: list[str],
+            norm_mode: str,
+            contrasts: bool,
+            errors: bool,
+            **kwargs
+    ) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float, float]]:
+        # get data for relevant columns
+        data = self.feature_table.loc[:, comps].copy()
+
+        if errors:
+            if contrasts:
+                errors_data: pd.DataFrame = self._get_contrast_errors().loc[:, comps]
+            else:
+                errors_data: pd.DataFrame = self.errors.loc[:, comps]
+        else:
+            errors_data = None
+
+        # contrasts will be returned from feature_table_zone_averages as it is already in there
+        if contrasts:
+            logger.info(f'getting contrasts for {data.columns}')
+            data = self.get_contrasts_table(feature_table=data)
+
+        data_scaled, y_bounds, errors_scaled = self.scale_data(
+            norm_mode=norm_mode,
+            data=data,
+            errors=errors_data,
+            y_bounds=kwargs.get('y_bounds')
+        )
+
+        return data_scaled, errors_scaled, y_bounds
+
+    def plot_comp(
+            self,
+            comps: float | str | Iterable[float | str],
+            color_seasons: bool = False,
+            exclude_layers_low_successes: bool = False,
+            errors: bool = True,
+            title: str | None = None,
+            norm_mode: str = 'normal_distribution',
+            contrasts: bool = False,
+            annotate_l_correlations: bool = False,
+            **kwargs
+    ) -> None:
+        """
+        Plot a specific compound or list of compounds
+
+        Parameters
+        ----------
+        comps: float | str | Iterable[float | str]
+            The compound(s) to plot.
+        color_seasons: bool
+            If True, will add colored zones for the seasons (alpha value
+            correlates to the quality). The default is False.
+        exclude_layers_low_successes: bool, optional
+            If True, will discard values below the required amount of successes.
+            The default is False
+        title: str, optional
+            The figure title.
+        norm_mode: str, optional
+            Will scale values for visibility and comparability. See scale_data.
+            The default values is "normal_distribution".
+        errors: bool, optional
+            Will shade the areas between interval spanned by center +/-
+            standard error. The default is True.
+        contrasts: bool, optional
+            If this is set to True, will plot the contrasts. Default is False.
+        annotate_l_correlations: bool, optional
+            Whether to add correlation scores. Only available if contrasts is
+            True.
+        """
+        def _filter_plot_data(comp_):
+            if exclude_layers_low_successes and (comp_ in self.successes.columns):
+                mask_valid = (self.successes.loc[:, comp_]
+                              >= self.n_successes_required)
+            else:
+                mask_valid = np.ones_like(t, dtype=bool)
+            _t = t[mask_valid]
+            _values = data_scaled.loc[mask_valid, comp_]
+            _error = errors_scaled.loc[mask_valid, comp_]
+
+            return mask_valid, _t, _values, _error
+
+        def _add_seasons_coloring():
+            # season_to_color = {-1: 'darkkhaki', 1: 'lightgoldenrodyellow'}
+            season_to_color = {-1: 'blue', 1: 'red'}
+
+            shades = self.feature_table.quality.to_numpy()
+            shades[(shades < 0) | np.isnan(shades)] = 0
+            shades = shades ** (1 / 3)
+            shades = rescale_values(shades, new_min=0, new_max=1)
+            seeds = (np.sign(self.feature_table.seed) * t).to_numpy()[mask_any]
+            seasons = np.sign(seeds)[:-1]
+            bounds = np.abs(seeds)[:-1] + np.diff(np.abs(seeds)) / 2
+            bounds = np.insert(bounds, [0, -1], [t.min(), t.max()])
+
+            for idx in range(seasons.shape[0]):
+                c_index = seasons[idx]
+                # skip nan vals
+                if c_index not in season_to_color:
+                    continue
+
+                axs.axvspan(
+                    bounds[idx],
+                    bounds[idx + 1],
+                    facecolor=season_to_color[c_index],
+                    alpha=shades[idx],
+                    edgecolor='none',
+                    zorder=-1
+                )
+
+        def _add_yd_transition():
+            if (t.min() < YD_transition) and (YD_transition < t.max()):
+                logger.info('Pl-H transition in slice!')
+                axs.vlines(YD_transition,
+                           y_bounds[0],
+                           y_bounds[1],
+                           linestyles='solid',
+                           alpha=.75,
+                           label='Pl-H boundary',
+                           color='black',
+                           linewidth=2)
+
+        if annotate_l_correlations and (not contrasts):
+            logger.warning(
+                'Cannot add correlations if contrasts is set to False.'
+            )
+            annotate_correlations = False
+
+        t: pd.Series = self.age
+
+        # put comps in list if it is only one
+        if isinstance(comps, float | str):
+            comps = [comps]
+
+        # find closest mz for comps in feature table
+        comps: list = [
+            self.get_closest_mz(comp)
+            if (comp not in self.feature_table.columns)
+            else comp
+            for comp in comps
+        ]
+
+        if ('L' not in comps) and annotate_l_correlations:
+            comps.append('L')
+
+        data_scaled, errors_scaled, y_bounds = self._get_plot_data(
+            comps, norm_mode, contrasts, errors, **kwargs
+        )
+
+        if annotate_l_correlations:
+            # split off L
+            L: pd.Series = data_scaled.L
+            data_scaled.drop(columns='L', inplace=True)
+            comps.remove('L')
+
+            # calculate weights
+            w: pd.Series = (self.feature_table.contrast *
+                            np.sign(self.feature_table.homogeneity))
+            w[w < 0] = 0
+
+            seas: pd.Series = self.get_seasonalities(cols=comps)
+
+        fig, axs = plt.subplots(figsize=(10, 2))
+
+        # mask to keep track of which layers have a compound with enough successful spectra
+        mask_any = np.zeros_like(t, dtype=bool)
+        for idx, comp in enumerate(comps):
+            mask_comp, t_plot, values_plot, error_plot = _filter_plot_data(comp)
+
+            if annotate_l_correlations:
+                l_values: pd.Series = L.loc[mask_comp]
+                # get corr with L
+                rho = l_values.corr(values_plot, method='pearson')
+                # get corr of signs
+                s = sign_corr(l_values, values_plot)
+                ws = sign_weighted_corr(l_values, values_plot, w[mask_comp])
+                sea = seas[comp]
+                label: str = (fr'{comp} ($\rho_L$={rho:.2f}, $f_L=${s:.2f}, '
+                              fr'$w_L=${ws:.2f}, $seas=${sea:.3f})')
+            else:
+                label: str = f'{comp}'
+
+            if errors:
+                axs.fill_between(t_plot,
+                                 values_plot - error_plot,
+                                 values_plot + error_plot,
+                                 color=f'C{idx + 2}',
+                                 alpha=.5)
+            axs.plot(
+                t_plot,
+                values_plot,
+                label=label,
+                color=f'C{idx + 2}'
+            )
+            # add successful layers to mask
+            mask_any |= mask_comp
+
+        if color_seasons:
+            _add_seasons_coloring()
+
+        if annotate_l_correlations:
+            s_l = sign_corr(
+                self.feature_table.contrast[mask_any],
+                self.feature_table.seed[mask_any]
+            )
+
+            ws_l = sign_weighted_corr(
+                self.feature_table.contrast[mask_any],
+                self.feature_table.seed[mask_any],
+                w[mask_any]
+            )
+            label_l = fr'L ($f_s=${s_l:.2f}, $w_s=${ws_l:.2f})'
+
+            if errors:
+                L_errors = errors_scaled.loc[mask_any, 'L']
+                axs.fill_between(t[mask_any],
+                                 L[mask_any] - L_errors,
+                                 L[mask_any] + L_errors,
+                                 color='k',
+                                 alpha=.5)
+            axs.plot(
+                t[mask_any],
+                L[mask_any],
+                label=label_l,
+                color='k',
+                alpha=.5
+            )
+
+        # add vertical line to mark the transition
+        _add_yd_transition()
+
+        axs.set_xlim((t.min(), t.max()))
+        axs.set_ylim(y_bounds)
+        axs.set_xlabel('age (yr B2K)')
+        axs.set_ylabel('scaled intensity')
+        if title is None:
+            title = (f'excluded layers with less than '
+                     f'{self.n_successes_required}: '
+                     f'{exclude_layers_low_successes}, '
+                     f'scaled mode: {norm_mode}')
+            if contrasts:
+                title += ', contrasts'
+        fig.suptitle(title)
+        axs.grid(True)
+        axs.legend()
+
+        fig.tight_layout()
+        plt.show()
 
 
 class MultiSectionTimeSeries(TimeSeries):

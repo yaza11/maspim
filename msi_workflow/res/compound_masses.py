@@ -36,8 +36,7 @@ mGDGT2 = mass_GDGT_2_Na_p = 1297.284090 + mNa_p
 mGDGT3 = mass_GDGT_3_Na_p = 1295.268440 + mNa_p
 mCren_p = mass_cren_prime_Na_p = 1291.237140 + mNa_p
 
-# outside mass window
-# mass_GDGT_I = 1006.986740
-# mass_GDGT_II = 1021.002390
-# mass_GDGT_III = 1035.018040
+mass_GDGT_I = 1006.986740
+mass_GDGT_II = 1021.002390
+mass_GDGT_III = 1035.018040
 

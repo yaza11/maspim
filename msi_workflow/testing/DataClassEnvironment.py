@@ -101,7 +101,7 @@ def create_combined_FA():
     # save the data
     try:
         print('starting save')
-        MSI_combined.current_feature_table.loc[:, list(MSI_combined.get_data_columns()) + ['x', 'y']].to_csv('E:/Master_Thesis/raw_feature_tables/combined/FA/feature_table_combined490-520_FA_mz388-481_0dot1.csv')
+        MSI_combined.current_feature_table.loc[:, list(MSI_combined._get_data_columns()) + ['x', 'y']].to_csv('E:/Master_Thesis/raw_feature_tables/combined/FA/feature_table_combined490-520_FA_mz388-481_0dot1.csv')
         MSI_combined.save()
         print('DONE!')
     except Exception as e:
@@ -131,25 +131,25 @@ def significance_seasonality(hold=False):
 
     N_runs = 100
 
-    seas = np.zeros((N_runs, len(self.get_data_columns())))
+    seas = np.zeros((N_runs, len(self._get_data_columns())))
 
     TS = TimeSeries((490, 510), 'FA')
     TS.load()
 
     # for i in range(N_runs):
     #     print(round(i / N_runs * 100))
-    #     self.current_feature_table.loc[:, self.get_data_columns()] = resample(data)
+    #     self.current_feature_table.loc[:, self._get_data_columns()] = resample(data)
     #     ft_seeds_avg, ft_seeds_std, ft_seeds_success = self.processing_zone_wise_average(
     #         zones_key='seed',
-    #         columns=self.get_data_columns(),
+    #         columns=self._get_data_columns(),
     #         correct_zeros=False,
     #         calc_std=True
     #     )
     #     ft_seeds_avg = ft_seeds_avg.fillna(0).reset_index(drop=True)
     #     ft_seeds_success = ft_seeds_success.reset_index(drop=True)
 
-    #     TS.feature_table_zone_averages.loc[:, TS.get_data_columns()] = ft_seeds_avg
-    #     TS.feature_table_zone_successes.loc[:, TS.get_data_columns()] = ft_seeds_success
+    #     TS.feature_table_zone_averages.loc[:, TS._get_data_columns()] = ft_seeds_avg
+    #     TS.feature_table_zone_successes.loc[:, TS._get_data_columns()] = ft_seeds_success
     #     seas[i, :] = TS.get_seasonalities()
     # np.save('seas_FA_random100.npy', seas)
     seas = np.load('seas_FA_random100.npy')
@@ -317,7 +317,7 @@ if __name__ == '__main__':
 
     # a.load(use_common_mzs=True)
 
-    # cac0 = a.get_data_columns()
+    # cac0 = a._get_data_columns()
 
     # a.plot_comp('L')
 
@@ -331,10 +331,10 @@ if __name__ == '__main__':
     # with open(r'E:\Master_Thesis\raw_feature_tables\490-520\FA\ref_peaks_before.pickle', 'rb') as f:
     #     ref_peaks_505_520 = pickle.load(f)
 
-    # cols_drop_upper = list(set(a.get_data_columns()).difference(set(ref_peaks_490_500.astype(str))))
+    # cols_drop_upper = list(set(a._get_data_columns()).difference(set(ref_peaks_490_500.astype(str))))
     # a.current_feature_table = a.current_feature_table.drop(columns=cols_drop_upper)
 
-    # cols_drop_lower = list(set(b.get_data_columns()).difference(set(ref_peaks_505_520.astype(str))))
+    # cols_drop_lower = list(set(b._get_data_columns()).difference(set(ref_peaks_505_520.astype(str))))
     # b.current_feature_table = b.current_feature_table.drop(columns=cols_drop_lower)
 
     # m = a.get_data_mean()

@@ -287,7 +287,7 @@ class UK37(RatioProxy):
 
     def get_std_err_proxy(self) -> pd.Series:
         """Calculate standard errors for the intensities of each proxy value."""
-        errs = self.get_feature_table_standard_errors()
+        errs = self.get_standard_errors()
         # chain rule
         uk_errs = errs.loc[:, self.mC37_2] * self.C37_3 / (self.C37_2 + self.C37_3) ** 2 + \
                   errs.loc[:, self.mC37_3] * self.C37_2 / (self.C37_2 + self.C37_3) ** 2
