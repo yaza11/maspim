@@ -1,6 +1,5 @@
 """Module for testing continous-wavelet transformation."""
-from timeSeries.cProxy import UK37
-from timeSeries.cTimeSeries import TimeSeries
+from msi_workflow.time_series.main import TimeSeries
 
 import numpy as np
 import matplotlib.pyplot as plt

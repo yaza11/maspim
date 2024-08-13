@@ -15,7 +15,7 @@ from msi_workflow.res.compound_masses import (
     mC29stanol, mC29stenol, mC28, mC29  # steroids
 )
 from msi_workflow.res.constants import YD_transition
-from msi_workflow.timeSeries.time_series import TimeSeries
+from msi_workflow.time_series.main import TimeSeries
 
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ class Proxy(TimeSeries):
         for k, v in TS.__dict__.items():
             if 'feature_table' in k:  # is a feature table
                 # drop all irrelevant data columns
-                cols_to_drop = TS.get_data_columns().copy()
+                cols_to_drop = TS.data_columns.copy()
                 for mz in self.mzs:  # keep mzs of interest
                     cols_to_drop.remove(mz)
                 v = v.drop(columns=cols_to_drop)
@@ -143,7 +143,7 @@ class Proxy(TimeSeries):
             f"valid_spectra_mode must be one of {VALID_SPECTRA_MODES}, not {valid_spectra_mode}"
 
         # the successes of every compound throughout the series
-        succs: list[pd.Series] = [self.feature_table_successes[mz] for mz in self.mzs]
+        succs: list[pd.Series] = [self.successes[mz] for mz in self.mzs]
 
         # which layers have enough successful spectra
         # build array by stacking series along axis 0
@@ -173,12 +173,12 @@ class Proxy(TimeSeries):
         self.feature_table[proxy_column_name] = ratio
         # set successes in success table
         if valid_spectra_mode in ('all_spectra', 'any_above'):
-            self.feature_table_successes[proxy_column_name] = self.feature_table_successes.loc[
+            self.successes[proxy_column_name] = self.successes.loc[
                 :, self.mzs
-            ].max(axis=1)
+                                                ].max(axis=1)
         elif valid_spectra_mode == 'all_above':
-            self.feature_table_successes[proxy_column_name] = \
-                self.feature_table_successes.loc[
+            self.successes[proxy_column_name] = \
+                self.successes.loc[
                 :, self.mzs
                 ].min(axis=1)
         else:

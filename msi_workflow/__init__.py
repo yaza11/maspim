@@ -24,3 +24,4 @@ from msi_workflow.data.age_model import AgeModel
 from msi_workflow.data.combine_feature_tables import combine_feature_tables
 from msi_workflow.data.msi import MSI
 from msi_workflow.data.xrf import XRF
+from msi_workflow.data.helpers import plot_comp, plot_comp_on_image

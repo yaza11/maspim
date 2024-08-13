@@ -4,7 +4,7 @@ import logging
 from msi_workflow.project.main import get_project, ProjectMSI
 from msi_workflow.data.age_model import AgeModel
 from msi_workflow.exporting.from_mcf.spectrum import MultiSectionSpectra
-from msi_workflow.timeSeries.time_series import MultiSectionTimeSeries
+from msi_workflow.time_series.main import MultiSectionTimeSeries
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from scipy.signal.windows import blackman
 from astropy.timeseries import LombScargle
 
 from msi_workflow.data.combine_feature_tables import combine_feature_tables
-from msi_workflow.util.convinience import Convinience, return_existing
+from msi_workflow.util.convinience import Convinience, check_attr
 from msi_workflow.res.constants import elements, YD_transition, contrasts_scaling
 from msi_workflow.imaging.util.coordinate_transformations import rescale_values
 
@@ -21,12 +21,17 @@ logger = logging.getLogger('msi_workflow.' + __name__)
 class TimeSeries(Convinience):
     _save_in_d_folder: bool = True
 
+    _feature_table: pd.DataFrame | None = None
+    _feature_table_successes: pd.DataFrame | None = None
+    _feature_table_standard_deviations: pd.DataFrame | None = None
+    _data_columns: list[str] | None = None
+
     _save_attrs = {
         'd_folder',
         'n_successes_required',
-        'feature_table',
-        'feature_table_standard_deviations',
-        'feature_table_successes'
+        '_feature_table',
+        '_feature_table_standard_deviations',
+        '_feature_table_successes'
     }
 
     def __init__(
@@ -43,11 +48,11 @@ class TimeSeries(Convinience):
 
         self._set_files(path_folder)
 
-        self.feature_table: pd.DataFrame = pd.DataFrame()
-        self.feature_table_successes: pd.DataFrame = pd.DataFrame()
-        self.feature_table_standard_deviations: pd.DataFrame = pd.DataFrame()
+        self._feature_table: pd.DataFrame = pd.DataFrame()
+        self._feature_table_successes: pd.DataFrame = pd.DataFrame()
+        self._feature_table_standard_deviations: pd.DataFrame = pd.DataFrame()
 
-    def _set_files(self, path_folder: str):
+    def _set_files(self, path_folder: str) -> None:
         if path_folder is None:
             return
 
@@ -69,6 +74,34 @@ class TimeSeries(Convinience):
     def age(self) -> pd.Series:
         return self.feature_table.age
 
+    @property
+    def feature_table(self) -> pd.DataFrame:
+        assert check_attr(self, '_feature_table')
+        return self._feature_table
+
+    @property
+    def successes(self) -> pd.DataFrame:
+        return self._feature_table_successes
+
+    @property
+    def deviations(self) -> pd.DataFrame:
+        return self._feature_table_standard_deviations
+
+    def set_feature_tables(
+            self,
+            intensities: pd.DataFrame,
+            successes: pd.DataFrame | None,
+            deviations: pd.DataFrame | None
+    ) -> None:
+        if successes is not None:
+            assert intensities.shape[0] == successes.shape[0]
+        if deviations is not None:
+            assert intensities.shape[0] == deviations.shape[0]
+
+        self._feature_table = intensities
+        self._feature_table_successes = successes
+        self._feature_table_standard_deviations = deviations
+
     def combine_duplicate_seed(self, weighted=False):
         """Combining layers with same seeds, information about quality is lost."""
         if weighted:
@@ -79,11 +112,11 @@ that before using this option'
             seeds = self.feature_table.seed.copy()
             # take weighted average of rows that have the same xROI
             #   mult every comp in each layer by its n
-            cols = self.get_data_columns() + \
-                   ['L', 'x_ROI', 'quality', 'homogeneity', 'continuity',
-                    'contrast', 'quality'
-                    ]
-            ns = self.feature_table_successes.loc[:, cols]
+            cols = self.data_columns + [
+                'L', 'x_ROI', 'quality', 'homogeneity', 'continuity',
+                'contrast', 'quality'
+            ]
+            ns = self.successes.loc[:, cols]
             sums = ns * self.feature_table.loc[:, cols]
             #   add x_ROI col
             sums['seed'] = seeds
@@ -100,7 +133,7 @@ that before using this option'
                 .fillna(0) \
                 .sort_values(by='x_ROI') \
                 .reset_index()
-            ns = self.feature_table_successes \
+            ns = self.successes \
                 .groupby('seed') \
                 .mean() \
                 .sort_values(by='x_ROI') \
@@ -108,38 +141,18 @@ that before using this option'
 
         return wmean, ns
 
-    @return_existing('feature_table_zone_averages')
-    def get_feature_table(self):
-        """Call the set function if attribute does not exist and return it."""
-        assert hasattr(self, 'feature_table'), 'set the feature table first'
-        return self.feature_table
-
-    @return_existing('feature_table_zone_standard_deviations')
-    def get_feature_table_standard_deviations(self):
-        """Call the set function if attribute does not exist and return it."""
-        assert hasattr(self, 'feature_table'), 'set the feature table first'
-        return self.feature_table_standard_deviations
-
-    @return_existing('feature_table_zone_successes')
-    def get_feature_table_zone_successes(self):
-        """Call the set function if attribute does not exist and return it."""
-        assert hasattr(self, 'feature_table'), 'set the feature table first'
-        return self.feature_table_successes
-
-    def get_feature_table_standard_errors(self):
-        assert hasattr(self, 'feature_table'), 'set the feature table first'
-        if hasattr(self, 'feature_table_standard_errors'):
-            return self.feature_table_standard_errors
+    def get_feature_table_standard_errors(self) -> pd.DataFrame:
         # standard error: sigma / sqrt(n)
-        self.feature_table_standard_errors = self.feature_table_standard_deviations.loc[:,
-                                             self.sget_data_columns()].div(
-            np.sqrt(self.feature_table_successes.loc[:, 'N_total']), axis='rows'
+        feature_table_standard_errors = (
+            self.deviations.loc[:, self.data_columns].div(
+                np.sqrt(self.successes.loc[:, 'N_total']),
+                axis='rows'
+            )
         )
-        return self.feature_table_standard_errors
+        return feature_table_standard_errors
 
-    def get_data_columns(self):
-        columns = self.get_feature_table().columns
-        columns_valid = []
+    def get_data_columns(self) -> list[str]:
+        columns = self.feature_table.columns
         columns_xrf = [col for col in columns if
                        col in list(elements.Abbreviation)]
         columns_msi = [col for col in columns if str(
@@ -147,18 +160,17 @@ that before using this option'
         columns_valid = columns_xrf + columns_msi
         return columns_valid
 
-    @return_existing('data_columns')
-    def sget_data_columns(self) -> np.ndarray[float | str]:
-        """Get columns with MSI/XRF measurments in feature table."""
-        columns_valid = self.get_data_columns()
-        self.data_columns = np.array(columns_valid)
-        return self.data_columns
+    @property
+    def data_columns(self):
+        if not check_attr(self, '_data_columns'):
+            self._data_columns = self.get_data_columns()
+        return self._data_columns
 
     def get_weighted(
             self,
             feature_table: pd.DataFrame,
             use_L_contrasts: bool,
-            **kwargs
+            **_
     ) -> pd.DataFrame:
         """
         Return average intensities weighted by quality of layers.
@@ -182,7 +194,7 @@ that before using this option'
         # get quality column
         if not use_L_contrasts:
             logger.info('using geometric mean of quality')
-            q = self.get_feature_table().quality
+            q = self.feature_table.quality
             # calc geometric mean
             q = q.abs().pow(1 / 3)
         # use contrasts of grayscale
@@ -196,8 +208,8 @@ that before using this option'
                 h = feature_table.homogeneity.copy()
             else:
                 logger.info('taking contrast, hom from get-fcts.')
-                c = self.get_feature_table().contrast
-                h = self.get_feature_table().homogeneity
+                c = self.feature_table.contrast
+                h = self.feature_table.homogeneity
             q = c * np.sign(h) * contrasts_scaling
 
         # set qs below 0 to 0
@@ -224,8 +236,6 @@ that before using this option'
             The feature table for which to calculate the conrasts.
             The default is None.
             This will default to get_feature_table_zone_averages
-        columns : Iterable | None, optional
-            T. The default is None.
 
         Returns
         -------
@@ -236,7 +246,7 @@ that before using this option'
             contrast will from get_feature_table_zone_averages will be renamed to L
         """
         if feature_table is None:
-            feature_table = self.get_feature_table()
+            feature_table = self.feature_table
 
         columns = feature_table.columns
 
@@ -269,14 +279,14 @@ that before using this option'
             columns=columns
         )
         # copy depth over from av intensity calculation
-        ft_contrast['x'] = self.get_feature_table().x.copy()
-        ft_contrast['x_ROI'] = self.get_feature_table().x_ROI.copy()
-        ft_contrast['seed'] = self.get_feature_table().seed.copy()
-        ft_contrast['L'] = self.get_feature_table().contrast.copy()
+        ft_contrast['x'] = self.feature_table.x.copy()
+        ft_contrast['x_ROI'] = self.feature_table.x_ROI.copy()
+        ft_contrast['seed'] = self.feature_table.seed.copy()
+        ft_contrast['L'] = self.feature_table.contrast.copy()
 
         return ft_contrast
 
-    def get_envelope(self, comp: str) -> tuple[np.ndarray]:
+    def get_envelope(self, comp: str) -> tuple[np.ndarray, np.ndarray]:
         """
         Return envelopes in the contrast signal for a given compound.
 
@@ -373,7 +383,7 @@ that before using this option'
             subtract_mean=False
     ):
         if (cols is None) and (ft is None):
-            cols = self.get_data_columns()
+            cols = self.data_columns
         elif cols is None:
             cols = ft.columns
         if ft is None:
@@ -381,7 +391,7 @@ that before using this option'
 
         # multiply contrasts of comp with sign seed (comp with high summer
         # seasonality should only have positive signs, winter comp only negative after multiplication)
-        ft = ft.multiply(np.sign(self.get_feature_table().seed), axis=0)
+        ft = ft.multiply(np.sign(self.feature_table.seed), axis=0)
         # weigh contrasts by quality
         if weighted:
             ft = self.get_weighted(ft, use_L_contrasts=True)
@@ -392,7 +402,7 @@ that before using this option'
                 ft /= scaling
 
         if exclude_low_success:
-            ft_succ = self.get_feature_table().loc[:, cols].copy()
+            ft_succ = self.feature_table.loc[:, cols].copy()
             ft[ft_succ < self.n_successes_required] = np.nan
 
         # multiply with ratio of successful layers
@@ -448,7 +458,8 @@ that before using this option'
             title: str | None = None,
             norm_mode: str = 'normal_distribution',
             y_bounds: tuple[float, float] = None,
-            plt_contrasts: bool = False, **_
+            plt_contrasts: bool = False,
+            **_
     ) -> None:
         """Plot a specific compound or list of compounds"""
         t: pd.Series = self.age
@@ -458,13 +469,15 @@ that before using this option'
         assert type(comp) is list, 'pass comps as list type'
 
         # find closest mz for comps in feature table
-        comp: list = [self.get_closest_mz(comp)
-                       if (comp not in self.get_feature_table().columns)
-                       else comp
-                      for comp in comp]
+        comp: list = [
+            self.get_closest_mz(c)
+            if (c not in self.feature_table.columns)
+            else c
+            for c in comp
+        ]
 
         # get data for relevant columns
-        data = self.get_feature_table().loc[:, comp].copy()
+        data = self.feature_table.loc[:, comp].copy()
 
         # contrasts will be returned from feature_table_zone_averages as it is already in there
         if plt_contrasts:
@@ -479,8 +492,8 @@ that before using this option'
         # mask to keep track of which layers have a compound with enough successful spectra
         mask_any = np.zeros_like(t, dtype=bool)
         for idx, comp in enumerate(comp):
-            if exclude_layers_low_successes and (comp in self.get_feature_table_zone_successes().columns):
-                mask_enough_successes = self.get_feature_table_zone_successes() \
+            if exclude_layers_low_successes and (comp in self.successes.columns):
+                mask_enough_successes = self.successes \
                                             .loc[:, comp] >= self.n_successes_required
             else:
                 mask_enough_successes = np.ones_like(t, dtype=bool)
@@ -498,11 +511,11 @@ that before using this option'
         # season_to_color = {-1: 'darkkhaki', 1: 'lightgoldenrodyellow'}
         season_to_color = {-1: 'blue', 1: 'red'}
         if color_seasons:
-            shades = self.get_feature_table().quality.to_numpy()
+            shades = self.feature_table.quality.to_numpy()
             shades[(shades < 0) | np.isnan(shades)] = 0
             shades = shades ** (1 / 3)
             shades = rescale_values(shades, new_min=0, new_max=1)
-            seeds = (np.sign(self.get_feature_table().seed) * t).to_numpy()[mask_any]
+            seeds = (np.sign(self.feature_table.seed) * t).to_numpy()[mask_any]
             seasons = np.sign(seeds)[:-1]
             bounds = np.abs(seeds)[:-1] + np.diff(np.abs(seeds)) / 2
             bounds = np.insert(bounds, [0, -1], [t.min(), t.max()])
@@ -538,7 +551,7 @@ that before using this option'
             if plt_contrasts:
                 title += ', contrasts'
         plt.title(title)
-        plt.grid('on')
+        plt.grid(True)
         plt.legend()
 
         plt.tight_layout()
@@ -566,7 +579,7 @@ that before using this option'
 
         # find closest mz for comps in feature table
         comps: list = [self.get_closest_mz(comp)
-                       if (comp not in self.get_feature_table().columns)
+                       if (comp not in self.feature_table.columns)
                        else comp
                        for comp in comps]
 
@@ -575,7 +588,7 @@ that before using this option'
             comps.append('L')
 
         # get data for relevant columns
-        data = self.get_feature_table().loc[:, comps].copy()
+        data = self.feature_table.loc[:, comps].copy()
 
         # contrasts will be returned from feature_table_zone_averages as it is already in there
         if plt_contrasts:
@@ -595,8 +608,8 @@ that before using this option'
         # weights to use for the weighted sign correlation calculation
         if plt_contrasts and annotate_correlations:
             w = contrasts_scaling * \
-                self.get_feature_table().contrast * \
-                np.sign(self.get_feature_table().homogeneity)
+                self.feature_table.contrast * \
+                np.sign(self.feature_table.homogeneity)
             w[w < 0] = 0
 
         seas = self.get_seasonalities(cols=comps)
@@ -604,8 +617,8 @@ that before using this option'
         # mask to keep track of which layers have a compound with enough successful spectra
         mask_any = np.zeros_like(t, dtype=bool)
         for idx, comp in enumerate(comps):
-            if exclude_layers_low_successes and (comp in self.get_feature_table_zone_successes().columns):
-                mask_enough_successes = self.get_feature_table_zone_successes() \
+            if exclude_layers_low_successes and (comp in self.successes.columns):
+                mask_enough_successes = self.successes \
                                             .loc[:, comp] >= self.n_successes_required
             else:
                 mask_enough_successes = np.ones_like(t, dtype=bool)
@@ -638,13 +651,13 @@ that before using this option'
 
         if plt_contrasts:
             s = self.sign_corr(
-                self.get_feature_table().contrast[mask_any],
-                self.get_feature_table().seed[mask_any]
+                self.feature_table.contrast[mask_any],
+                self.feature_table.seed[mask_any]
             )
 
             ws = self.sign_weighted_corr(
-                self.get_feature_table().contrast[mask_any],
-                self.get_feature_table().seed[mask_any],
+                self.feature_table.contrast[mask_any],
+                self.feature_table.seed[mask_any],
                 w[mask_any]
             )
             label = fr'L ($f_s=${s:.2f}, $w_s=${ws:.2f})'
@@ -662,11 +675,11 @@ that before using this option'
         # season_to_color = {-1: 'darkkhaki', 1: 'lightgoldenrodyellow'}
         season_to_color = {-1: 'blue', 1: 'red'}
         if color_seasons:
-            shades = self.get_feature_table().quality.to_numpy()
+            shades = self.feature_table.quality.to_numpy()
             shades[shades < 0] = 0
             shades = shades ** (1 / 3)
             shades = rescale_values(shades, new_min=0, new_max=1)
-            seeds = (np.sign(self.get_feature_table().seed) * t).to_numpy()[mask_any]
+            seeds = (np.sign(self.feature_table.seed) * t).to_numpy()[mask_any]
             seasons = np.sign(seeds)[:-1]
             bounds = np.abs(seeds)[:-1] + np.diff(np.abs(seeds)) / 2
             bounds = np.insert(bounds, [0, -1], [t.min(), t.max()])
@@ -691,7 +704,7 @@ that before using this option'
             if plt_contrasts:
                 title += ', contrasts'
         plt.title(title)
-        plt.grid('on')
+        plt.grid(True)
         plt.legend()
 
         plt.tight_layout()
@@ -730,7 +743,7 @@ that before using this option'
         r = np.nanmean(np.sign(a) == np.sign(b)) * 2 - 1
         return r
 
-    def sign_weighted_corr(self, a: Iterable, b: Iterable, w: Iterable) -> float:
+    def sign_weighted_corr(self, a: np.ndarray, b: np.ndarray, w: np.ndarray) -> float:
         """
         Return the fraction of like signs over overall signs.
 
@@ -782,7 +795,7 @@ that before using this option'
     ) -> pd.DataFrame:
         """Return table of sign correlations."""
         if feature_table is None:
-            feature_table = self.get_feature_table()
+            feature_table = self.feature_table
 
         def sc(a, b):
             """Calculate sign correlation of a and b."""
@@ -793,25 +806,28 @@ that before using this option'
     def get_corr_with_grayscale(
             self, method='pearson', comps=None, contrast=False, weighted=False
     ) -> pd.Series:
+        raise NotImplementedError('something is wrong with if else here')
         if weighted:
             ft = self.sget_data_quality_weighted()
+        else:
+            ft = self.feature_table
         if contrast:
             if weighted:
                 ft = self.get_contrasts_table(feature_table=ft)
             else:
                 ft = self.get_contrasts_table()
         else:
-            ft = self.get_feature_table()
+            ft = self.feature_table
         L = ft.L
 
         if comps is None:
-            comps = self.sget_data_columns()
+            comps = self.data_columns
         corr_with_L = ft.loc[:, comps].corrwith(L, method=method)
         return corr_with_L
 
     def power(self, targets: list[str] | None = None, plts: bool = False) -> pd.DataFrame:
         if targets is None:
-            targets = self.sget_data_columns()
+            targets = self.data_columns
         t: pd.Series[float] = self.feature_table.age
         N_points: int = len(t)
         ys: pd.DataFrame = self.feature_table.loc[:, targets]
@@ -899,7 +915,7 @@ that before using this option'
         return TSu, TSl
 
     def get_stats(self):
-        cols = self.get_data_columns()
+        cols = self.data_columns
         features = [
             'seasonality',
             'av', 'v_I_std', 'h_I_std',
@@ -914,7 +930,7 @@ that before using this option'
                                   :, cols
                                   ].std(axis=0)
         # median std is horizontal spread
-        df.loc['h_I_std', cols] = self.feature_table_standard_deviations.loc[
+        df.loc['h_I_std', cols] = self.deviations.loc[
                                   :, cols
                                   ].median(axis=0)
         # median abs contrast
@@ -945,13 +961,13 @@ class MultiSectionTimeSeries(TimeSeries):
 
     def _set_df(self, time_series: list[TimeSeries]):
         dfs = [ts.feature_table for ts in time_series]
-        self.feature_table = combine_feature_tables(dfs)
+        self._feature_table = combine_feature_tables(dfs)
 
-        dfs = [ts.feature_table_standard_deviations for ts in time_series]
-        self.feature_table_standard_deviations = combine_feature_tables(dfs)
+        dfs = [ts.deviations for ts in time_series]
+        self._feature_table_standard_deviations = combine_feature_tables(dfs)
 
-        dfs = [ts.feature_table_successes for ts in time_series]
-        self.feature_table_successes = combine_feature_tables(dfs)
+        dfs = [ts.successes for ts in time_series]
+        self._feature_table_successes = combine_feature_tables(dfs)
 
 
 if __name__ == '__main__':

@@ -16,19 +16,19 @@ logger = logging.getLogger('msi_workflow.' + __name__)
 
 def check_file_integrity(
         file: str, is_file: bool = True, suffixes: list[str] = None
-) -> bool:
+) -> tuple[bool, str]:
     """Check if a given file exists and optionally is of right type."""
     if os.path.exists(file):
         if is_file != os.path.isfile(file):
-            return False
+            return False, f'{file} is a directory, not a file'
         elif is_file and (suffixes is not None):
             if (suffix := os.path.splitext(file)[1][1:]) not in suffixes:
-                return False
+                return False, f'{suffix=} is not an option (must be in {suffixes})'
             else:
-                return True
+                return True, ''
         else:
-            return True
-    return False
+            return True, ''
+    return False, f'{file=} does not exist'
 
 
 class AgeModel(Convinience):
@@ -139,14 +139,15 @@ class AgeModel(Convinience):
         # check if file is directory, in that case require a AgeModel.pickle file
         if os.path.isdir(path_file):
             assert 'AgeModel.pickle' in os.listdir(path_file), \
-                f'A folder ({path_file} was provided as input, but no saved "AgeModel.pickle" file was found'
+                (f'A folder ({path_file} was provided as input, but no saved '
+                 f'"AgeModel.pickle" file was found')
             self.path_folder: str = path_file
             self._in_file: str = 'AgeModel.pickle'
 
         # possible file types from which to read age model
         file_types: list[str] = ['txt', 'csv', 'xlsx', 'pickle']
-        assert check_file_integrity(path_file, is_file=True, suffixes=file_types), \
-            f'check file name and type (must be in {file_types}), you passed {path_file}'
+        valid, msg = check_file_integrity(path_file, is_file=True, suffixes=file_types)
+        assert valid, msg
 
         self.path_folder: str = os.path.dirname(path_file)
         self._in_file: str = os.path.basename(path_file)
@@ -179,7 +180,7 @@ class AgeModel(Convinience):
             self.df: pd.DataFrame = pd.read_excel(file, **kwargs)
         else:  # suffix pickle
             self.load()
-        print(self.__dict__.keys())
+
         # strip whitespaces
         self.df: pd.DataFrame = self.df.map(
             lambda x: x.strip() if isinstance(x, str) else x
@@ -212,18 +213,6 @@ class AgeModel(Convinience):
         self.add_depth_offset(depth_offset=depth_offset)
         self.convert_depth_scale(factor=conversion_to_cm)
 
-    def _get_disc_folder_and_file(self) -> tuple[str, str]:
-        assert hasattr(self, 'path_folder') or hasattr(self, 'path_file'), \
-            'object does not have a path_folder attribute'
-
-        class_name: str = str(self.__class__).split('.')[-1][:-2]
-        file_name: str = class_name + '.pickle'
-
-        folder: str = self.path_folder
-        file: str = os.path.join(folder, self._in_file)
-
-        return folder, file
-
     def add_depth_offset(self, depth_offset: float | int):
         """Apply a depth offset to the depth column"""
         self.df.loc[:, self.column_depth] += depth_offset
@@ -248,7 +237,10 @@ class AgeModel(Convinience):
     def age(self):
         return self.df.loc[:, self.column_age].to_numpy()
 
-    def depth_to_age(self, depth: float | Iterable[float]) -> float | np.ndarray[float]:
+    def depth_to_age(
+            self,
+            depth: float | Iterable[float]
+    ) -> float | np.ndarray[float]:
         """
         Return the corresponding core age (a b2k) for a given depth (cm).
 

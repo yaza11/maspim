@@ -55,7 +55,10 @@ def match_template_scale(
         template into the original image.
 
     """
-    def eval_fit_for_scale(scale: float | int, return_loc: bool = False) -> float | Sequence[float, tuple[int, int]]:
+    def eval_fit_for_scale(
+            scale: float | int,
+            return_loc: bool = False
+    ) -> float | Sequence[float] | tuple[int, int]:
         """
         Rescale the template to a certain scale and return the highest value of the match template cv2 function.
 

@@ -457,7 +457,7 @@ class Spectra(Convinience):
         """Add passed spectrum values to summed spectrum."""
         self._intensities += spectrum
 
-    def _get_spectrum(
+    def get_spectrum(
             self,
             reader: ReadBrukerMCF | hdf5Handler,
             index: int | str,
@@ -542,7 +542,7 @@ class Spectra(Convinience):
                 smoothing=50/self._n_spectra,
                 total=self._n_spectra
         ):
-            spectrum: np.ndarray[float] = self._get_spectrum(
+            spectrum: np.ndarray[float] = self.get_spectrum(
                 reader=reader, index=index, only_intensity=True
             )
             self.add_spectrum(spectrum)
@@ -574,7 +574,7 @@ class Spectra(Convinience):
                 smoothing=50/self._n_spectra,
                 total=self._n_spectra
         ):
-            spectrum: np.ndarray[float] = self._get_spectrum(
+            spectrum: np.ndarray[float] = self.get_spectrum(
                 reader=reader, index=index, only_intensity=False
             )
             if it > 0:
@@ -1824,7 +1824,7 @@ class Spectra(Convinience):
                 desc='binning spectra', smoothing=50 / n_spectra
         ):
             if reader is not None:
-                spectrum: np.ndarray[float] = self._get_spectrum(
+                spectrum: np.ndarray[float] = self.get_spectrum(
                     reader=reader, index=idx_spectrum, only_intensity=True
                 )
             else:
@@ -2089,7 +2089,7 @@ class Spectra(Convinience):
         ):
             # get index in array corresponding to spectrum index
             array_idx: int = self.spectrum_idx2array_idx(spectrum_idx)
-            spec: np.ndarray[float] = self._get_spectrum(
+            spec: np.ndarray[float] = self.get_spectrum(
                 reader=reader, index=spectrum_idx, only_intensity=True
             )
 
@@ -2249,28 +2249,34 @@ class Spectra(Convinience):
             self,
             plt_kernels: bool = False,
             plt_lines: bool = False,
-            limits: tuple[float] | None = None
-    ) -> None:
+            limits: tuple[float] | None = None,
+            hold: bool = False,
+            fig: plt.Figure | None = None,
+            ax: plt.Axes | None = None
+    ) -> tuple[plt.Axes, plt.Axes] | None:
         """
         Plot the summed up intensities with synthetic spectrum estimated
         from kernel parameters, if determined.
 
-        This method plots the summed intensities. If 'set_kernel_params' has been called already,
-        the synthetic spectrum will be plotted as well, the loss denotes the area between the
-        original and synthetic data.
+        This method plots the summed intensities. If 'set_kernel_params' has
+        been called already, the synthetic spectrum will be plotted as well,
+        the loss denotes the area between the original and synthetic data.
 
         Parameters
         ----------
         plt_kernels: bool, optional
-            The default is False. If kernel parameters have been determined, this option becomes
-            available. It is generally not recommended to plot individual kernels and intended for
-            debugging. Unless your mass window or number of kernels is fairly small, this will take
-            a long time to plot.
+            The default is False. If kernel parameters have been determined,
+            this option becomes available. It is generally not recommended to
+            plot individual kernels and intended for debugging. Unless your
+            mass window or number of kernels is fairly small, this will take a
+            long time to plot.
         plt_lines: bool, optional
-            If spectra have been binned, this option will plot vertical lines at the peak centers where
-            there height corresponds to the summed intensity across all spectra.
+            If spectra have been binned, this option will plot vertical lines
+            at the peak centers where there height corresponds to the summed
+            intensity across all spectra.
         limits: tuple[float] | None, optional.
-            By default, the entire mass range is plotted. With this parameter it can be decreased.
+            By default, the entire mass range is plotted. With this parameter
+            it can be decreased.
         """
         # calculate approximated signal by summing up kernels
         if plt_reconstructed := check_attr(self, '_kernel_params'):
@@ -2279,29 +2285,40 @@ class Spectra(Convinience):
             loss = np.sum(np.abs(self.intensities - intensities_approx)) \
                 / np.sum(self.intensities)
 
-        plt.figure()
+        if fig is None:
+            assert ax is None
+            fig, ax = plt.subplots()
+
         if plt_kernels and plt_reconstructed:
             for i in range(len(self._peaks)):
-                y: np.ndarray[float] = self._kernel_func(self.mzs, *self.kernel_params[i, :])
+                y: np.ndarray[float] = self._kernel_func(
+                    self.mzs, *self.kernel_params[i, :]
+                )
                 # reduce to 10 std
-                mask: np.ndarray[bool] = np.abs(self.kernel_params[i, 0] - self.mzs) <= 10 * self.kernel_params[i, -1]
-                plt.plot(self.mzs[mask], y[mask])
-        plt.plot(self.mzs, self.intensities, label='summed intensity')
+                mask: np.ndarray[bool] = np.abs(
+                    self.kernel_params[i, 0] - self.mzs
+                ) <= 10 * self.kernel_params[i, -1]
+                ax.plot(self.mzs[mask], y[mask])
+        ax.plot(self.mzs, self.intensities, label='summed intensity')
         if plt_reconstructed:
-            plt.plot(self.mzs, intensities_approx, label='estimated')
+            ax.plot(self.mzs, intensities_approx, label='estimated')
         if check_attr(self, '_binning_by') and plt_lines:
-            plt.stem(self.kernel_params[:, 0], self.get_heights().sum(axis=0),
+            ax.stem(self.kernel_params[:, 0], self.get_heights().sum(axis=0),
                      markerfmt='', linefmt='red')
         if limits is not None:
-            plt.xlim(limits)
+            ax.set_xlim(limits)
             mask: np.ndarray[bool] = (self.mzs >= limits[0]) & (self.mzs <= limits[1])
-            plt.ylim((0, self.intensities[mask].max()))
-        plt.legend()
-        plt.xlabel(r'$m/z$ in Da')
-        plt.ylabel('Intensity')
+            ax.set_ylim((0, self.intensities[mask].max()))
+        ax.legend()
+        ax.set_xlabel(r'$m/z$ in Da')
+        ax.set_ylabel('Intensity')
         if plt_reconstructed:
-            plt.title(f'Reconstructed summed intensities (loss: {loss:.1f})')
-        plt.show()
+            ax.set_title(f'Reconstructed summed intensities (loss: {loss:.1f})')
+
+        if not hold:
+            plt.show()
+        else:
+            return fig, ax
 
     def plot_tic(self):
         fig, ax = plt.subplots()
@@ -2336,7 +2353,7 @@ class Spectra(Convinience):
         for idx, (ax_l, ax_r) in zip(indices, axs):
             # obtain spectra
             spec_o: Spectrum = reader.get_spectrum(index=idx, limits=self.limits)
-            spec_c: Spectrum = self._get_spectrum(
+            spec_c: Spectrum = self.get_spectrum(
                 reader=reader, index=idx, only_intensity=False
             )
 

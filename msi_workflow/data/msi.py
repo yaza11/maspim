@@ -50,7 +50,7 @@ class MSI(Data):
         'd_folder',
         'mis_file',
         'distance_pixels',
-        '_feature_table',  # it could be processed, so not necessarily redundant information
+        '_feature_table',  # could be processed, so not necessarily redundant information
         'depth_section',
         'age_span'
     }
@@ -68,11 +68,14 @@ class MSI(Data):
         Parameters
         ----------
         path_d_folder : str
-            path to the d-folder plus the name of the d-folder. Example: 'path/to/your/d_folder.d'.
+            path to the d-folder plus the name of the d-folder.
+            Example: 'path/to/your/d_folder.d'.
         path_mis_file : str, optional
-            path to the mis file as well as its name. Recommended to provide if there are multiple mis files.
+            path to the mis file as well as its name. Recommended to provide
+            if there are multiple mis files.
         distance_pixels : int, optional
-            The distance (in micrometer) between data points. Will be looked up in mis file if not provided.
+            The distance (in micrometer) between data points. Will be looked
+            up in mis file if not provided.
         """
         self._set_files(path_d_folder, path_mis_file)
         
@@ -134,7 +137,7 @@ class MSI(Data):
         assert (
             (is_df := isinstance(upstream, pd.DataFrame)) or
             check_attr(upstream, 'feature_table')
-        ), 'upstream object must have a feature table'
+        ), 'upstream object must have a or be feature table'
 
         if (not is_df) and (not check_attr(  # check if feature table is meaningful
                 upstream,

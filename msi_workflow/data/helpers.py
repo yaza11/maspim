@@ -6,13 +6,11 @@ import matplotlib.pyplot as plt
 
 from skimage.transform import warp
 from scipy.interpolate import LinearNDInterpolator, griddata
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 from typing import Iterable
 from tqdm import tqdm
 
 from msi_workflow.imaging.util.coordinate_transformations import rescale_values
 from msi_workflow.res.constants import elements
-
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +212,7 @@ def plot_comp(
         ax: plt.Axes | None = None,
         ticks_on_longer_axis: bool = True,
         **kwargs
-):
+) -> tuple[plt.Axes, plt.Axes] | None:
     """
     Plot the ion image of a compound or feature.
 
@@ -243,7 +241,8 @@ def plot_comp(
     """
     if img_mz is None:
         assert data_frame is not None, 'if no image is provided, provide a dataframe'
-        assert comp in data_frame.columns, f'{comp=} is not in the dataframe'
+        assert comp in data_frame.columns, \
+            f'{comp=} is not in the dataframe with columns {data_frame.columns}'
     img_mz, idx_x, idx_y = get_comp_as_img(
         data_frame=data_frame, comp=comp, flip=flip, **kwargs
     )

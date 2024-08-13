@@ -526,10 +526,15 @@ class Data(DataBaseClass, Convinience):
             k: int,
             columns: Iterable[float | str] | None = None,
             exclude_holes: bool = False,
+            hole_column: str = 'valid',
             use_repeated_NMF: bool = False,
             N_rep: int = 30,
+            max_iter: int = 10_000,
             return_summary: bool = False
-    ) -> tuple[np.ndarray[float], np.ndarray[float]] | tuple[np.ndarray[float], np.ndarray[float] | type]:
+    ) -> (
+            tuple[np.ndarray[float], np.ndarray[float]] |
+            tuple[np.ndarray[float], np.ndarray[float] | type]
+    ):
         """Perform NMF analysis on the ion images"""
         if columns is None:
             columns: pd.Series = self.data_columns
@@ -539,7 +544,9 @@ class Data(DataBaseClass, Convinience):
         mask_nonnans: pd.Series = ~np.isnan(data).all(axis=1)
         # exclude holes, mask is True for valid rows
         if exclude_holes:
-            mask_nonholes: pd.DataFrame = (self.feature_table.classification != 0)
+            assert hole_column in self.columns, \
+                f'specified {hole_column} is not in the feature table'
+            mask_nonholes: pd.Series = (self.feature_table.loc[:, hole_column] != 0)
         else:
             mask_nonholes: np.ndarray[bool] = np.ones_like(mask_nonnans, dtype=bool)
         mask_valid_rows: pd.Series = mask_nonnans & mask_nonholes
@@ -556,11 +563,11 @@ class Data(DataBaseClass, Convinience):
 
         if use_repeated_NMF:
             from mfe.feature import repeated_nmf
-            S: type = repeated_nmf(feature_table_scaled, k, N_rep, max_iter=10_000)
+            S: type = repeated_nmf(feature_table_scaled, k, N_rep, max_iter=max_iter)
             self._W: np.ndarray[float] = S.matrix_w_accum
             self._H: np.ndarray[float] = S.matrix_h_accum
         else:
-            model: NMF = NMF(n_components=k, max_iter=10_000, init='nndsvd')
+            model: NMF = NMF(n_components=k, max_iter=max_iter, init='nndsvd')
 
             self._W: np.ndarray[float] = model.fit_transform(feature_table_scaled)
             self._H: np.ndarray[float] = model.components_
@@ -1129,10 +1136,15 @@ class Data(DataBaseClass, Convinience):
             axs[i, 0].imshow(values,
                              aspect='equal',
                              interpolation='none')
+            axs[i, 0].axes.get_xaxis().set_ticks([])
+            axs[i, 0].axes.get_yaxis().set_ticks([])
+
             axs[i, 1].stem(x_vals,
                            H[i, :],
                            markerfmt=' ',
                            linefmt='blue')
+            axs[i, 1].set_ylabel('Weights')
+        axs[i, 1].set_xlabel('m/z in Da')
 
         if hold:
             return fig, axs
@@ -1404,7 +1416,7 @@ class ZoneAnalyzer(DataBaseClass):
 
         if add_laminae_averages:
             raise NotImplementedError('Depricated')
-            # from timeSeries.cTimeSeries import TimeSeries
+            # from time_series.cTimeSeries import TimeSeries
             # TS = TimeSeries(self._section, self._window)
             # TS.load()
             # r_av_L = TS.get_corr_with_grayscale().copy()

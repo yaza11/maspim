@@ -2780,8 +2780,10 @@ use_age_model, not {height0_mode}')
             plt_cv2_image(image=self.image,
                           ax=axs[0, 0],
                           fig=fig,
-                          title='Original image',
-                          no_ticks=True)
+                          title='Input image (tilt corrected: '
+                                f'{self.use_tilt_correction})',
+                          no_ticks=True,
+                          swap_rb=False)
             plt_cv2_image(image=self.image_classification,
                           ax=axs[0, 1],
                           fig=fig,

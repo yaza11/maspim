@@ -89,7 +89,7 @@ def overwrite_seed(TS):
            ).copy()
     TS.feature_table_zone_averages['seed'] = new
     TS.feature_table_zone_successes['seed'] = new
-    if 'feature_table_standard_deviations' in TS.__dict__:
+    if 'deviations' in TS.__dict__:
         TS.feature_table_zone_successes['seed'] = new
     return TS
 

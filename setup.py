@@ -25,7 +25,7 @@ setup(
     package_data={NAME: ['res/calibrants.txt', 'res/elements.txt']},
     install_requires=['matplotlib', 'numpy', 'pandas', 'rpy2', 'scipy', 'tqdm',
                       'opencv-python', 'scikit-learn', 'scikit-image', 'psutil',
-                      'h5py', 'pillow', 'textdistance'],
+                      'h5py', 'pillow', 'textdistance', 'astropy'],
     extras_require={'dev': 'twine'},
     keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI',
               'laminated', 'lamination', 'image registration'],

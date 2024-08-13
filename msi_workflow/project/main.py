@@ -21,6 +21,7 @@ from msi_workflow.exporting.legacy.ion_image import (get_da_export_ion_image,
                                                      get_da_export_data)
 from msi_workflow.imaging.util.image_boxes import region_in_box
 from msi_workflow.imaging.util.image_plotting import plt_rect_on_image, plt_cv2_image
+from msi_workflow.time_series.helpers import get_averaged_tables
 
 from msi_workflow.util import Convinience
 
@@ -49,8 +50,8 @@ from msi_workflow.imaging.xray.main import XRay, XRayROI
 from msi_workflow.imaging.register.transformation import Transformation
 from msi_workflow.imaging.register.helpers import Mapper
 
-from msi_workflow.timeSeries.time_series import TimeSeries
-from msi_workflow.timeSeries.proxy import UK37
+from msi_workflow.time_series.main import TimeSeries
+from msi_workflow.time_series.proxy import UK37
 from msi_workflow.util.convinience import check_attr, object_to_string
 from msi_workflow.util.read_msi_align import get_teaching_points, get_teaching_point_pairings_dict
 
@@ -711,7 +712,12 @@ class ProjectBaseClass:
             return self._age_model
         # if an age model save is located in the folder, load it
         elif check_attr(self, 'AgeModel_file') and (not overwrite):
-            self._age_model: AgeModel = AgeModel(path_file=self.path_d_folder)
+            self._age_model: AgeModel = AgeModel(
+                path_file=os.path.join(
+                    self.path_d_folder,
+                    self.__getattribute__('AgeModel_file')
+                )
+            )
         # if a file is provided, load it from the file provided
         elif (not overwrite) and (path_file is not None):
             self._age_model: AgeModel = AgeModel(path_file=path_file, **kwargs_read)
@@ -867,18 +873,19 @@ class ProjectBaseClass:
             self,
             obj_color: str | None = None,
             overwrite: bool = False,
+            tag: str | None = None,
             **kwargs: dict
     ) -> ImageSample:
-        kwargs_area = kwargs.copy()
-        if 'tag' in kwargs_area:
-            kwargs_area.pop('tag')
-
         call_set: bool = True
         if (self._image_sample is not None) and (not overwrite):  # return existing
             return self._image_sample
+
         # this will only be overwritten with false, if the loaded instance has
         # the _xywh_ROI attribute
-        elif check_attr(self, 'ImageSample_file') and (not overwrite):
+        elif (
+                check_attr(self, 'ImageSample_file')
+                or (tag is not None)
+        ) and (not overwrite):
             logger.info('loading ImageSample')
             self._image_sample: ImageSample = ImageSample(
                 path_folder=self.path_folder,
@@ -886,7 +893,7 @@ class ProjectBaseClass:
                 image_type='pil',
                 obj_color=obj_color
             )
-            self._image_sample.load(kwargs.get('tag'))
+            self._image_sample.load(tag)
             call_set = False
             if not check_attr(self._image_sample, '_xywh_ROI'):
                 logger.warning(
@@ -901,7 +908,7 @@ class ProjectBaseClass:
                     self._image_sample.obj_color
                     if self._image_sample is not None
                     else obj_color),  # use eventually stored obj_color
-                **kwargs_area
+                **kwargs
             )
 
         return self._image_sample
@@ -928,13 +935,21 @@ class ProjectBaseClass:
 
         self._update_files()
 
-    def require_image_roi(self, overwrite: bool = False, **kwargs) -> ImageROI:
+    def require_image_roi(
+            self,
+            overwrite: bool = False,
+            tag: str | None = None,
+            **kwargs
+    ) -> ImageROI:
         if (self._image_roi is not None) and (not overwrite):
             return self._image_roi
-        elif check_attr(self, 'ImageROI_file') and (not overwrite):
+        elif (
+                check_attr(self, 'ImageROI_file')
+                or (tag is not None)
+        ) and (not overwrite):
             logger.info('loading ImageROI')
             self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
-            self._image_roi.load(kwargs.get('tag'))
+            self._image_roi.load(tag)
             if self.age_span is not None:
                 self._image_roi.age_span = self.age_span
         else:
@@ -992,16 +1007,22 @@ class ProjectBaseClass:
         self._update_files()
 
     def require_image_classified(
-            self, overwrite: bool = False, **kwargs
+            self,
+            overwrite: bool = False,
+            tag: str = None,
+            **kwargs
     ) -> ImageClassified:
         if (self._image_classified is not None) and (not overwrite):
             return self._image_classified
-        elif check_attr(self, 'ImageClassified_file') and (not overwrite):
+        elif (
+                check_attr(self, 'ImageClassified_file')
+                or (tag is not None)
+        ) and (not overwrite):
             logger.info('loading ImageClassified ...')
             self._image_classified: ImageClassified = ImageClassified.from_parent(
                 self.image_roi, **kwargs
             )
-            self._image_classified.load(kwargs.get('tag'))
+            self._image_classified.load(tag)
             self._image_classified.age_span = self.age_span
 
         if (not check_attr(self._image_classified, 'params_laminae_simplified')) or overwrite:
@@ -1013,7 +1034,7 @@ class ProjectBaseClass:
     def image_classified(self) -> ImageClassified:
         return self.require_image_classified()
 
-    def require_images(self, overwrite: bool = False, **kwargs):
+    def require_images(self, overwrite: bool = False, **kwargs) -> None:
         """Set the image handler, sample and roi, and if the sediment is
         laminated classified.
 
@@ -1148,8 +1169,10 @@ class ProjectBaseClass:
         kwargs['median'] = False
         assert self._image_roi is not None, 'set _image_roi first'
         assert self._data_object is not None, 'set data_object first'
+        assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
+
         image = self.image_roi.image_binary
-        self.data_object.add_attribute_from_image(image, 'valid', **kwargs)
+        self.data_object.add_attribute_from_image(image, 'valid', **kwargs_)
 
     def add_light_dark_classification(self, **kwargs) -> None:
         """
@@ -1171,6 +1194,8 @@ class ProjectBaseClass:
     def data_object_apply_tilt_correction(self) -> None:
         assert not self._corrected_tilt, 'tilt has already been corrected'
         assert self._data_object is not None, 'set data_object.'
+        assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
+
         mapper = Mapper(
             image_shape=(-1, -1),
             path_folder=self.path_folder,
@@ -1214,6 +1239,10 @@ class ProjectBaseClass:
             )
         self.image_classified.set_corrected_image()
         self._data_object.tilt_correction_applied = True
+
+    @property
+    def corrected_tilt(self) -> bool:
+        return self._corrected_tilt
 
     def add_laminae_classification(self, **kwargs) -> None:
         """
@@ -1369,8 +1398,13 @@ class ProjectBaseClass:
 
         self._update_files()
 
-    def require_xray(self, overwrite: bool = False, **kwargs) -> ImageROI:
-        if check_attr(self, '_xray'):
+    def require_xray(
+            self,
+            overwrite: bool = False,
+            tag: str | None = None,
+            **kwargs
+    ) -> ImageROI:
+        if check_attr(self, '_xray') and (not overwrite):
             return self._xray
 
         try_load_long = True
@@ -1381,14 +1415,20 @@ class ProjectBaseClass:
         elif kwargs.get('path_image_file') is not None:
             path_folder: str = os.path.dirname(kwargs['path_image_file'])
         else:  # neither folder nor image file provided, cannot determine disk location
-            try_load_long = False
+            try_load_long: bool = False
         # first, try loading an XRayROI instance
-        if check_attr(self, 'XRayROI_file'):
+        if (
+                check_attr(self, 'XRayROI_file')
+                or (tag is not None)
+        ) and (not overwrite):
             self._xray = XRayROI.from_disk(path_folder=self.path_folder)
             return self._xray
         # try loading an XRay long instead
         name: str = 'XRay.pickle'
-        if try_load_long and os.path.exists(os.path.join(path_folder, name)):
+        if (
+                try_load_long and
+                os.path.exists(os.path.join(path_folder, name))
+        ) and (not overwrite):
             self._xray_long = XRay(**kwargs)
             self._xray_long.load(kwargs.get('tag'))
             self._xray: XRayROI = self._xray_long.get_roi_from_section(
@@ -1833,19 +1873,43 @@ class ProjectBaseClass:
         self.data_object.add_attribute_from_image(warped_xray, 'xray')
 
     def combine_with_project(
-            self, project: Self, tag: str, plts: bool = False, **kwargs
+            self,
+            project: Self,
+            mapper_tag: str = 'tilt_correction',
+            plts: bool = False,
+            correct_tilt: bool = None,
+            **kwargs
     ) -> None:
-        assert project._image_roi is not None
-        assert project._data_object is not None
+        assert check_attr(project, '_image_roi')
+        assert check_attr(project, '_data_object')
+        assert 'x_ROI' in project.data_object.columns
 
-        assert self._image_classified is not None
-        assert self._data_object is not None
+        assert check_attr(self, '_image_roi')
+        assert check_attr(self, '_data_object')
+        assert 'x_ROI' in self.data_object.columns
 
-        mapper = Mapper(path_folder=self.path_folder, tag=tag)
+        # by default, apply tilt correction only to laminated sediments
+        if correct_tilt is None:
+            logger.info(
+                'requiring tilt correction since this instance is laminated'
+            )
+            correct_tilt = self._is_laminated
 
-        if os.path.exists(mapper.save_file):
+        # require that this instance has been tilt corrected
+        # otherwise we would only tilt corrected the other instance
+        if correct_tilt:
+            assert self.corrected_tilt, \
+                ('requiring tilt correction, but tilt correction has not been '
+                 'performed for this instance')
+
+        # get a mapper
+        if correct_tilt:  # try to fetch mapper from disk
+            mapper = Mapper(path_folder=self.path_folder, tag=mapper_tag)
+        if correct_tilt and os.path.exists(mapper.save_file):
+            logger.info('found tilt corrector on disk')
             mapper.load()
-        else:
+        elif correct_tilt:  # create new instance
+            logger.info('did not find tilt corrector, creating new one')
             target: np.ndarray = self.image_classified.image
             source: ImageROI = project.image_roi
 
@@ -1869,6 +1933,9 @@ class ProjectBaseClass:
 
             mapper = t.to_mapper(path_folder=self.path_folder, tag='xrf')
             mapper.save()
+        else:  # tilt correction not required
+            logger.info('tilt corrector not required')
+            mapper = Mapper(image_shape=project.image_roi)
 
         x_ROI = project.data_object.feature_table.x_ROI
         y_ROI = project.data_object.feature_table.y_ROI
@@ -1883,7 +1950,8 @@ class ProjectBaseClass:
                 desc='adding XRF ion images'
         ):
             values: np.ndarray[float] = project.data_object.feature_table.loc[
-                                        :, comp].to_numpy()
+                :, comp
+            ].to_numpy()
 
             # turn ion images into images that cover the image of the XRF photo
             ion_image: np.ndarray = griddata(
@@ -1912,137 +1980,74 @@ class ProjectBaseClass:
 
     def set_time_series(
             self,
-            average_by_col: str = 'classification_se',
-            plts: bool = False,
             **kwargs
     ) -> None:
-        assert self._data_object is not None, 'call set_data_object'
-        assert 'L' in self.data_object.feature_table.columns, \
-            'call add_photo'
-        assert 'x_ROI' in self.data_object.feature_table.columns, \
-            'call add_pixels_ROI'
-        assert average_by_col in self.data_object.feature_table.columns, \
-            ('call add_laminae_classification or use a different column name to'
-             ' average by')
-        assert 'depth' in self.data_object.feature_table.columns, \
-            'add the depths to data_object with add_depth_column first'
-        assert 'age' in self.data_object.feature_table.columns, \
-            'add the ages to data_object with add_age_column first'
+        assert self._data_object is not None, 'call require_data_object'
+        assert self._image_classified is not None, 'call require_image_classified'
+        assert check_attr(self.image_classified,
+                          'params_laminae_simplified',
+                          True), \
+            'make sure image_classified has parameters for laminae'
 
-        assert self._image_classified is not None, 'call set_image_classified'
-        assert check_attr(self.image_classified, 'params_laminae_simplified'), \
-            ('could not find params table in classified image object, call '
-             'set_image_classified')
+        if 'L' not in self.data_object.feature_table.columns:
+            logger.warning(
+                'No depth column set yet, proceeding anyway, but you might want to '
+                'call add_photo'
+            )
+        if ignore_depth := ('depth' not in self.data_object.feature_table.columns):
+            logger.warning(
+                'No depth column set yet, proceeding anyway, but you might want to '
+                'add the depths to data_object with add_depth_column first'
+            )
+        if ignore_age := ('age' not in self.data_object.feature_table.columns):
+            logger.warning(
+                'No age column set yet, proceeding anyway, but you might want to '
+                'add the ages to data_object with add_age_column first'
+            )
 
-        # x column always included in processing_zone_wise_average
-        columns_feature_table = np.append(
-            self.data_object.data_columns,
-            ['x_ROI', 'R', 'L', 'depth']
-        )
-        ft_seeds_avg, ft_seeds_std, ft_seeds_success = self.data_object.processing_zone_wise_average(
-            zones_key=average_by_col,
-            columns=columns_feature_table,
-            calc_std=True,
+        ft_seeds_avg, ft_seeds_success, ft_seeds_std = get_averaged_tables(
+            data_object=self.data_object,
+            image_classified=self.image_classified,
             **kwargs
         )
-
-        ft_seeds_avg = ft_seeds_avg.fillna(0)
-
-        # add quality criteria
-        cols_quals = ['homogeneity', 'continuity', 'contrast', 'quality']
-        # only consider those seeds that are actually in the image
-        seeds = self.image_classified.params_laminae_simplified.seed.copy()
-        seeds *= np.array([
-            1 if (c == 'light') else -1
-            for c in self.image_classified.params_laminae_simplified.color]
-        )
-
-        row_mask = [seed in ft_seeds_avg.index for seed in seeds]
-
-        quals = self.image_classified.params_laminae_simplified.loc[
-                row_mask, cols_quals + ['height']
-        ].copy()
-        # take weighted average for laminae with same seeds (weights are areas=heights)
-        quals_weighted = quals.copy().mul(quals.height.copy(), axis=0)
-        # reset height (otherwise height column would have values height ** 2
-        quals_weighted['height'] = quals.height.copy()
-        quals_weighted['seed'] = seeds
-        quals_weighted = quals_weighted.groupby(by='seed').sum()
-        quals_weighted = quals_weighted.div(quals_weighted.height, axis=0)
-        quals_weighted.drop(columns=['height'], inplace=True)
-
-        # join the qualities to the averages table
-        ft_seeds_avg = ft_seeds_avg.join(quals_weighted, how='left')
-        # insert infty for every column in success table that is not there yet
-        missing_cols = set(ft_seeds_avg.columns).difference(
-            set(ft_seeds_success.columns)
-        )
-
-        for col in missing_cols:
-            ft_seeds_success.loc[:, col] = np.infty
-
-        # plot the qualities
-        if plts:
-            plt.figure()
-            plt.plot(quals_weighted.index, quals_weighted.quality, '+', label='qual')
-            plt.plot(ft_seeds_avg.index, ft_seeds_avg.quality, 'x', label='ft')
-            plt.legend()
-            plt.xlabel('seed')
-            plt.ylabel('quality')
-            plt.title('every x should have a +')
-            plt.show()
-
-        # drop index (=seed) into dataframe
-        ft_seeds_avg.index.names = ['seed']
-        ft_seeds_std.index.names = ['seed']
-        ft_seeds_success.index.names = ['seed']
-        # reset index
-        ft_seeds_avg.reset_index(inplace=True)
-        ft_seeds_std.reset_index(inplace=True)
-        ft_seeds_success.reset_index(inplace=True)
-
-        ft_seeds_avg['seed'] = ft_seeds_std.seed.astype(int)
-        ft_seeds_std['seed'] = ft_seeds_std.seed.astype(int)
-        ft_seeds_success['seed'] = ft_seeds_std.seed.astype(int)
-
-        # need to insert the x_ROI from avg
-        ft_seeds_std['spread_x_ROI'] = ft_seeds_std.x_ROI.copy()
-        ft_seeds_std['x_ROI'] = ft_seeds_avg.x_ROI.copy()
-
-        ft_seeds_success['N_total'] = ft_seeds_success.x_ROI.copy()
-        ft_seeds_success['x_ROI'] = ft_seeds_avg.x_ROI.copy()
-
-        # sort by depth
-        ft_seeds_avg = ft_seeds_avg.sort_values(by='x_ROI')
-        ft_seeds_std = ft_seeds_std.sort_values(by='x_ROI')
-        ft_seeds_success = ft_seeds_success.sort_values(by='x_ROI')
-
-        # drop columns with seed == 0
-        mask_drop = ft_seeds_avg.seed == 0
-        ft_seeds_avg.drop(index=ft_seeds_avg.index[mask_drop], inplace=True)
-        ft_seeds_std.drop(index=ft_seeds_std.index[mask_drop], inplace=True)
-        ft_seeds_success.drop(index=ft_seeds_success.index[mask_drop], inplace=True)
-
         # add age column
-        ft_seeds_avg['age'] = self.age_model.depth_to_age(ft_seeds_avg.depth)
+        if not (ignore_age or ignore_depth):
+            ft_seeds_avg['age'] = self.age_model.depth_to_age(
+                ft_seeds_avg.depth
+            )
 
         self._time_series = TimeSeries(self.path_d_folder)
-        self._time_series.feature_table = ft_seeds_avg
-        self._time_series.feature_table_standard_deviations = ft_seeds_std
-        self._time_series.feature_table_successes = ft_seeds_success
+        self._time_series.set_feature_tables(ft_seeds_avg,
+                                             ft_seeds_success,
+                                             ft_seeds_std)
 
         self._time_series.save(kwargs.get('tag'))
 
         self._update_files()
 
-    def require_time_series(self, overwrite: bool = False, **kwargs) -> TimeSeries:
+    def require_time_series(
+            self,
+            overwrite: bool = False,
+            tag: str | None = None,
+            **kwargs
+    ) -> TimeSeries:
         if (self._time_series is not None) and (not overwrite):
+            logger.info('returning cached time series')
             return self._time_series
-        elif check_attr(self, 'TimeSeries_file') and (not overwrite):
+        if (
+                check_attr(self, 'TimeSeries_file') or
+                (tag is not None)
+        ) and (not overwrite):
+            logger.info(f'fetching time series from {self.path_d_folder}')
             self._time_series = TimeSeries(self.path_d_folder)
-            self._time_series.load(kwargs.get('tag'))
-        if (not check_attr(self._time_series, 'feature_table')) or overwrite:
-            self.set_time_series(**kwargs)
+            self._time_series.load(tag)
+            if (
+                    check_attr(self._time_series, 'feature_table', True)
+            ):
+                return self._time_series
+
+        logger.info('setting new time series instance')
+        self.set_time_series(**kwargs)
 
         return self._time_series
 
@@ -2053,18 +2058,51 @@ class ProjectBaseClass:
     def plot_comp(
             self,
             comp: str | float | int,
-            source: str,
+            source: str = 'data_object',
             tolerance: float = 3e-3,
             da_export_file: str | None = None,
             plot_on_background: bool = False,
             title: str | None = None,
             **kwargs
     ):
+        """
+        Plot a compound from different sources.
+
+        Parameters
+        ----------
+        comp : str | float | int
+            m/z or name of the compound or feature to plot.
+        source: str
+            Source attribute from which to fetch the values. Default is
+            "data_object". Other possibilities are
+            - reader for MSI
+            - da_export for MSI
+            - da_export_file for MSI
+            - spectra for MSI
+            - time_series
+        tolerance : float
+            Deviation for m/z's or compounds in reader or feature table.
+        da_export_file: str
+            File with DataAnalysis export to be used for plotting (only
+            necessary if source is "da_export_file"
+        plot_on_background: bool, optional
+            If this is set to True, will use the photo as background for the
+            ion images.
+        title: str, optional
+            Title of the figure
+        kwargs: Any
+            Additional keywords for IonImagePlotter.plot_comp
+
+
+        """
+        assert check_attr(self, source) if source != 'reader' else self._is_MSI, \
+            f'{source} not set'
+
         plotter: IonImagePlotter = IonImagePlotter(
             project=self,
             source=source,
             tolerance=tolerance,
-            da_export_file=da_export_file
+            da_export_file=da_export_file,
         )
         plotter.plot_comp(
             comp=comp,
@@ -2304,20 +2342,30 @@ class ProjectXRF(ProjectBaseClass):
         self._data_object.set_feature_table_from_txts()
         self._data_object.feature_table['R'] = 0
 
-    def require_data_object(self, overwrite: bool = False, **kwargs):
+    def require_data_object(
+            self,
+            overwrite: bool = False,
+            tag: str | None = None,
+            **kwargs
+    ) -> XRF:
         call_set: bool = True
         if (self._data_object is not None) and (not overwrite):
             return self._data_object
-        elif check_attr(self, 'XRF_file') and (not overwrite):
+        if (
+                check_attr(self, 'XRF_file')
+                or (tag is not None)
+        ) and (not overwrite):
             self._data_object = XRF(
                 path_folder=self.path_folder,
                 measurement_name=self.measurement_name,
                 **kwargs
             )
-            self._data_object.load(kwargs.get('tag'))
+            self._data_object.load(tag)
             call_set = False
             if not check_attr(self._data_object, 'feature_table'):
-                logger.info('loaded object does not have feature table, setting new one')
+                logger.info(
+                    'loaded object does not have feature table, setting new one'
+                )
                 call_set = True
         if call_set or overwrite:
             self.set_data_object(**kwargs)
@@ -2488,7 +2536,11 @@ class ProjectMSI(ProjectBaseClass):
         self._update_files()
         self._image_handler.set_photo()
 
-    def require_image_handler(self, overwrite: bool = False, **kwargs) -> SampleImageHandlerMSI:
+    def require_image_handler(
+            self,
+            overwrite: bool = False,
+            **kwargs
+    ) -> SampleImageHandlerMSI:
         if (self._image_handler is not None) and (not overwrite):  # return existing
             return self._image_handler
         elif check_attr(self, 'SampleImageHandlerMSI_file') and (not overwrite):  # load and set image
@@ -2498,7 +2550,7 @@ class ProjectMSI(ProjectBaseClass):
                 path_d_folder=self.path_d_folder,
                 path_mis_file=self.path_mis_file
             )
-            self._image_handler.load(kwargs.get('tag'))
+            self._image_handler.load()
             self._image_handler.set_photo()
         if (
                 (not check_attr(self._image_handler, '_extent_spots'))
@@ -2598,20 +2650,25 @@ class ProjectMSI(ProjectBaseClass):
         self._spectra.save(kwargs.get('tag'))
         self._update_files()
 
-    def require_spectra(self, overwrite: bool = False, **kwargs) -> Spectra:
-        if (self._spectra is not None) and (not overwrite):
+    def require_spectra(
+            self,
+            overwrite: bool = False,
+            tag: str | None = None,
+            **kwargs
+    ) -> Spectra:
+        if check_attr(self, '_spectra') and (not overwrite):
             return self._spectra
         # load from existing file
         if (
             (
-                check_attr(self, 'spectra_object_file')
-                or check_attr(self, 'Spectra_file')
+                check_attr(self, 'Spectra_file')
+                or (tag is not None)
             ) and (not overwrite)
         ):
             self._spectra: Spectra = Spectra(
                 path_d_folder=self.path_d_folder, initiate=False
             )
-            self._spectra.load(kwargs.get('tag'))
+            self._spectra.load(tag)
 
             # if feature_table or line spectra are set, we are good to return
             if check_attr(self._spectra, '_feature_table'):
@@ -2643,7 +2700,12 @@ class ProjectMSI(ProjectBaseClass):
 
         self._update_files()
 
-    def require_da_export(self, overwrite=False, **kwargs):
+    def require_da_export(
+            self,
+            overwrite=False,
+            tag: str | None = None,
+            **kwargs
+    ) -> DataAnalysisExport:
         call_set: bool = True
         if (self._da_export is not None) and (not overwrite):
             return self._da_export
@@ -2655,7 +2717,7 @@ class ProjectMSI(ProjectBaseClass):
             self._da_export: DataAnalysisExport = DataAnalysisExport(
                 path_file=''
             )
-            self._da_export.load(kwargs.get('tag'))
+            self._da_export.load(tag)
             call_set = False
             if check_attr(self._da_export, 'feature_table'):
                 logger.info('loaded fully initialized spectra object')
@@ -2691,21 +2753,35 @@ class ProjectMSI(ProjectBaseClass):
         else:
             raise NotImplementedError()
 
-    def require_data_object(self, overwrite=False, **kwargs):
+    def require_data_object(
+            self,
+            overwrite=False,
+            tag: str | None = None,
+            **kwargs
+    ):
         call_set = True
+        # return an existing instance
         if (self._data_object is not None) and (not overwrite):
             return self._data_object
-        if check_attr(self, 'MSI_file') and (not overwrite):
+        # try to load an instance from disk
+        if (
+                check_attr(self, f'MSI_file')
+                or (tag is not None)
+        ) and (not overwrite):
             self._data_object: MSI = MSI(
                 self.path_d_folder, path_mis_file=self.path_mis_file
             )
-            self._data_object.load(kwargs.get('tag'))
-            call_set = False
-            if check_attr(self.data_object, 'feature_table'):
-                call_set = True
-        if call_set:
-            self.set_data_object(**kwargs)
+            self._data_object.load(tag)
+            if check_attr(self.data_object, '_feature_table'):
+                # loaded good instance, can return
+                return self._data_object
+            else:
+                logger.warning(
+                    f'loaded corrupted {self._data_object.__class__.__name__} '
+                    'instance, setting new object')
 
+        logger.info('Initializing new data object')
+        self.set_data_object(**kwargs)
         return self._data_object
 
     def add_xrf(self, project_xrf: ProjectXRF, **kwargs) -> None:
@@ -2767,6 +2843,11 @@ class IonImagePlotter:
         self._set_object()
 
     def _set_object(self):
+        if self._source == 'reader':
+            assert check_attr(reader := self._project.get_reader(), 'limits'), \
+                'Source "reader" needs attribute "limits"'
+            self._object = reader
+            return
         if self._source != 'da_export_file':
             self._object = self._project.__getattribute__(self._source)
 
@@ -2779,6 +2860,13 @@ class IonImagePlotter:
 
         Raises a value error if the tolerance is exceeded
         """
+        if self._source == 'reader':
+            if (comp < self._object.limits[0]) or (comp > self._object.limits[1]):
+                logger.warning(
+                    f'Target compound with mass {comp} is outside the mass window'
+                    f'of the reader ({self._object.limits}')
+            self._comp = str(round(comp, 4))
+            return
         if self._source == 'da_export_file':
             self._comp = str(round(comp, 4))
             return
@@ -2829,29 +2917,30 @@ class IonImagePlotter:
     def _spectra_iterator(
             self,
             obj: Spectra | ReadBrukerMCF | hdf5Handler,
-            reader_: ReadBrukerMCF | hdf5Handler, df_: pd.DataFrame
+            reader: ReadBrukerMCF | hdf5Handler,
+            df: pd.DataFrame
     ) -> pd.DataFrame:
         """Iterate over spectra and extract intensity of target."""
         # iterate over spectra and extract intensity
-        n: int = len(reader_.indices)
+        n: int = len(reader.indices)
         for it, idx in tqdm(
-                enumerate(reader_.indices),
+                enumerate(reader.indices),
                 desc=f'Fetching intensities from {obj.__class__.__name__}',
                 total=n
         ):
             if isinstance(obj, (ReadBrukerMCF, hdf5Handler)):
                 spec: Spectrum = obj.get_spectrum(idx)
             elif isinstance(obj, Spectra):
-                spec: Spectrum = obj._get_spectrum(
-                    reader_, idx, only_intensity=False
+                spec: Spectrum = obj.get_spectrum(
+                    reader, idx, only_intensity=False
                 )
             else:
                 raise NotImplementedError(
                     f'internal error for object of type {type(obj)}'
                 )
             # window
-            df_.loc[it, self._comp] = self._max_window_spec(spec)
-        return df_
+            df.loc[it, self._comp] = self._max_window_spec(spec)
+        return df
 
     def _get_df(self) -> pd.DataFrame:
         if self._source == 'reader':
@@ -2924,7 +3013,7 @@ class IonImagePlotter:
     ):
         self._set_compound(comp)
 
-        df = self._get_df()
+        df: pd.DataFrame = self._get_df()
         self._set_data_object(df)
 
         # try to fetch distance_pixels

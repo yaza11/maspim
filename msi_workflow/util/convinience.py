@@ -112,15 +112,24 @@ class Convinience:
             'object does not have a path_folder attribute'
 
         class_name: str = str(self.__class__).split('.')[-1][:-2]
+
+        if tag is None and check_attr(self, '_tag'):
+            tag = self.__getattribute__('_tag')
+
         if tag is not None:
             file_name: str = f'{class_name}_{tag}.pickle'
         else:
             file_name: str = f'{class_name}.pickle'
 
         if self._save_in_d_folder:
-            assert check_attr(self, 'path_d_folder'), \
-                'object does not have a path_d_folder attribute'
-            folder: str = self.path_d_folder
+            if not check_attr(self, 'path_d_folder'):
+                logger.warning(
+                    'object does not have a path_d_folder attribute, saving in '
+                    f'{self.path_folder} instead'
+                )
+                folder: str = self.path_folder
+            else:
+                folder: str = self.path_d_folder
         else:
             assert check_attr(self, 'path_folder'), \
                 'object does not have a path_folder attribute'

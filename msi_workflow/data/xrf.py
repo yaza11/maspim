@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import re
 import os
+import logging
 import numpy as np
 import pandas as pd
 
 from msi_workflow.data.main import Data
 from msi_workflow.project.file_helpers import find_matches
 from msi_workflow.res.constants import elements
+
+logger = logging.getLogger(__name__)
 
 
 def handle_video_file(
@@ -212,6 +215,31 @@ class XRF(Data):
                 keys.append(element)
         # combine to feature_table
         self._feature_table = pd.DataFrame(data=np.vstack(vecs).T, columns=keys)
+
+    def inject_feature_table_from(
+            self,
+            upstream: pd.DataFrame,
+            supress_warnings: bool = False
+    ) -> None:
+        """
+        Set the feature table from an upstream object, such as Spectra or
+        DataAnalysisExport.
+        """
+        assert (is_df := isinstance(upstream, pd.DataFrame)), \
+            'upstream object must have be feature table'
+        if not np.any(upstream):
+            logger.warning('found empty feature table')
+
+        if is_df and (not supress_warnings):
+            logger.warning(
+                'Setting feature tables directly is discouraged. '
+                'Consider providing either a Spectra or DataAnalysisExport '
+                'object.'
+            )
+
+        self._feature_table: pd.DataFrame = (
+            upstream if is_df else upstream.feature_table.copy()
+        )
 
 
 if __name__ == '__main__':

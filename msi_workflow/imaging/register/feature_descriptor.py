@@ -111,7 +111,6 @@ def get_kernels(
     # log scale
     # widths = np.logspace(np.log2(min_width), np.log2(max_width), base=2, num=n_widths)
     widths = np.linspace(min_width, max_width, n_widths)
-    print(f'kernel periods between {widths[0] * 2:.0f} and {widths[-1] * 2:.0f} pixels')
     
     nx = round(max_width * 2)
     x = np.linspace(-max_width, max_width, nx, endpoint=True)
