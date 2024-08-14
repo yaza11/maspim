@@ -3,12 +3,11 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
-from typing import Iterable, Self, Callable, Any
+from typing import Iterable, Self, Callable
 from sklearn.preprocessing import StandardScaler
 from scipy.signal import detrend
 from scipy.signal.windows import blackman
 from astropy.timeseries import LombScargle
-from tqdm import tqdm
 
 from msi_workflow.data.combine_feature_tables import combine_feature_tables
 from msi_workflow.data.main import DataBaseClass
@@ -27,6 +26,7 @@ class TimeSeries(DataBaseClass, Convinience):
     _feature_table: pd.DataFrame | None = None
     _feature_table_successes: pd.DataFrame | None = None
     _feature_table_standard_deviations: pd.DataFrame | None = None
+    _feature_table_standard_errors: pd.DataFrame | None = None
     _contrasts: pd.DataFrame | None = None
 
     _data_columns: list[str] | None = None
@@ -163,19 +163,27 @@ that before using this option'
 
     def get_standard_errors(self) -> pd.DataFrame:
         # standard error: sigma / sqrt(n)
-        feature_table_standard_errors = (
-            self.deviations.div(
-                np.sqrt(self.successes.loc[:, 'N_total']),
-                axis='rows'
-            )
+        columns = list(set(self.deviations.columns) & set(self.successes.columns))
+        successes: pd.DataFrame = self.successes.loc[:, columns]
+        # will encounter invalid values for 0 successes and any nans
+        sqrt_n = np.sqrt(successes,
+                         where=successes > 0,
+                         out=np.zeros_like(successes))
+        feature_table_standard_errors = np.divide(
+            self.deviations.loc[:, columns],
+            sqrt_n,
+            where=sqrt_n > 0,
+            out=np.full_like(successes, np.nan)
         )
+        # zones is more of an index
+        feature_table_standard_errors.loc[:, 'zone'] = self.deviations.zone
         return feature_table_standard_errors
 
     @property
     def errors(self) -> pd.DataFrame:
-        if not check_attr(self, '_standard_errors'):
-            self._standard_errors = self.get_standard_errors()
-        return self._standard_errors
+        if not check_attr(self, '_feature_table_standard_errors'):
+            self._feature_table_standard_errors: pd.DataFrame = self.get_standard_errors()
+        return self._feature_table_standard_errors
 
     def _get_data_columns(self) -> list[str]:
         columns = self.columns
@@ -409,9 +417,9 @@ that before using this option'
         errors_up: np.ndarray = errors[slice_up]
         errors_down: np.ndarray = errors[slice_down]
 
-        errors: np.ndarray = (part_center * errors_center
-                              + part_down * errors_down
-                              + part_up * errors_up)
+        errors: np.ndarray = (np.abs(part_center * errors_center) +
+                              np.abs(part_down * errors_down) +
+                              np.abs(part_up * errors_up))
 
         errors_df = pd.DataFrame(data=errors, columns=columns)
 
@@ -643,25 +651,23 @@ that before using this option'
             raise KeyError('internal error')
 
         if errors is not None:
-            pre_scale_mins: np.ndarray = np.array(data.min(axis=0))
-            pre_scale_maxs: np.ndarray = np.array(data.max(axis=0))
+            pre_scale_mins: np.ndarray = np.array(np.nanmin(data, axis=0))
+            pre_scale_maxs: np.ndarray = np.array(np.nanmax(data, axis=0))
             old_mins = (pre_scale_mins[None, :]
                         * np.ones(data.shape[0])[:, None])
             old_maxs = (pre_scale_maxs[None, :]
                         * np.ones(data.shape[0])[:, None])
 
-            post_scale_mins: np.ndarray = np.array(data_scaled.min(axis=0))
-            post_scale_maxs: np.ndarray = np.array(data_scaled.max(axis=0))
+            post_scale_mins: np.ndarray = np.array(np.nanmin(data_scaled, axis=0))
+            post_scale_maxs: np.ndarray = np.array(np.nanmax(data_scaled, axis=0))
             new_mins = (post_scale_mins[None, :]
                         * np.ones(data.shape[0])[:, None])
             new_maxs = (post_scale_maxs[None, :]
                         * np.ones(data.shape[0])[:, None])
 
-            errors_scaled = rescale_values(errors,
-                                           new_mins,
-                                           new_maxs,
-                                           old_mins,
-                                           old_maxs)
+            # only apply the scaling, not the shifting
+            scales = (new_maxs - new_mins) / (old_maxs - old_mins)
+            errors_scaled = scales * errors
         else:
             errors_scaled = None
 
@@ -844,7 +850,7 @@ that before using this option'
 
     def split_at_depth(self, depth: float | int) -> tuple[Self, Self]:
         """
-        Split object at depth and return parts as TS objects.
+        Split object at depth and return parts as time_series objects.
 
         depth: float.
             Depth at which to split in cm
@@ -911,39 +917,6 @@ that before using this option'
 
         return df
 
-    def _get_plot_data(
-            self,
-            comps: list[str],
-            norm_mode: str,
-            contrasts: bool,
-            errors: bool,
-            **kwargs
-    ) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float, float]]:
-        # get data for relevant columns
-        data = self.feature_table.loc[:, comps].copy()
-
-        if errors:
-            if contrasts:
-                errors_data: pd.DataFrame = self._get_contrast_errors().loc[:, comps]
-            else:
-                errors_data: pd.DataFrame = self.errors.loc[:, comps]
-        else:
-            errors_data = None
-
-        # contrasts will be returned from feature_table_zone_averages as it is already in there
-        if contrasts:
-            logger.info(f'getting contrasts for {data.columns}')
-            data = self.get_contrasts_table(feature_table=data)
-
-        data_scaled, y_bounds, errors_scaled = self.scale_data(
-            norm_mode=norm_mode,
-            data=data,
-            errors=errors_data,
-            y_bounds=kwargs.get('y_bounds')
-        )
-
-        return data_scaled, errors_scaled, y_bounds
-
     def plot_comp(
             self,
             comps: float | str | Iterable[float | str],
@@ -951,6 +924,9 @@ that before using this option'
             exclude_layers_low_successes: bool = False,
             errors: bool = True,
             title: str | None = None,
+            colors: list | None = None,
+            names: list | None = None,
+            correct_tic: bool | Iterable[bool] = True,
             norm_mode: str = 'normal_distribution',
             contrasts: bool = False,
             annotate_l_correlations: bool = False,
@@ -1039,13 +1015,20 @@ that before using this option'
             logger.warning(
                 'Cannot add correlations if contrasts is set to False.'
             )
-            annotate_correlations = False
+            annotate_l_correlations = False
 
         t: pd.Series = self.age
 
         # put comps in list if it is only one
         if isinstance(comps, float | str):
             comps = [comps]
+        n_comps: int = len(comps)
+
+        if colors is not None:
+            assert len(colors) == n_comps, \
+                f'expected {n_comps=} colors, got {len(colors)}'
+        else:
+            colors = [f'C{idx + 2}' for idx in range(n_comps)]
 
         # find closest mz for comps in feature table
         comps: list = [
@@ -1055,11 +1038,49 @@ that before using this option'
             for comp in comps
         ]
 
+        if names is not None:
+            assert len(names) == n_comps, \
+                f'expected {n_comps=} names, got {len(names)}'
+        else:
+            names = comps
+
         if ('L' not in comps) and annotate_l_correlations:
             comps.append('L')
 
-        data_scaled, errors_scaled, y_bounds = self._get_plot_data(
-            comps, norm_mode, contrasts, errors, **kwargs
+        # get data for relevant columns
+        if hasattr(correct_tic, '__iter__'):
+            assert len(correct_tic) == n_comps, 'Provide a value for each compound'
+            data = self.feature_table.loc[:, comps].copy()
+            data_scaled = self.get_feature_table_tic_corrected(**kwargs).loc[:, comps].copy()
+            for comp, correct in zip(comps, correct_tic):
+                if not correct:
+                    continue
+                data.loc[:, comp] = data_scaled.loc[:, comp]
+        if correct_tic:
+            data = self.get_feature_table_tic_corrected(**kwargs).loc[:, comps].copy()
+        else:
+            data = self.feature_table.loc[:, comps].copy()
+
+        if errors:
+            if contrasts:
+                errors_data: pd.DataFrame = self._get_contrast_errors().loc[:, comps]
+            else:
+                errors_data: pd.DataFrame = self.errors.loc[:, comps]
+            if correct_tic:
+                errors_data = errors_data.divide(self._get_tic_scales(), axis=0)
+        else:
+            errors_data = None
+
+        # contrasts will be returned from feature_table_zone_averages as it is already in there
+        if contrasts:
+            logger.info(f'getting contrasts for {data.columns}')
+            data = self.get_contrasts_table(feature_table=data)
+
+        data_scaled, y_bounds, errors_scaled = self.scale_data(
+            norm_mode=norm_mode,
+            data=data,
+            errors=errors_data,
+            y_bounds=kwargs.get('y_bounds')
         )
 
         if annotate_l_correlations:
@@ -1090,22 +1111,23 @@ that before using this option'
                 s = sign_corr(l_values, values_plot)
                 ws = sign_weighted_corr(l_values, values_plot, w[mask_comp])
                 sea = seas[comp]
-                label: str = (fr'{comp} ($\rho_L$={rho:.2f}, $f_L=${s:.2f}, '
+                label: str = (fr'{names[idx]} ($\rho_L$={rho:.2f}, $f_L=${s:.2f}, '
                               fr'$w_L=${ws:.2f}, $seas=${sea:.3f})')
             else:
-                label: str = f'{comp}'
+                label: str = names[idx]
 
             if errors:
                 axs.fill_between(t_plot,
                                  values_plot - error_plot,
                                  values_plot + error_plot,
-                                 color=f'C{idx + 2}',
-                                 alpha=.5)
+                                 color=colors[idx],
+                                 alpha=.5,
+                                 zorder=-.5)
             axs.plot(
                 t_plot,
                 values_plot,
                 label=label,
-                color=f'C{idx + 2}'
+                color=colors[idx]
             )
             # add successful layers to mask
             mask_any |= mask_comp
@@ -1132,7 +1154,8 @@ that before using this option'
                                  L[mask_any] - L_errors,
                                  L[mask_any] + L_errors,
                                  color='k',
-                                 alpha=.5)
+                                 alpha=.5,
+                                 zorder=-.5)
             axs.plot(
                 t[mask_any],
                 L[mask_any],
@@ -1144,17 +1167,16 @@ that before using this option'
         # add vertical line to mark the transition
         _add_yd_transition()
 
-        axs.set_xlim((t.min(), t.max()))
+        # axs.set_xlim((t.min(), t.max()))
         axs.set_ylim(y_bounds)
         axs.set_xlabel('age (yr B2K)')
-        axs.set_ylabel('scaled intensity')
+        axs.set_ylabel(f'{"scaled" if norm_mode != "none" else ""} '
+                       f'{"contrasts" if contrasts else "intensities"}')
         if title is None:
             title = (f'excluded layers with less than '
                      f'{self.n_successes_required}: '
                      f'{exclude_layers_low_successes}, '
                      f'scaled mode: {norm_mode}')
-            if contrasts:
-                title += ', contrasts'
         fig.suptitle(title)
         axs.grid(True)
         axs.legend()

@@ -669,6 +669,26 @@ class ProjectBaseClass:
         """Placeholder for children"""
         raise NotImplementedError()
 
+    def forget(self, attribute: str):
+        """
+        Forget a certain attribute (set it to None).
+
+        This also works for attributes by first mapping the public property
+        to the private attribute.
+        """
+        private_attributes: list[str] = [
+            k for k in self.__dict__.keys()
+            if k.startswith('_') and not k.startswith('__')
+        ]
+        private_to_source: dict[str, str] = {attr: f'_{attr}' for attr in private_attributes}
+
+        forget_attr: str = private_to_source.get(attribute, attribute)
+
+        assert hasattr(self, forget_attr), \
+            f'Instance does not have attribute {attribute}'
+
+        self.__setattr__(forget_attr, None)
+
     def set_age_model(self, path_file: str | None = None, **kwargs_read) -> None:
         self._age_model: AgeModel = AgeModel(
             path_file=path_file, **kwargs_read
@@ -1123,7 +1143,7 @@ class ProjectBaseClass:
         data_ROI_xywh: tuple[int, ...] = self.image_handler._data_roi_xywh
         photo_ROI_xywh: tuple[int, ...] = self.image_handler._photo_roi_xywh
 
-        self.data_object._pixels_get_photo_ROI_to_ROI(
+        self.data_object.pixels_get_photo_ROI_to_ROI(
             data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh
         )
 
@@ -2376,6 +2396,7 @@ class ProjectXRF(ProjectBaseClass):
 
 class ProjectMSI(ProjectBaseClass):
     _is_MSI: bool = True
+    uk37_proxy: UK37 | None = None
 
     def __init__(
             self,
@@ -2791,15 +2812,15 @@ class ProjectMSI(ProjectBaseClass):
     def set_UK37(
             self,
             correction_factor: float = 1,
-            method_SST: str = 'BAYSPLINE',
+            method_SST: str = 'bayspline',
             prior_std_bayspline: int = 10,
             **kwargs
     ):
         assert self._time_series is not None
 
-        self.UK37_proxy = UK37(TS=self.time_series, **kwargs)
-        self.UK37_proxy.correct(correction_factor=correction_factor)
-        self.UK37_proxy.add_SST(method=method_SST, prior_std=prior_std_bayspline)
+        self.uk37_proxy = UK37(time_series=self.time_series, **kwargs)
+        self.uk37_proxy.correct(correction_factor=correction_factor)
+        self.uk37_proxy.add_SST(method=method_SST, prior_std=prior_std_bayspline)
 
 
 class IonImagePlotter:

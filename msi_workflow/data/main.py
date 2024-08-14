@@ -16,6 +16,7 @@ from sklearn.preprocessing import StandardScaler, MaxAbsScaler
 from tqdm import tqdm
 
 from msi_workflow.data.helpers import plot_comp, plt_comps
+from msi_workflow.imaging.util.coordinate_transformations import rescale_values
 from msi_workflow.res.constants import elements
 from msi_workflow.res.constants import dict_labels
 from msi_workflow.util.convinience import Convinience, check_attr
@@ -163,6 +164,40 @@ class DataBaseClass:
         assert check_attr(self, '_feature_table')
         return self._feature_table
 
+    def _get_tic_scales(self,
+                        column_tic: str = 'tic_window',
+                        method: str = 'median',
+                        **_) -> pd.Series:
+        assert method in ['median', 'mean', 'portion'], f'{method=} not valid'
+        assert (check_attr(self, '_feature_table')
+                and (column_tic in self.feature_table)),\
+            '{column_tic=} not in ft, make sure that ft is defined'
+
+        tics: pd.Series = self.feature_table.loc[:, column_tic]
+        if method == 'median':
+            scales: pd.Series = tics / tics.median()
+        elif method == 'mean':
+            scales: pd.Series = tics / tics.mean()
+        elif method == 'portion':
+            scales: pd.Series = rescale_values(tics, 0, 1)
+        else:
+            raise NotImplementedError(f'internal error: {method=} not defined')
+        return scales
+
+    def get_feature_table_tic_corrected(
+            self,
+            columns: Iterable | None = None,
+            **kwargs
+    ) -> pd.DataFrame:
+        if columns is None:
+            columns = self.columns
+
+        scales = self._get_tic_scales(**kwargs)
+        feature_table: pd.DataFrame = self.feature_table\
+                                          .loc[:, columns]\
+                                          .divide(scales, axis=0)
+        return feature_table
+
     @property
     def data_columns(self) -> pd.Series:
         """Overwritten by children."""
@@ -309,7 +344,7 @@ class Data(DataBaseClass, Convinience):
             axis=1
         )
 
-    def _pixels_get_photo_ROI_to_ROI(
+    def pixels_get_photo_ROI_to_ROI(
             self,
             data_ROI_xywh: tuple[int, ...],
             photo_ROI_xywh: tuple[int, ...],
@@ -382,7 +417,7 @@ class Data(DataBaseClass, Convinience):
         """
         x_col = f'x{coordinate_name}'
         y_col = f'y{coordinate_name}'
-        assert len(image.shape) == 2, 'image must be single channel'
+        assert image.ndim == 2, 'image must be single channel'
         if median:
             # footprint of area to average out for classification
             length_median: int = int(
@@ -953,6 +988,10 @@ class Data(DataBaseClass, Convinience):
             # set zones as x-val starting with 0
             self._feature_table[zones_key] = self.x - self.x.min()
 
+        data_table: pd.DataFrame = (self.get_data_for_columns(columns)
+                                    .copy().
+                                    astype(astype))
+
         # get zones
         zones: np.ndarray = np.unique(self.feature_table[zones_key])
         # remove nan key
@@ -960,13 +999,13 @@ class Data(DataBaseClass, Convinience):
         zones: np.ndarray = zones[mask_keys]
 
         # calculate zone wise averages
-        averages: np.ndarray = np.zeros_like(zones, dtype=object)
+        averages: np.ndarray = np.empty((len(zones), data_table.shape[1]))
+
         if calc_std:
-            stds: np.ndarray = np.zeros_like(zones, dtype=object)
-            Ns: np.ndarray = np.zeros_like(zones, dtype=object)
+            stds: np.ndarray = np.empty((len(zones), data_table.shape[1]))
+            Ns: np.ndarray = np.empty((len(zones), data_table.shape[1]))
         average_x_idx: np.ndarray[float] = np.zeros_like(zones, dtype=float)
 
-        data_table: pd.DataFrame = self.get_data_for_columns(columns).copy().astype(astype)
         zones_column: pd.Series = self.feature_table.loc[:, zones_key].copy()
         x_column = self.x.copy()
         if exclude_zeros and correct_zeros:
@@ -989,28 +1028,28 @@ class Data(DataBaseClass, Convinience):
             # sub dataframe of data_table only containing pixels in zone
             pixels_in_zone: pd.DataFrame = data_table.loc[mask_pixels_in_zone, :]
             # pd.Series, averages for each compound in that zone
-            averages[idx] = pixels_in_zone.mean(axis=0, skipna=True)
+            averages[idx, :] = pixels_in_zone.mean(axis=0, skipna=True)
             if calc_std:
-                # sigma = sqrt(1/N * sum(x_i - mu))
-                stds[idx] = pixels_in_zone.std(axis=0, skipna=True, ddof=1)
-                Ns[idx] = (pixels_in_zone > 0).sum(axis=0, skipna=True)
+                # sigma = sqrt(1/(N - 1) * sum(x_i - mu))
+                stds[idx, :] = pixels_in_zone.std(axis=0, skipna=True, ddof=1)
+                Ns[idx, :] = (pixels_in_zone > 0).sum(axis=0, skipna=True)
             # average depth
             average_x_idx[idx] = x_column.loc[mask_pixels_in_zone].mean()
         # put in feature_table
         feature_table_averages: pd.DataFrame = pd.DataFrame(
-            data=np.vstack(averages),
+            data=averages,
             columns=columns,
             index=zones)
         # add the mean x-value to data frame
         feature_table_averages['x'] = average_x_idx
         if calc_std:
             feature_table_stds: pd.DataFrame = pd.DataFrame(
-                data=np.vstack(stds),
+                data=stds,
                 columns=columns,
                 index=zones)
             feature_table_stds['x'] = average_x_idx
             feature_table_Ns: pd.DataFrame = pd.DataFrame(
-                data=np.vstack(Ns),
+                data=Ns,
                 columns=columns,
                 index=zones)
             feature_table_Ns['x'] = average_x_idx
@@ -1171,6 +1210,7 @@ class Data(DataBaseClass, Convinience):
     def plot_comp(
             self,
             comp: str | float | int,
+            correct_tic: bool = False,
             **kwargs
     ) -> None:
         """
@@ -1180,6 +1220,9 @@ class Data(DataBaseClass, Convinience):
         ----------
         comp: str | float | int
             The compound to plot.
+        correct_tic: bool, optional
+            If this is set to True, the intensities of each pixel will be
+            scaled by the tic values
         kwargs: dict, optional
             Additional keywords for plot_comp and get_comp_as_img
         """
@@ -1187,7 +1230,13 @@ class Data(DataBaseClass, Convinience):
         if check_attr(self, '_distance_pixels'):
             kwargs['distance_pixels'] = self.distance_pixels
 
-        plot_comp(comp, data_frame=self.feature_table, **kwargs)
+        plot_comp(
+            comp,
+            data_frame=(self.get_feature_table_tic_corrected(**kwargs)
+                        if correct_tic
+                        else self.feature_table),
+            **kwargs
+        )
 
     def plot_intensity_histograms(
             self,

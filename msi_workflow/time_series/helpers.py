@@ -22,7 +22,6 @@ def get_averaged_tables(
     assert check_attr(data_object, '_feature_table')
     feature_table = data_object.feature_table
 
-    print(image_classified)
     if (
             (image_classified is None) or
             not check_attr(image_classified, 'params_laminae_simplified')
@@ -46,6 +45,7 @@ def get_averaged_tables(
         zones_key=average_by_col,
         columns=feature_table.columns,
         calc_std=kwargs.pop('calc_std', True),
+        exclude_zeros=kwargs.pop('exclude_zeros', True),
         **kwargs
     )
 
@@ -89,23 +89,24 @@ def get_averaged_tables(
         plt.plot(quals_weighted.index, quals_weighted.quality, '+', label='qual')
         plt.plot(ft_seeds_avg.index, ft_seeds_avg.quality, 'x', label='ft')
         plt.legend()
-        plt.xlabel('seed')
+        plt.xlabel('zone')
         plt.ylabel('quality')
         plt.title('every x should have a +')
         plt.show()
 
     # drop index (=seed) into dataframe
-    ft_seeds_avg.index.names = ['seed']
-    ft_seeds_std.index.names = ['seed']
-    ft_seeds_success.index.names = ['seed']
+    ft_seeds_avg.index.names = ['zone']
+    ft_seeds_std.index.names = ['zone']
+    ft_seeds_success.index.names = ['zone']
     # reset index
     ft_seeds_avg.reset_index(inplace=True)
     ft_seeds_std.reset_index(inplace=True)
     ft_seeds_success.reset_index(inplace=True)
 
-    ft_seeds_avg['seed'] = ft_seeds_std.seed.astype(int)
-    ft_seeds_std['seed'] = ft_seeds_std.seed.astype(int)
-    ft_seeds_success['seed'] = ft_seeds_std.seed.astype(int)
+    # change column type
+    ft_seeds_avg.loc[:, 'zone'] = ft_seeds_avg.zone.astype(int)
+    ft_seeds_std.loc[:, 'zone'] = ft_seeds_std.zone.astype(int)
+    ft_seeds_success.loc[:, 'zone'] = ft_seeds_success.zone.astype(int)
 
     # need to insert the x_ROI from avg
     ft_seeds_std['spread_x_ROI'] = ft_seeds_std.x_ROI.copy()
@@ -120,9 +121,14 @@ def get_averaged_tables(
     ft_seeds_success = ft_seeds_success.sort_values(by='x_ROI')
 
     # drop columns with seed == 0
-    mask_drop = ft_seeds_avg.seed == 0
+    mask_drop = ft_seeds_avg.zone == 0
     ft_seeds_avg.drop(index=ft_seeds_avg.index[mask_drop], inplace=True)
     ft_seeds_std.drop(index=ft_seeds_std.index[mask_drop], inplace=True)
     ft_seeds_success.drop(index=ft_seeds_success.index[mask_drop], inplace=True)
+
+    # reset index
+    ft_seeds_avg.reset_index(inplace=True, drop=True)
+    ft_seeds_std.reset_index(inplace=True, drop=True)
+    ft_seeds_success.reset_index(inplace=True, drop=True)
 
     return ft_seeds_avg, ft_seeds_success, ft_seeds_std

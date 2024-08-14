@@ -477,7 +477,7 @@ def transform_feature_table(
         (('x_ROI_T' in df.columns) and ('y_ROI_T' in df.columns)) or
         (p_ROI_T is not None) or
         ((x_ROI_T is not None) and (y_ROI_T is not None))
-    ), 'If x_ROI_T and y_ROI_T are not in the df'
+    ), 'If x_ROI_T and y_ROI_T are not in the df, you must specify them directly'
 
     # get x_ROI_T, y_ROI_T
     if p_ROI_T is not None:
@@ -516,13 +516,15 @@ def transform_feature_table(
             total=df_new.shape[1] - 2,
             desc='warping ion images'
     ):
-        image = get_comp_as_arr(comp)
-        warped = warp(
-            image,
+        image: np.ndarray = get_comp_as_arr(comp)
+        dtype = image.dtype
+        warped: np.ndarray = warp(
+            image.astype(float),
             np.array([row_coords + V, col_coords + U]),
             mode='edge',
             preserve_range=True
-        )
+        ).astype(dtype)
+
         df_new.loc[:, comp] = warped.ravel()
     df_new.loc[:, 'x_ROI'] = X.ravel()
     df_new.loc[:, 'y_ROI'] = Y.ravel()

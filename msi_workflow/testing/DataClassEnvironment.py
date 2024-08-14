@@ -49,7 +49,7 @@ def test_(section, window):
     # DC.current_feature_table = DC.load_feature_table(key=.1)
     # DC.sget_photo_ROI()
     # DC.combine_photo_feature_table()
-    # DC._pixels_get_photo_ROI_to_ROI()
+    # DC.pixels_get_photo_ROI_to_ROI()
     # DC.add_graylevel_from_data_frame()
     # DC.add_laminae_classification()
     # DC.add_seed_classification()

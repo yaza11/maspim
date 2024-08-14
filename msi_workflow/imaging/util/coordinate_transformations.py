@@ -58,13 +58,13 @@ def polar_to_kartesian(
 
 
 def rescale_values(
-        a: np.ndarray | pd.DataFrame,
+        a: np.ndarray | pd.DataFrame | pd.Series,
         new_min: float,
         new_max: float,
         old_min: float | None = None,
         old_max: float | None = None,
         axis: int | None = None
-) -> np.ndarray | pd.DataFrame:
+) -> np.ndarray | pd.DataFrame | pd.Series:
     """
     Rescale values to specified range. Ignores nans.
 
@@ -94,8 +94,19 @@ def rescale_values(
     if old_min is None:
         old_min = np.nanmin(a, axis=axis)
     if np.any(old_min == old_max, axis=axis):
-        warnings.warn('found same min and max in  input values')
+        warnings.warn('found same min and max in input values')
     return (a - old_min) / (old_max - old_min) * (new_max - new_min) + new_min
+
+
+def get_rescaling_from_extrema(new_min, new_max, old_min, old_max):
+    def inner(a, axis=None):
+        return rescale_values(a,
+                              new_min,
+                              new_max,
+                              old_min,
+                              old_max,
+                              axis=axis)
+    return inner
 
 
 if __name__ == '__main__':

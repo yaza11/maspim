@@ -1,11 +1,21 @@
 """Calculate ratio proxies from time series data."""
+from copy import deepcopy
+
 import scipy
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+
+from msi_workflow.util.convinience import check_attr
+
+try:
+    import bayspline
+    UK37_SST_METHODS: list[str] = ['prahl', 'bayspline']
+except ImportError:
+    UK37_SST_METHODS: list[str] = ['prahl']
 import logging
 
-from typing import Iterable, Callable
+from typing import Iterable, Callable, Any
 
 from msi_workflow.data.combine_feature_tables import combine_feature_tables
 from msi_workflow.res.compound_masses import (
@@ -32,12 +42,25 @@ class Proxy(TimeSeries):
     it is expected to be used in a script-like fashion, rather than a pipeline.
     Therefore, the initialization is based on a time series object.
     """
+    path_file: str | None = None
+
+    _save_attrs = {
+        'd_folder',
+        'n_successes_required',
+        '_feature_table',
+        '_feature_table_standard_deviations',
+        '_feature_table_successes',
+        'mzs',
+        'mzs_theo',
+        'proxy_column_name'
+    }
+
     def __init__(
             self,
             *,
             mzs: Iterable[float],
             func: Callable[[pd.Series, ...], pd.Series],
-            TS: TimeSeries | None = None,
+            time_series: TimeSeries | None = None,
             path_file: str | None = None,
             valid_spectra_mode: str = 'all_above',
             n_successes_required: int = 10,
@@ -55,7 +78,7 @@ class Proxy(TimeSeries):
         func: Callable[[pd.Series, ...], pd.Series]
             A function that takes compound intensities as vectors (in the same
             order as mzs) and returns corresponding proxy values.
-        TS: TimeSeries, optional
+        time_series: TimeSeries, optional
             The time series object holding the data of compounds
         path_file: str, optional
             Path to save and load the object from disk.
@@ -69,16 +92,20 @@ class Proxy(TimeSeries):
         proxy_column_name: str, optional
             Name of the column with the proxy values. Defaults to 'ratio'.
         """
-        assert (TS is not None) or (path_file is not None), \
-            'provide either TS or path_file'
-        if path_file is not None:
-            self.path_file: str = path_file
+        assert (time_series is not None) or (path_file is not None), \
+            'provide either time_series or path_file'
 
-        if TS is not None:
-            self._set_mzs(mzs, TS)
-            self._copy_attributes(TS)
+        if time_series is not None:
+            self._set_mzs(mzs, time_series)
+            self._copy_attributes(time_series)
+            # has to happen after copy
+            if path_file is not None:
+                self.path_file: str = path_file
         else:
+            if path_file is not None:
+                self.path_file: str = path_file
             self.load()
+
         self._add_proxy(
             func,
             valid_spectra_mode=valid_spectra_mode,
@@ -87,31 +114,37 @@ class Proxy(TimeSeries):
         )
         self.proxy_column_name: str = proxy_column_name
 
-    def _set_mzs(self, mzs: Iterable[float], TS: TimeSeries) -> None:
+    def _set_mzs(self, mzs: Iterable[float], time_series: TimeSeries) -> None:
         self.mzs: list[str] = []
         self.mzs_theo: list[float] = []
         for mz in sorted(mzs):
-            mz_c, diff = TS.get_closest_mz(mz, return_deviation=True)
+            mz_c, diff = time_series.get_closest_mz(mz, return_deviation=True)
             if diff > .1:
                 logger.warning(
-                    f'Found large deviation for {mz} ({mz_c}, distance: {diff:.3f}), '
-                    f'make sure the mz is within the mass interval.'
+                    f'Found large deviation for {mz} ({mz_c}, '
+                    f'distance: {diff:.3f}), '
+                    'make sure the mz is within the mass interval.'
                 )
             self.mzs.append(mz_c)
             self.mzs_theo.append(mz)
 
-    def _copy_attributes(self, TS: TimeSeries) -> None:
-        """Inherit attributes from TS, reduce ft to relevant columns."""
-        for k, v in TS.__dict__.items():
+    def _copy_attributes(self, time_series: TimeSeries) -> None:
+        """Inherit attributes from time_series, reduce ft to relevant columns."""
+        dict_new = {}
+        iter_dict = deepcopy(time_series.__dict__)
+        for k, v in iter_dict.items():
             if 'feature_table' in k:  # is a feature table
                 # drop all irrelevant data columns
-                cols_to_drop = TS.data_columns.copy()
+                cols_to_drop = time_series.data_columns.copy()
                 for mz in self.mzs:  # keep mzs of interest
                     cols_to_drop.remove(mz)
-                v = v.drop(columns=cols_to_drop)
+                v_new = v.drop(columns=cols_to_drop)
+            else:
+                v_new = v
             # feature table only containing compounds of interest and
             # image features
-            self.__setattr__(k, v)
+            dict_new[k] = v_new
+        self.__dict__ |= dict_new
 
     def _add_proxy(
             self, 
@@ -140,7 +173,8 @@ class Proxy(TimeSeries):
             Name of the column with the proxy values. Defaults to 'ratio'.
         """
         assert valid_spectra_mode in VALID_SPECTRA_MODES, \
-            f"valid_spectra_mode must be one of {VALID_SPECTRA_MODES}, not {valid_spectra_mode}"
+            (f"valid_spectra_mode must be one of {VALID_SPECTRA_MODES}, "
+             f"not {valid_spectra_mode}")
 
         # the successes of every compound throughout the series
         succs: list[pd.Series] = [self.successes[mz] for mz in self.mzs]
@@ -175,12 +209,11 @@ class Proxy(TimeSeries):
         if valid_spectra_mode in ('all_spectra', 'any_above'):
             self.successes[proxy_column_name] = self.successes.loc[
                 :, self.mzs
-                                                ].max(axis=1)
+            ].max(axis=1)
         elif valid_spectra_mode == 'all_above':
-            self.successes[proxy_column_name] = \
-                self.successes.loc[
+            self.successes[proxy_column_name] = self.successes.loc[
                 :, self.mzs
-                ].min(axis=1)
+            ].min(axis=1)
         else:
             raise NotImplementedError('internal error')
 
@@ -253,7 +286,9 @@ class RatioProxy(Proxy):
 
 class UK37(RatioProxy):
     """Class for calculating Uk37 and sst values from a time series object."""
-    def __init__(self, **kwargs) -> None:
+    _method: str | None = None
+
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize.
 
         Na+ adducts are assumed to find the masses of compounds in the time
@@ -261,7 +296,7 @@ class UK37(RatioProxy):
 
         Parameters
         ----------
-        kwargs: str | int | float
+        kwargs: Any
             Keyword arguments to pass to RatioProxy.__init__
         """
         super().__init__(
@@ -285,13 +320,32 @@ class UK37(RatioProxy):
         """Correction factor to be applied to proxy values."""
         self.feature_table.ratio *= correction_factor
 
-    def get_std_err_proxy(self) -> pd.Series:
+    def get_std_err_ratio(self) -> pd.Series:
         """Calculate standard errors for the intensities of each proxy value."""
         errs = self.get_standard_errors()
         # chain rule
-        uk_errs = errs.loc[:, self.mC37_2] * self.C37_3 / (self.C37_2 + self.C37_3) ** 2 + \
-                  errs.loc[:, self.mC37_3] * self.C37_2 / (self.C37_2 + self.C37_3) ** 2
-        return uk_errs
+        ratio_errs: pd.Series = (
+            np.abs(
+                errs.loc[:, self.mC37_2]
+                * self.C37_3 / (self.C37_2 + self.C37_3) ** 2
+            ) + np.abs(
+                errs.loc[:, self.mC37_3]
+                * self.C37_2 / (self.C37_2 + self.C37_3) ** 2
+            )
+        )
+        return ratio_errs
+
+    def get_std_err_proxy(self) -> pd.Series:
+        assert check_attr(self, '_method'), 'call add_SST first'
+
+        if self._method == 'bayspline':
+            upper = self.feature_table.loc[:, 'SST_lower']
+            lower = self.feature_table.loc[:, 'SST_upper']
+            return (upper - lower) / 2
+        elif self._method == 'prahl':
+            ratio_errs: pd.Series = self.get_std_err_ratio()
+            # eq: SST = 29.41 * UK37p - 1.15
+            return 29.41 * ratio_errs
 
     def add_SST(
             self,
@@ -307,26 +361,22 @@ class UK37(RatioProxy):
         ----------
         method : str, optional
             Method used to calculate SST values. Options are 'prahl' and
-            'BAYSPLINE'. The later uses a Bayesian Spline model. Uses 'prahl'
+            'bayspline'. The later uses a Bayesian Spline model. Uses 'prahl'
             by default, which is the based on the fit commonly found in the
             literature of SST = (29.41 * Uk37p - 1.15) degC.
         prior_std : int, optional
             Prior standard for bayesian model. The default is 10.
         percentile_uncertainty: int, optional
             Desired level of uncertainty added as upper and lower bounds to
-            plots.
+            plots. Interval is guaranteed to cover the uncertainty range
+            [percentile_uncertainty, 100 - percentile_uncertainty].
+            The default is 5. Only used for method
         """
         def SST_prahl(UK37p: pd.Series) -> pd.Series:
             return 29.41 * UK37p - 1.15
-        
-        if method == 'BAYSPLINE':
-            try:
-                import bayspline
-            except ModuleNotFoundError as e:
-                print(e)
-                print('falling back to prahl method')
-                method = 'prahl'
-        
+
+        assert method in UK37_SST_METHODS, \
+            f'{method} is not available. Please choose one of {UK37_SST_METHODS}'
 
         UK37p: pd.Series = self.feature_table['ratio'].copy()
         mask_valid: pd.Series[bool] = ~UK37p.isna()
@@ -334,8 +384,9 @@ class UK37(RatioProxy):
         # water temperature in degrees Celsius
         if method == 'prahl':
             SST: pd.Series = SST_prahl(UK37p[mask_valid])
-        elif method == 'BAYSPLINE':
-            prediction = bayspline.predict_sst(UK37p[mask_valid], prior_std=prior_std)
+        elif method == 'bayspline':
+            prediction = bayspline.predict_sst(UK37p[mask_valid],
+                                               prior_std=prior_std)
             SST = prediction.percentile(q=50)
             # add xth and 100-xth percentile to estiamte uncertainty
             self.feature_table['SST_lower'] = np.nan
@@ -345,7 +396,9 @@ class UK37(RatioProxy):
             self.feature_table.loc[mask_valid, 'SST_upper'] = \
                 prediction.percentile(q=100 - percentile_uncertainty)
         else:
-            raise NotImplementedError()
+            raise NotImplementedError('internal error')
+
+        self._method: str = method
         self.feature_table['SST'] = np.nan
         self.feature_table.loc[mask_valid, 'SST'] = SST
 
