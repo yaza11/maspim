@@ -1872,7 +1872,7 @@ class ImageClassified(Image):
 
         mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
 
-        logger.info('setting new tilt correction transformation')
+        logger.info('getting new tilt correction transformation')
         # downscaled image has at most nx_pixels_downscaled pixels in x-direction
         downscale_factor: float = min((
             nx_pixels_downscaled / self._image.shape[1],

@@ -676,18 +676,22 @@ class ProjectBaseClass:
         This also works for attributes by first mapping the public property
         to the private attribute.
         """
+
+
         private_attributes: list[str] = [
-            k for k in self.__dict__.keys()
+            k[1:] for k in self.__dir__()
             if k.startswith('_') and not k.startswith('__')
         ]
-        private_to_source: dict[str, str] = {attr: f'_{attr}' for attr in private_attributes}
 
-        forget_attr: str = private_to_source.get(attribute, attribute)
+        forget_attr: str = (attribute
+                            if attribute not in private_attributes
+                            else f'_{attribute}')
+        logger.info(f'Forgetting attribute: {forget_attr}')
 
-        assert hasattr(self, forget_attr), \
-            f'Instance does not have attribute {attribute}'
+        assert forget_attr in self.__dir__(), \
+            f'Instance does not have attribute "{attribute}"'
 
-        self.__setattr__(forget_attr, None)
+        setattr(self, forget_attr, None)
 
     def set_age_model(self, path_file: str | None = None, **kwargs_read) -> None:
         self._age_model: AgeModel = AgeModel(
@@ -833,7 +837,7 @@ class ProjectBaseClass:
             self,
             obj_color: str | None = None,
             use_extent_from_mis: bool = True,
-            **kwargs: dict
+            **kwargs: Any
     ) -> None:
         """
         Set image_sample from image_handler.
@@ -896,13 +900,11 @@ class ProjectBaseClass:
             tag: str | None = None,
             **kwargs: dict
     ) -> ImageSample:
-        call_set: bool = True
-        if (self._image_sample is not None) and (not overwrite):  # return existing
+        # return existing
+        if (self._image_sample is not None) and (not overwrite):
             return self._image_sample
 
-        # this will only be overwritten with false, if the loaded instance has
-        # the _xywh_ROI attribute
-        elif (
+        if (
                 check_attr(self, 'ImageSample_file')
                 or (tag is not None)
         ) and (not overwrite):
@@ -913,23 +915,28 @@ class ProjectBaseClass:
                 image_type='pil',
                 obj_color=obj_color
             )
-            self._image_sample.load(tag)
-            call_set = False
-            if not check_attr(self._image_sample, '_xywh_ROI'):
+            try:
+                self._image_sample.load(tag)
+                if check_attr(self._image_sample, '_xywh_ROI'):
+                    return self._image_sample
+
                 logger.warning(
                     'loaded partially initialized ImageSample, overwriting '
                     'loaded ImageSample with fully initialized object'
                 )
-                call_set = True
+            except FileNotFoundError:
+                logger.warning(f'Could not find ImageSample with {tag=}')
 
-        if call_set or overwrite:  # either overwrite or loaded partially processed obj
-            self.set_image_sample(
-                obj_color=(
-                    self._image_sample.obj_color
-                    if self._image_sample is not None
-                    else obj_color),  # use eventually stored obj_color
-                **kwargs
-            )
+        logger.info("Initializing new ImageSample instance")
+        # either overwrite or loaded partially processed obj
+        self.set_image_sample(
+            obj_color=(
+                self._image_sample.obj_color
+                if self._image_sample is not None
+                else obj_color),  # use eventually stored obj_color
+            tag=tag,
+            **kwargs
+        )
 
         return self._image_sample
 
@@ -963,29 +970,55 @@ class ProjectBaseClass:
     ) -> ImageROI:
         if (self._image_roi is not None) and (not overwrite):
             return self._image_roi
-        elif (
+
+        if (
                 check_attr(self, 'ImageROI_file')
                 or (tag is not None)
         ) and (not overwrite):
             logger.info('loading ImageROI')
             self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
-            self._image_roi.load(tag)
-            if self.age_span is not None:
-                self._image_roi.age_span = self.age_span
-        else:
-            self.set_image_roi(**kwargs)
+            try:
+                self._image_roi.load(tag)
+                if check_attr(self, 'age_span'):
+                    self._image_roi.age_span = self.age_span
+                return self._image_roi
+            except FileNotFoundError:
+                logger.warning(f'Did not find file with {tag=}')
 
+        logger.info('Creating new ImageROI instance')
+        self.set_image_roi(**kwargs)
         return self._image_roi
 
     @property
     def image_roi(self) -> ImageROI:
         return self.require_image_roi()
 
+    def set_tilt_corrector(self, **kwargs) -> None:
+        assert check_attr(self, '_image_roi'), \
+            'need image_roi to initialize tilt corrector'
+
+        self.image_classified.set_corrected_image(**kwargs)
+        self._update_files()
+
+    def require_tilt_corrector(self, overwrite=False, **kwargs) -> Mapper:
+        mapper = Mapper(self.image_classified._image.shape,
+                        self.path_folder,
+                        'tilt_correction')
+        if overwrite or (not os.path.exists(mapper.save_file)):
+            logger.info(f'Could not find mapper with file {mapper.save_file}, '
+                        f'creating new instance')
+            self.set_tilt_corrector(**kwargs)
+
+        # mapper should exist now in either case
+        mapper.load()
+        return mapper
+
     def set_image_classified(
             self,
             peak_prominence: float = .01,
             downscale_factor: float = 1 / 16,
             reduce_laminae: bool = True,
+            use_tilt_correction: bool | None = None,
             **kwargs
     ) -> None:
         """
@@ -1009,9 +1042,12 @@ class ProjectBaseClass:
         -------
         None
         """
+        if use_tilt_correction is None:
+            use_tilt_correction = self._is_laminated
+
         # initialize ImageClassified
         self._image_classified: ImageClassified = ImageClassified.from_parent(
-            self.image_roi, **kwargs
+            self.image_roi, use_tilt_correction=use_tilt_correction, **kwargs
         )
         self._image_classified.age_span = self.age_span
 
@@ -1034,7 +1070,8 @@ class ProjectBaseClass:
     ) -> ImageClassified:
         if (self._image_classified is not None) and (not overwrite):
             return self._image_classified
-        elif (
+
+        if (
                 check_attr(self, 'ImageClassified_file')
                 or (tag is not None)
         ) and (not overwrite):
@@ -1042,11 +1079,23 @@ class ProjectBaseClass:
             self._image_classified: ImageClassified = ImageClassified.from_parent(
                 self.image_roi, **kwargs
             )
-            self._image_classified.load(tag)
-            self._image_classified.age_span = self.age_span
+            try:
+                self._image_classified.load(tag)
 
-        if (not check_attr(self._image_classified, 'params_laminae_simplified')) or overwrite:
-            self.set_image_classified(**kwargs)
+                if check_attr(self, 'age_span'):
+                    self._image_classified.age_span = self.age_span
+                if (not check_attr(self._image_classified,
+                                   'params_laminae_simplified')):
+                    logger.warning(
+                        'Loaded ImageClassified is expected to have a '
+                        'params table but found none'
+                    )
+                else:
+                    return self._image_classified
+            except FileNotFoundError:
+                logger.warning(f'Could not find ImageClassified with {tag=}')
+
+        self.set_image_classified(**kwargs)
 
         return self._image_classified
 
@@ -1254,10 +1303,8 @@ class ProjectBaseClass:
         else:
             raise FileNotFoundError(
                 f'expected to find a Mapping at '
-                f'{mapper.save_file}, make sure to set '
-                f'the image_classification with use_tilt_correction set to True'
+                f'{mapper.save_file}, call require_tilt_corrector'
             )
-        self.image_classified.set_corrected_image()
         self._data_object.tilt_correction_applied = True
 
     @property
@@ -1350,7 +1397,8 @@ class ProjectBaseClass:
             def map_depth(row):
                 return mapper[row.x_ROI]
 
-            self.data_object.feature_table['depth'] = self.data_object.feature_table.apply(map_depth, axis=1)
+            self.data_object.feature_table['depth'] = \
+                self.data_object.feature_table.apply(map_depth, axis=1)
         # add new column to feature table
 
     def add_age_column(self, use_corrected: bool = False) -> None:
@@ -1371,7 +1419,8 @@ class ProjectBaseClass:
         """
         assert self._age_model is not None, 'set age model first'
         assert self._data_object is not None, f'did not set data_object yet'
-        assert check_attr(self.data_object, 'feature_table'), 'must have data_object'
+        assert check_attr(self.data_object, 'feature_table'), \
+            'must have data_object'
         if use_corrected:
             depth_col = 'depth_corrected'
         else:
@@ -1443,8 +1492,13 @@ class ProjectBaseClass:
         ) and (not overwrite):
             self._xray = XRayROI.from_disk(path_folder=self.path_folder)
             return self._xray
+
         # try loading an XRay long instead
-        name: str = 'XRay.pickle'
+        if tag is not None:
+            name: str = f'XRay_{tag}.pickle'
+        else:
+            name: str = 'XRay.pickle'
+
         if (
                 try_load_long and
                 os.path.exists(os.path.join(path_folder, name))
@@ -1892,84 +1946,116 @@ class ProjectBaseClass:
         # add to feature table
         self.data_object.add_attribute_from_image(warped_xray, 'xray')
 
+    def _require_combine_mapper(
+            self,
+            other: Self,
+            plts: bool = False,
+            **kwargs
+    ) -> Mapper:
+        identifier: str = os.path.basename(other.path_folder).split('.')[0]
+
+        # attempt to load
+        mapper = Mapper(path_folder=self.path_folder,
+                        tag=f'combine_with_{identifier}')
+        if os.path.exists(mapper.save_file):
+            mapper.load()
+            return mapper
+
+        target: np.ndarray = self.image_classified.image
+        source: ImageROI = other.image_classified.image
+
+        t: Transformation = Transformation(
+            source=source,
+            target=target,
+            source_obj_color=other.image_classified.obj_color,
+            target_obj_color=self.image_classified.obj_color
+        )
+
+        t.estimate('bounding_box', plts=plts, **kwargs)
+        t.estimate('laminae', plts=plts, **kwargs)
+
+        if plts:
+            t.plot_fit(use_classified=False)
+
+        mapper = t.to_mapper(path_folder=self.path_folder,
+                             tag=f'combine_with_{identifier}')
+        mapper.save()
+
+        return mapper
+
     def combine_with_project(
             self,
-            project: Self,
-            mapper_tag: str = 'tilt_correction',
+            other: Self,
             plts: bool = False,
-            correct_tilt: bool = None,
+            use_tilt_correction: bool | Iterable = None,
             **kwargs
     ) -> None:
-        assert check_attr(project, '_image_roi')
-        assert check_attr(project, '_data_object')
-        assert 'x_ROI' in project.data_object.columns
+        assert check_attr(other, '_image_roi')
+        assert check_attr(other, '_data_object')
+        assert 'x_ROI' in other.data_object.columns
 
         assert check_attr(self, '_image_roi')
         assert check_attr(self, '_data_object')
         assert 'x_ROI' in self.data_object.columns
 
         # by default, apply tilt correction only to laminated sediments
-        if correct_tilt is None:
+        if use_tilt_correction is None:
             logger.info(
                 'requiring tilt correction since this instance is laminated'
             )
-            correct_tilt = self._is_laminated
+            use_tilt_correction = self._is_laminated
+        is_2tuple_bool = (hasattr(use_tilt_correction, '__iter__')
+                          and (len(use_tilt_correction) == 2)
+                          and all([isinstance(c) for c in use_tilt_correction]))
+        assert isinstance(use_tilt_correction, bool) or is_2tuple_bool, (
+            f'correct_tilt must be either a bool or an 2-tuple'
+            f' of bools, you provided {use_tilt_correction}'
+        )
 
-        # require that this instance has been tilt corrected
-        # otherwise we would only tilt corrected the other instance
-        if correct_tilt:
-            assert self.corrected_tilt, \
-                ('requiring tilt correction, but tilt correction has not been '
-                 'performed for this instance')
+        if is_2tuple_bool:
+            self_use_tilt_correction, other_use_tilt_correction = use_tilt_correction
+        else:  # determine if tilts have to be corrected (still)
+            self_use_tilt_correction = use_tilt_correction
+            other_use_tilt_correction = use_tilt_correction
 
-        # get a mapper
-        if correct_tilt:  # try to fetch mapper from disk
-            mapper = Mapper(path_folder=self.path_folder, tag=mapper_tag)
-        if correct_tilt and os.path.exists(mapper.save_file):
-            logger.info('found tilt corrector on disk')
-            mapper.load()
-        elif correct_tilt:  # create new instance
-            logger.info('did not find tilt corrector, creating new one')
-            target: np.ndarray = self.image_classified.image
-            source: ImageROI = project.image_roi
+        self_correct_tilt = self_use_tilt_correction and (not self.corrected_tilt)
+        other_correct_tilt = other_use_tilt_correction and (not other.corrected_tilt)
+        logger.info(f'Determined {self_correct_tilt=} and {other_correct_tilt=}')
 
-            logger.info(
-                f'loaded image from image_classified with tilt correction set '
-                f'to {self.image_classified.use_tilt_correction}'
-            )
+        # warn if corrected even though use_tilt_correction is set to False
+        if self.corrected_tilt and (not self_use_tilt_correction):
+            logger.warning('using tilt corrected feature table for this '
+                           'project even though '
+                           'use_tilt_correction is set to False')
+        if other.corrected_tilt and (not other_use_tilt_correction):
+            logger.warning('using tilt corrected feature table for other '
+                           'project even though '
+                           'use_tilt_correction is set to False')
 
-            t = Transformation(
-                source=source,
-                target=target,
-                target_obj_color=self.image_classified.obj_color
-            )
+        # apply tilt corrections
+        if self_correct_tilt:
+            self.require_tilt_corrector()
+            self.data_object_apply_tilt_correction()
+        if other_correct_tilt:
+            other.require_tilt_corrector()
+            other.data_object_apply_tilt_correction()
 
-            t.estimate('bounding_box', plts=plts, **kwargs)
-            t.estimate('tilt', plts=plts, **kwargs)
-            t.estimate('laminae', plts=plts, **kwargs)
+        # setting the warp mapper
+        mapper_warp = self._require_combine_mapper(other, plts=plts, **kwargs)
 
-            if plts:
-                t.plot_fit(use_classified=False)
-
-            mapper = t.to_mapper(path_folder=self.path_folder, tag='xrf')
-            mapper.save()
-        else:  # tilt correction not required
-            logger.info('tilt corrector not required')
-            mapper = Mapper(image_shape=project.image_roi)
-
-        x_ROI = project.data_object.feature_table.x_ROI
-        y_ROI = project.data_object.feature_table.y_ROI
+        x_ROI = other.data_object.feature_table.x_ROI
+        y_ROI = other.data_object.feature_table.y_ROI
         points = np.c_[x_ROI, y_ROI]
-        _, _, w_ROI, h_ROI = project.image_handler._photo_roi_xywh
+        _, _, w_ROI, h_ROI = other.image_handler._photo_roi_xywh
         grid_x, grid_y = np.meshgrid(
             np.arange(w_ROI),
             np.arange(h_ROI)
         )
         for comp in tqdm(
-                project.data_object.data_columns,
+                other.data_object.data_columns,
                 desc='adding XRF ion images'
         ):
-            values: np.ndarray[float] = project.data_object.feature_table.loc[
+            values: np.ndarray[float] = other.data_object.feature_table.loc[
                 :, comp
             ].to_numpy()
 
@@ -1986,11 +2072,11 @@ class ProjectBaseClass:
             t: Transformation = Transformation(
                 source=ion_image,
                 target=self.image_classified.image,
-                source_obj_color=project.image_classified.obj_color,
+                source_obj_color=other.image_classified.obj_color,
                 target_obj_color=self.image_classified.obj_color
             )
 
-            warped_xray: np.ndarray[float] = mapper.fit(
+            warped_xray: np.ndarray[float] = mapper_warp.fit(
                 t.source.image, preserve_range=True
             )
             # add to feature table
@@ -2000,14 +2086,16 @@ class ProjectBaseClass:
 
     def set_time_series(
             self,
+            is_continuous: bool = False,
             **kwargs
     ) -> None:
         assert self._data_object is not None, 'call require_data_object'
-        assert self._image_classified is not None, 'call require_image_classified'
-        assert check_attr(self.image_classified,
-                          'params_laminae_simplified',
-                          True), \
-            'make sure image_classified has parameters for laminae'
+        if not is_continuous:
+            assert self._image_classified is not None, 'call require_image_classified'
+            assert check_attr(self.image_classified,
+                              'params_laminae_simplified',
+                              True), \
+                'make sure image_classified has parameters for laminae'
 
         if 'L' not in self.data_object.feature_table.columns:
             logger.warning(
@@ -2028,6 +2116,7 @@ class ProjectBaseClass:
         ft_seeds_avg, ft_seeds_success, ft_seeds_std = get_averaged_tables(
             data_object=self.data_object,
             image_classified=self.image_classified,
+            is_continuous=is_continuous,
             **kwargs
         )
         # add age column
@@ -2060,14 +2149,22 @@ class ProjectBaseClass:
         ) and (not overwrite):
             logger.info(f'fetching time series from {self.path_d_folder}')
             self._time_series = TimeSeries(self.path_d_folder)
-            self._time_series.load(tag)
-            if (
-                    check_attr(self._time_series, 'feature_table', True)
-            ):
-                return self._time_series
+            try:
+                self._time_series.load(tag)
+                if (
+                        check_attr(self._time_series,
+                                   '_feature_table',
+                                   True)
+                ):
+                    return self._time_series
+                logger.warning(
+                    'Loaded time series instance is missing a feature table.'
+                )
+            except FileNotFoundError:
+                logger.warning(f'did not find file with specified {tag=}.')
 
         logger.info('setting new time series instance')
-        self.set_time_series(**kwargs)
+        self.set_time_series(tag=tag, **kwargs)
 
         return self._time_series
 
@@ -2328,10 +2425,9 @@ class ProjectXRF(ProjectBaseClass):
         self._update_files()
 
     def require_image_handler(self, overwrite=False, **_) -> SampleImageHandlerXRF:
-        call_set: bool = True
         if (self._image_handler is not None) and (not overwrite):
             return self._image_handler
-        elif check_attr(self, 'SampleImageHandlerXRF_file') and (not overwrite):
+        if check_attr(self, 'SampleImageHandlerXRF_file') and (not overwrite):
             self._image_handler: SampleImageHandlerXRF = SampleImageHandlerXRF(
                 path_folder=self.path_folder,
                 path_image_file=self.path_image_file,
@@ -2339,22 +2435,22 @@ class ProjectXRF(ProjectBaseClass):
             )
             self._image_handler.load()
             self._image_handler.set_photo()
-            call_set = False
-            if not all([
+
+            if all([
                 check_attr(self._image_handler, attr)
                 for attr in ('_extent_spots', '_image_roi', '_data_roi_xywh')
             ]):
-                logger.warning(
-                    'found partially initialized SampleImageHandler, calling '
-                    'setter'
-                )
-                call_set = True
-        if call_set or overwrite:
-            self.set_image_handler()
+                return self._image_handler
+            logger.warning(
+                'found partially initialized SampleImageHandler, calling '
+                'setter'
+            )
+        logger.info('Setting new image handler')
+        self.set_image_handler()
 
         return self._image_handler
 
-    def set_data_object(self, **kwargs):
+    def set_data_object(self, tag=None, **kwargs):
         self._data_object = XRF(
             path_folder=self.path_folder,
             measurement_name=self.measurement_name,
@@ -2362,6 +2458,7 @@ class ProjectXRF(ProjectBaseClass):
         )
         self._data_object.set_feature_table_from_txts()
         self._data_object.feature_table['R'] = 0
+        self._data_object.save(tag)
 
     def require_data_object(
             self,
@@ -2369,7 +2466,6 @@ class ProjectXRF(ProjectBaseClass):
             tag: str | None = None,
             **kwargs
     ) -> XRF:
-        call_set: bool = True
         if (self._data_object is not None) and (not overwrite):
             return self._data_object
         if (
@@ -2381,16 +2477,18 @@ class ProjectXRF(ProjectBaseClass):
                 measurement_name=self.measurement_name,
                 **kwargs
             )
-            self._data_object.load(tag)
-            call_set = False
-            if not check_attr(self._data_object, 'feature_table'):
-                logger.info(
+            try:
+                self._data_object.load(tag)
+                if check_attr(self._data_object, 'feature_table'):
+                    return self._data_object
+                logger.warning(
                     'loaded object does not have feature table, setting new one'
                 )
-                call_set = True
-        if call_set or overwrite:
-            self.set_data_object(**kwargs)
+            except FileNotFoundError:
+                logger.warning('Could not find data object with the {tag=}')
 
+        logger.info('Setting new data object')
+        self.set_data_object(tag=tag, **kwargs)
         return self._data_object
 
 
@@ -2563,9 +2661,11 @@ class ProjectMSI(ProjectBaseClass):
             overwrite: bool = False,
             **kwargs
     ) -> SampleImageHandlerMSI:
-        if (self._image_handler is not None) and (not overwrite):  # return existing
+        # return existing
+        if (self._image_handler is not None) and (not overwrite):
             return self._image_handler
-        elif check_attr(self, 'SampleImageHandlerMSI_file') and (not overwrite):  # load and set image
+        # load and set image
+        if check_attr(self, 'SampleImageHandlerMSI_file') and (not overwrite):
             logger.info(f'loading SampleHandler from {self.path_folder}')
             self._image_handler = SampleImageHandlerMSI(
                 path_folder=self.path_folder,
@@ -2574,12 +2674,13 @@ class ProjectMSI(ProjectBaseClass):
             )
             self._image_handler.load()
             self._image_handler.set_photo()
-        if (
-                (not check_attr(self._image_handler, '_extent_spots'))
-                or overwrite
-        ):  # make sure it has _extent_spots
-            self.set_image_handler(**kwargs)
+            # make sure it has _extent_spots
+            if check_attr(self._image_handler, '_extent_spots'):
+                return self._image_handler
+            logger.warning('Loaded image handler misses extent_spots')
 
+        logger.info('Initiating new ImageHandler instance')
+        self.set_image_handler(**kwargs)
         return self._image_handler
 
     def get_mcf_reader(self, **kwargs) -> ReadBrukerMCF:
@@ -2690,23 +2791,30 @@ class ProjectMSI(ProjectBaseClass):
             self._spectra: Spectra = Spectra(
                 path_d_folder=self.path_d_folder, initiate=False
             )
-            self._spectra.load(tag)
+            try:
+                self._spectra.load(tag)
 
-            # if feature_table or line spectra are set, we are good to return
-            if check_attr(self._spectra, '_feature_table'):
-                logger.info('loaded fully initialized spectra object')
-                return self._spectra
-            if check_attr(self._spectra, '_line_spectra'):
-                logger.info('loaded fully initialized spectra object')
-                self._spectra.set_feature_table()
-                return self._spectra
-            # if full is set to False, we can also return
-            logger.info('loaded partially initialized spectra object')
-            if ('full' in kwargs) and (kwargs.get('full') is False):
-                return self._spectra
+                # if feature_table or line spectra are set, we are good to return
+                if check_attr(self._spectra, '_line_spectra'):
+                    logger.info('loaded fully initialized spectra object')
+                    self._spectra.set_feature_table()
+                if check_attr(self._spectra, '_feature_table'):
+                    logger.info('loaded fully initialized spectra object')
+                    return self._spectra
+                # if full is set to False, we can also return
+                logger.warning('loaded partially initialized spectra object')
+                if ('full' in kwargs) and (kwargs.get('full') is False):
+                    return self._spectra
+            except FileNotFoundError:
+                logger.warning(f'Could not find spectra object with {tag=}')
 
+        if self._spectra is None:
+            logger.info('Initializing new spectra object')
+        else:
+            logger.info('Continuing processing of spectra object')
         self.set_spectra(
             spectra=self._spectra,  # continue from loaded spectra or None
+            tag=tag,
             **kwargs
         )
         return self._spectra
@@ -2728,10 +2836,10 @@ class ProjectMSI(ProjectBaseClass):
             tag: str | None = None,
             **kwargs
     ) -> DataAnalysisExport:
-        call_set: bool = True
         if (self._da_export is not None) and (not overwrite):
             return self._da_export
-        elif (
+
+        if (
             (
                 check_attr(self, 'DataAnalysisExport_file')
             ) and (not overwrite)
@@ -2739,16 +2847,17 @@ class ProjectMSI(ProjectBaseClass):
             self._da_export: DataAnalysisExport = DataAnalysisExport(
                 path_file=''
             )
-            self._da_export.load(tag)
-            call_set = False
-            if check_attr(self._da_export, 'feature_table'):
-                logger.info('loaded fully initialized spectra object')
-            elif check_attr(self._da_export, 'line_spectra'):
-                logger.info('loaded fully initialized spectra object')
-                self._spectra.set_feature_table()
-                call_set = True
-        if call_set or overwrite:
-            self.set_da_export(**kwargs)
+            try:
+                self._da_export.load(tag)
+                if check_attr(self._da_export, 'feature_table'):
+                    logger.info('loaded fully initialized spectra object')
+                    return self._da_export
+                logger.warning('Loaded corrupted DataAnalysisExport object')
+            except FileNotFoundError:
+                logger.warning(f'Could not find DataAnalysisExport with {tag=}')
+
+        logger.info('creating new DataAnalysisExport object')
+        self.set_da_export(tag=tag, **kwargs)
         return self._da_export
 
     @property
@@ -2781,7 +2890,6 @@ class ProjectMSI(ProjectBaseClass):
             tag: str | None = None,
             **kwargs
     ):
-        call_set = True
         # return an existing instance
         if (self._data_object is not None) and (not overwrite):
             return self._data_object
@@ -2793,17 +2901,20 @@ class ProjectMSI(ProjectBaseClass):
             self._data_object: MSI = MSI(
                 self.path_d_folder, path_mis_file=self.path_mis_file
             )
-            self._data_object.load(tag)
-            if check_attr(self.data_object, '_feature_table'):
-                # loaded good instance, can return
-                return self._data_object
-            else:
-                logger.warning(
-                    f'loaded corrupted {self._data_object.__class__.__name__} '
-                    'instance, setting new object')
+            try:
+                self._data_object.load(tag)
+                if check_attr(self.data_object, '_feature_table'):
+                    # loaded good instance, can return
+                    return self._data_object
+                else:
+                    logger.warning(
+                        f'loaded corrupted {self._data_object.__class__.__name__} '
+                        'instance, setting new object')
+            except FileNotFoundError:
+                logger.warning(f'Could not find data object with {tag=}')
 
         logger.info('Initializing new data object')
-        self.set_data_object(**kwargs)
+        self.set_data_object(tag=tag, **kwargs)
         return self._data_object
 
     def add_xrf(self, project_xrf: ProjectXRF, **kwargs) -> None:
@@ -3075,7 +3186,7 @@ def get_image_handler(is_MSI: bool, *args, **kwargs) -> SampleImageHandlerMSI | 
 
 class MultiMassWindowProject(ProjectBaseClass):
     """
-    project with multiple measurement windows (e.g. XRF and MSI or MSI with
+    other with multiple measurement windows (e.g. XRF and MSI or MSI with
     multiple mass windows).
     """
 

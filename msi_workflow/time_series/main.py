@@ -163,12 +163,15 @@ that before using this option'
 
     def get_standard_errors(self) -> pd.DataFrame:
         # standard error: sigma / sqrt(n)
-        columns = list(set(self.deviations.columns) & set(self.successes.columns))
-        successes: pd.DataFrame = self.successes.loc[:, columns]
+        columns = list(set(self.deviations.columns)
+                       & set(self.successes.columns)
+                       - {'zones'})
+        successes: np.ndarray = self.successes.loc[:, columns].to_numpy()
         # will encounter invalid values for 0 successes and any nans
-        sqrt_n = np.sqrt(successes,
-                         where=successes > 0,
-                         out=np.zeros_like(successes))
+        sqrt_n = np.zeros_like(successes)  # out, where still throws errors
+        mask = (successes > 0).ravel()
+        sqrt_n.ravel()[mask] = np.sqrt(successes.ravel()[mask])
+
         feature_table_standard_errors = np.divide(
             self.deviations.loc[:, columns],
             sqrt_n,

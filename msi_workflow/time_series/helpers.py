@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 def get_averaged_tables(
         data_object: MSI | XRF,
         image_classified: ImageClassified,
+        is_continuous: bool,
         average_by_col: str = 'classification_se',
         plts: bool = False,
         **kwargs
@@ -23,8 +24,9 @@ def get_averaged_tables(
     feature_table = data_object.feature_table
 
     if (
+            (not is_continuous) and (
             (image_classified is None) or
-            not check_attr(image_classified, 'params_laminae_simplified')
+            not check_attr(image_classified, 'params_laminae_simplified'))
     ):
         raise ValueError(
             'ImageClassified does not have laminae parameters set. Cannot '
@@ -51,48 +53,48 @@ def get_averaged_tables(
 
     ft_seeds_avg = ft_seeds_avg.fillna(0)
 
-    # add quality criteria
-    cols_quals = ['homogeneity', 'continuity', 'contrast', 'quality']
-    # only consider those seeds that are actually in the image
-    seeds = image_classified.params_laminae_simplified.seed.copy()
-    seeds *= np.array([
-        1 if (c == 'light') else -1
-        for c in image_classified.params_laminae_simplified.color]
-    )
-    row_mask = [seed in ft_seeds_avg.index for seed in seeds]
+    if not is_continuous:
+        # add quality criteria
+        cols_quals = ['homogeneity', 'continuity', 'contrast', 'quality']
+        # only consider those seeds that are actually in the image
+        seeds = image_classified.params_laminae_simplified.seed.copy()
+        seeds *= np.array([
+            1 if (c == 'light') else -1
+            for c in image_classified.params_laminae_simplified.color]
+        )
+        row_mask = [seed in ft_seeds_avg.index for seed in seeds]
 
-    quals = image_classified.params_laminae_simplified.loc[
-        row_mask, cols_quals + ['height']
-    ].copy()
-    # take weighted average for laminae with same seeds (weights are areas=heights)
-    quals_weighted = quals.copy().mul(quals.height.copy(), axis=0)
-    # reset height (otherwise height column would have values height ** 2
-    quals_weighted['height'] = quals.height.copy()
-    quals_weighted['seed'] = seeds
-    quals_weighted = quals_weighted.groupby(by='seed').sum()
-    quals_weighted = quals_weighted.div(quals_weighted.height, axis=0)
-    quals_weighted.drop(columns=['height'], inplace=True)
+        quals = image_classified.params_laminae_simplified.loc[
+            row_mask, cols_quals + ['height']
+        ].copy()
+        # take weighted average for laminae with same seeds (weights are areas=heights)
+        quals_weighted = quals.copy().mul(quals.height.copy(), axis=0)
+        # reset height (otherwise height column would have values height ** 2
+        quals_weighted['height'] = quals.height.copy()
+        quals_weighted['seed'] = seeds
+        quals_weighted = quals_weighted.groupby(by='seed').sum()
+        quals_weighted = quals_weighted.div(quals_weighted.height, axis=0)
+        quals_weighted.drop(columns=['height'], inplace=True)
 
-    # join the qualities to the averages table
-    ft_seeds_avg = ft_seeds_avg.join(quals_weighted, how='left')
-    # insert infty for every column in success table that is not there yet
-    missing_cols = set(ft_seeds_avg.columns).difference(
-        set(ft_seeds_success.columns)
-    )
+        # join the qualities to the averages table
+        ft_seeds_avg = ft_seeds_avg.join(quals_weighted, how='left')
+        # insert infty for every column in success table that is not there yet
+        missing_cols = set(ft_seeds_avg.columns).difference(
+            set(ft_seeds_success.columns)
+        )
+        for col in missing_cols:
+            ft_seeds_success.loc[:, col] = np.infty
 
-    for col in missing_cols:
-        ft_seeds_success.loc[:, col] = np.infty
-
-    # plot the qualities
-    if plts:
-        plt.figure()
-        plt.plot(quals_weighted.index, quals_weighted.quality, '+', label='qual')
-        plt.plot(ft_seeds_avg.index, ft_seeds_avg.quality, 'x', label='ft')
-        plt.legend()
-        plt.xlabel('zone')
-        plt.ylabel('quality')
-        plt.title('every x should have a +')
-        plt.show()
+        # plot the qualities
+        if plts:
+            plt.figure()
+            plt.plot(quals_weighted.index, quals_weighted.quality, '+', label='qual')
+            plt.plot(ft_seeds_avg.index, ft_seeds_avg.quality, 'x', label='ft')
+            plt.legend()
+            plt.xlabel('zone')
+            plt.ylabel('quality')
+            plt.title('every x should have a +')
+            plt.show()
 
     # drop index (=seed) into dataframe
     ft_seeds_avg.index.names = ['zone']
