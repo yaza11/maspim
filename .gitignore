@@ -1,7 +1,7 @@
 .spyder/
 test*.py
-msi_workflow/clustering/
-msi_workflow/data/annotating.py
+maspim/clustering/
+maspim/data/annotating.py
 build/
 msi_workflow.egg-info/
 dists/

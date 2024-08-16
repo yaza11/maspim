@@ -1,5 +1,5 @@
-from msi_workflow import get_project, AgeModel
-from msi_workflow.res.compound_masses import mC37_2, mC37_3
+from maspim import get_project, AgeModel
+from maspim.res.compound_masses import mC37_2, mC37_3
 
 age_model = AgeModel(depth=(480, 485), age=(0, 1))
 

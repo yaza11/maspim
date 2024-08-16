@@ -46,8 +46,8 @@ Generally it is advised to stick to the objects provided at the top level of `ma
 Let's look at a short example of how to define the ${U\_{37}^{k}}^\\prime$ proxy (which actually does a lot of work under the hood, you can set `plts = True` to get a feeling for that)
 
 ```python
-from msi_workflow import get_project
-from msi_workflow.res.compound_masses import mC37_2, mC37_3
+from maspim import get_project
+from maspim.res.compound_masses import mC37_2, mC37_3
 
 p = get_project(is_MSI=True, path_folder='path/to/your/measurement.i')
 p.require_images()  # sets or loads ImageHandler, ImageSample, ImageROI and ImageClassified

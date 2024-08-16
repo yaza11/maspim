@@ -9,7 +9,7 @@ with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
 
 VERSION = '1.0.2'
 DESCRIPTION = 'Processing of mass spectrometry imaging and micro X-Ray fluorescence data.'
-NAME = "msi_workflow"
+NAME = "maspim"
 
 # Setting up
 setup(
