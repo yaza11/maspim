@@ -61,15 +61,15 @@ class TimeSeries(DataBaseClass, Convinience):
     def _sort_tables(self) -> None:
         if check_attr(self, '_feature_table'):
             self._feature_table = self._feature_table\
-                .sort_values(by='depth')\
+                .sort_values(by='x_ROI')\
                 .reset_index(drop=True)
         if check_attr(self, '_feature_table_standard_deviations'):
             self._feature_table_standard_deviations = self._feature_table_standard_deviations \
-                .sort_values(by='depth') \
+                .sort_values(by='x_ROI') \
                 .reset_index(drop=True)
         if check_attr(self, '_feature_table_successes'):
             self._feature_table_successes = self._feature_table_successes \
-                .sort_values(by='depth') \
+                .sort_values(by='x_ROI') \
                 .reset_index(drop=True)
 
     def _post_load(self) -> None:
@@ -970,7 +970,10 @@ that before using this option'
                 mask_valid = np.ones_like(t, dtype=bool)
             _t = t[mask_valid]
             _values = data_scaled.loc[mask_valid, comp_]
-            _error = errors_scaled.loc[mask_valid, comp_]
+            if errors_scaled is not None:
+                _error = errors_scaled.loc[mask_valid, comp_]
+            else:
+                _error = None
 
             return mask_valid, _t, _values, _error
 

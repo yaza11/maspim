@@ -7,7 +7,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
     long_description = "\n" + fh.read()
 
-VERSION = '1.0.2'
+VERSION = '1.0.5'
 DESCRIPTION = 'Processing of mass spectrometry imaging and micro X-Ray fluorescence data.'
 NAME = "maspim"
 
@@ -20,7 +20,7 @@ setup(
     description=DESCRIPTION,
     long_description_content_type="text/markdown",
     long_description=long_description,
-    url="https://github.com/weimin-liu/msi_workflow",
+    url="https://github.com/yaza11/maspim",
     packages=find_packages(),
     package_data={NAME: ['res/calibrants.txt', 'res/elements.txt']},
     install_requires=['matplotlib', 'numpy', 'pandas', 'rpy2', 'scipy', 'tqdm',

@@ -2090,6 +2090,7 @@ class ProjectBaseClass:
             **kwargs
     ) -> None:
         assert self._data_object is not None, 'call require_data_object'
+
         if not is_continuous:
             assert self._image_classified is not None, 'call require_image_classified'
             assert check_attr(self.image_classified,
@@ -2115,7 +2116,7 @@ class ProjectBaseClass:
 
         ft_seeds_avg, ft_seeds_success, ft_seeds_std = get_averaged_tables(
             data_object=self.data_object,
-            image_classified=self.image_classified,
+            image_classified=self._image_classified,
             is_continuous=is_continuous,
             **kwargs
         )
@@ -2759,8 +2760,9 @@ class ProjectMSI(ProjectBaseClass):
             logger.info('spectra object does not have kernels')
             self._spectra.set_kernels(**kwargs)
         if targets is not None:
-            self._spectra.set_targets(targets, plts=plts)
-        if not check_attr(self._spectra, '_line_spectra', True):
+            self._spectra.set_targets(targets, reader=reader, plts=plts, **kwargs)
+            self._spectra.filter_line_spectra(SNR_threshold=SNR_threshold, **kwargs)
+        elif not check_attr(self._spectra, '_line_spectra', True):
             logger.info('spectra object does not have binned spectra')
             self._spectra.bin_spectra(reader, **kwargs)
             self._spectra.filter_line_spectra(SNR_threshold=SNR_threshold, **kwargs)

@@ -1603,7 +1603,7 @@ class Spectra(Convinience):
             for i in range(len(self._peaks)):
                 y = self._kernel_func(self.mzs, *self.kernel_params[i, :])
                 mask_kernel = (np.abs(self.kernel_params[i, 0] - self.mzs)
-                        <= (20 * self.kernel_params[i, -1]))
+                               <= (20 * self.kernel_params[i, -1]))
 
                 mask |= mask_kernel
 

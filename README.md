@@ -20,7 +20,7 @@ You may also want to check out [msiAlign](https://github.com/weimin-liu/msiAlign
 Currently `maspim` is not on PyPI. For now just run
 
 ```bash
-pip install git+https://github.com/weimin-liu/msi_workflow.git
+pip install git+https://github.com/yaza11/maspim.git
 ```
 
 in your console (assuming you have pip installed).
@@ -43,18 +43,26 @@ Generally it is advised to stick to the objects provided at the top level of `ma
 
 `ProjectMSI` and `ProjectXRF` are the core objects of this package, which manage most of the aforementioned objects. So unless you have a very specific application in mind, it is recommended to do everything with the methods provided by `ProjectMSI` and `ProjectXRF`.
 
-Let's look at a short example of how to define the ${U\_{37}^{k}}^\\prime$ proxy (which actually does a lot of work under the hood, you can set `plts = True` to get a feeling for that)
-
+Let's look at a short example of how to define the ${U\_{37}^{k}}^\\prime$ proxy, which you can use to check that your installation worked.
 ```python
 from maspim import get_project
 from maspim.res.compound_masses import mC37_2, mC37_3
 
-p = get_project(is_MSI=True, path_folder='path/to/your/measurement.i')
-p.require_images()  # sets or loads ImageHandler, ImageSample, ImageROI and ImageClassified
-p.set_spectra(targets=[mC37_2, mC37_3])  # perform all steps to extract intensities from alkenones
+p = get_project(is_MSI=True, path_folder='path/to/your/measurement.i', is_laminated=False)
+# sets or loads ImageHandler, ImageSample, ImageROI and ImageClassified
+p.require_images()
+# perform all steps to extract intensities from alkenones
+p.set_spectra(targets=[mC37_2, mC37_3], surpress_warnings=True)
 p.set_data_object()
-p.set_time_series()
-p.set_UK37()
+p.add_pixels_ROI()
+# we did not provide any ages, so a time series does not make much sense, but 
+# this is just a test, so don't try to interpret the results
+p.set_time_series(average_by_col='x', is_continuous=True)
+p.set_UK37(method_SST='prahl', n_successes_required=0)
+# we can use the index instead of the age for now
+p.uk37_proxy.feature_table.loc[:, 'age'] = p.uk37_proxy.feature_table.x
+# you should see a plot after this
+p.uk37_proxy.plot_comp('SST', errors=False)
 ```
 
 ## Contributing to `maspim`
