@@ -5,6 +5,8 @@ maspim/data/annotating.py
 build/
 msi_workflow.egg-info/
 dists/
+maspim/test/
+maspim/testing/
 
 !test.py
 
