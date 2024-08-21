@@ -17,7 +17,14 @@ You may also want to check out [msiAlign](https://github.com/weimin-liu/msiAlign
 
 ## Installing `maspim`
 
-Currently `maspim` is not on PyPI. For now just run
+`maspim` is now on [PyPI](https://pypi.org/project/maspim/). 
+```bash
+pip install maspim
+```
+
+Also, checkout our [github page](https://github.com/yaza11/maspim) for the up-to-date version and additional resources.
+
+To get the freshest version, run
 
 ```bash
 pip install git+https://github.com/yaza11/maspim.git
