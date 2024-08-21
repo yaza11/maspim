@@ -1,12 +1,15 @@
 import os
 import re
 import sqlite3
+import logging
 
 import numpy as np
 import pandas as pd
 
 from typing import Iterable
 from textdistance import damerau_levenshtein as textdistance
+
+logger = logging.getLogger(__name__)
 
 
 def find_matches(
@@ -16,11 +19,11 @@ def find_matches(
         file_types: str | list[str] | None = None,
         must_include_substrings: bool = False,
         return_mode: str = 'best'
-) -> str | list[str]:
+) -> str | list[str] | None:
     assert (files is not None) or (folder is not None), \
         'Provide either the folder or a list of files.'
-    assert return_mode in ('best', 'valid', 'all'), \
-        f'return mode must be one of "best" or "valid", not {return_mode}'
+    assert return_mode in (return_modes := ('best', 'valid', 'all')), \
+        f'return mode must be one of {return_modes}, not {return_mode}'
     
     if substrings is None:
         substrings = ['']
@@ -41,6 +44,16 @@ def find_matches(
     if file_types is not None:
         # exclude files whose suffix does not match
         files = [file for file in files if file.split('.')[-1] in file_types]
+    if len(files) == 0:
+        msg = f'did not find any file in {files} with {file_types=}'
+        if must_include_substrings:
+            msg += f'and {substrings=}'
+        # premature exit for best
+        # (this actually an error as best suggests there is at least one match)
+        if return_mode == 'best':
+            logger.error(msg)
+            return
+        logger.info(msg)
     # return all files matching criteria
     if return_mode in ('valid', 'all'):
         return files
@@ -93,20 +106,26 @@ def find_files(folder_structure: dict[str, dict | str], *names, by_suffix=False)
     return matches
 
 
-def get_mis_file(path_folder, name_file: str | None = None) -> str:
+def get_mis_file(path_folder, name_file: str | None = None) -> str | None:
     """Find the name of the mis file inside the .i folder"""
     # folder_structure = get_folder_structure(path_folder)
     # return find_files(folder_structure, 'mis', by_suffix=True)['mis']
     if name_file is None:
         name_file = os.path.basename(path_folder).split('.')[0] + '.mis'
-    return find_matches(name_file, folder=path_folder, file_types='mis')
+    matches = find_matches(name_file, folder=path_folder, file_types='mis')
+    if matches is None:
+        raise FileNotFoundError(f'Could not find mis file inside {path_folder}')
+    return matches
 
 
-def get_d_folder(path_folder, return_mode='best') -> str:
+def get_d_folder(path_folder, return_mode='best') -> str | list[str] | None:
     """Get the name of the .d folder inside the .i folder"""
-    return find_matches(folder=path_folder, file_types='d', return_mode=return_mode)
+    matches = find_matches(folder=path_folder, file_types='d', return_mode=return_mode)
+    if matches is None:
+        raise FileNotFoundError('No d folder found inside {path_folder}')
+    return matches
 
-def search_keys_in_xml(path_mis_file, keys):
+def search_keys_in_xml(path_mis_file: str, keys: Iterable[str]) -> dict[str, list[str] | str]:
     # iniate list of lists for values
     out_dict = {key: [] for key in keys}
     # open xml
@@ -126,8 +145,14 @@ def search_keys_in_xml(path_mis_file, keys):
     return out_dict
 
 
-def get_image_file(path_folder):
-    path_mis_file = os.path.join(path_folder, get_mis_file(path_folder))
+def get_image_file(path_folder: str) -> str:
+    try:
+        mis_file: str = get_mis_file(path_folder)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f'Unable to determine image file from mis file because no mis file '
+            'was found in {path_folder}')
+    path_mis_file: str = os.path.join(path_folder, mis_file)
     return search_keys_in_xml(path_mis_file, ['ImageFile'])['ImageFile']
 
 

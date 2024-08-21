@@ -1,6 +1,7 @@
 """
 This module contains the project class which is used to manage various objects for XRF and MSI measurements.
 """
+import functools
 import json
 import os
 import re
@@ -26,7 +27,7 @@ from maspim.time_series.helpers import get_averaged_tables
 from maspim.util import Convinience
 
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
-from maspim.exporting.from_mcf.helper import Spectrum
+from maspim.exporting.from_mcf.helper import Spectrum, get_mzs_for_limits
 from maspim.exporting.from_mcf.spectrum import Spectra, MultiSectionSpectra
 from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
 
@@ -119,8 +120,10 @@ class SampleImageHandlerMSI(Convinience):
         path_folder : str
             The folder containing the d folder, mis file and sample photos.
         path_d_folder : str
-            The d folder inside the folder. If not provided, the folder name is searched inside the path_folder
-            Specifying this is only necessary when multiple d folders are inside the folder.
+            The d folder inside the folder. If not provided, the folder name
+            is searched inside the path_folder
+            Specifying this is only necessary when multiple d folders are
+            inside the folder.
         path_mis_file: str, optional
             Path and name of the mis file to use.
 
@@ -141,7 +144,6 @@ class SampleImageHandlerMSI(Convinience):
 
         self.image_file = get_image_file(self.path_folder)
 
-
     @property
     def path_d_folder(self):
         return os.path.join(self.path_folder, self.d_folder)
@@ -154,16 +156,13 @@ class SampleImageHandlerMSI(Convinience):
     def path_image_file(self):
         return os.path.join(self.path_folder, self.image_file)
 
-    def set_photo(self):
+    @functools.cached_property
+    def image(self) -> PIL_Image.Image:
         """
         Set the photo from the determined file as PIL image.
-
-        Returns
-        -------
-        None.
-
         """
-        self.image: PIL_Image.Image = PIL_Image.open(self.path_image_file)
+        image: PIL_Image.Image = PIL_Image.open(self.path_image_file)
+        return image
 
     def set_extent_data(
             self,
@@ -187,7 +186,8 @@ class SampleImageHandlerMSI(Convinience):
         None.
 
         """
-        if (reader is None) or (not check_attr(reader, 'spots')):  # no reader specified or reader does not have spots
+        # no reader specified or reader does not have spots
+        if (reader is None) or (not check_attr(reader, 'spots')):
             if spot_info is None:  # create new instance
                 spot_info: pd.DataFrame = get_spots(
                     path_d_folder=self.path_d_folder
@@ -221,6 +221,32 @@ class SampleImageHandlerMSI(Convinience):
             self.set_extent_data()
         return self._extent_spots
 
+    def _draw_measurement_area(self, canvas: PIL_Image.Image) -> PIL_Image.Image:
+        assert check_attr(self, 'points'), 'call set_photo_ROI'
+        canvas = canvas.copy()
+        draw = PIL_ImageDraw.Draw(canvas)
+
+        # define linewidth in terms of image size
+        linewidth = round(min(canvas._size[:2]) / 100)
+
+        if len(self.points) < 3:  # for rectangle
+            # p1 --> smaller x value
+            points_: list[tuple[int, int]] = self.points.copy()
+            # the PIL rectangle function is very specific about the order of points
+            points_.sort()
+            p1, p2 = points_
+            # swap ys of p1 and p2
+            if p1[1] > p2[1]:
+                p1_ = (p1[0], p2[1])
+                p2_ = (p2[0], p1[1])
+                p1 = p1_
+                p2 = p2_
+            points_: list[tuple[int, int]] = [p1, p2]
+            draw.rectangle(points_, outline=(255, 0, 0), width=linewidth)
+        else:
+            draw.polygon(self.points, outline=(255, 0, 0), width=linewidth)
+        return canvas
+
     def set_photo_ROI(
             self,
             match_roi_data: bool = True,
@@ -252,42 +278,23 @@ class SampleImageHandlerMSI(Convinience):
 
         # get points specifying the measurement area
         points_mis: list[str] = mis_dict['Point']
-        # format points
-        points: list[tuple[int, int]] = []
+        # format self.points
+        self.points: list[tuple[int, int]] = []
         # get the points of the defined area
         for point in points_mis:
             p: tuple[int, int] = (int(point.split(',')[0]), int(point.split(',')[1]))
-            points.append(p)
+            self.points.append(p)
 
         if plts:
-            # draw measurement area on top of original image
-            img_rect = self.image.copy()
-            draw = PIL_ImageDraw.Draw(img_rect)
-            # define linewidth in terms of image size
-            linewidth = round(min(self.image._size[:2]) / 100)
-            # the PIL rectangle function is very specific about the order of points
-            if len(points) < 3:  # for rectangle
-                # p1 --> smaller x value
-                points_: list[tuple[int, int]] = points.copy()
-                points_.sort()
-                p1, p2 = points_
-                # swap ys of p1 and p2
-                if p1[1] > p2[1]:
-                    p1_ = (p1[0], p2[1])
-                    p2_ = (p2[0], p1[1])
-                    p1 = p1_
-                    p2 = p2_
-                points_: list[tuple[int, int]] = [p1, p2]
-                draw.rectangle(points_, outline=(255, 0, 0), width=linewidth)
-            else:
-                draw.polygon(points, outline=(255, 0, 0), width=linewidth)
+            canvas = self._draw_measurement_area(self.image)
+            img = np.array(canvas)
             plt.figure()
-            plt.imshow(img_rect, interpolation='None')
+            plt.imshow(img, interpolation='None')
             plt.show()
 
         # get the _extent of the image
-        points_x: list[int] = [p[0] for p in points]
-        points_y: list[int] = [p[1] for p in points]
+        points_x: list[int] = [p[0] for p in self.points]
+        points_y: list[int] = [p[1] for p in self.points]
 
         # the _extent of measurement area in pixel coordinates
         x_min_area: int = np.min(points_x)
@@ -354,7 +361,10 @@ class SampleImageHandlerMSI(Convinience):
             self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False
     ) -> None | tuple[plt.Figure, plt.Axes]:
         """Plot the image with identified region of measurement."""
-        img = PIL_to_np(self.image)
+        if not check_attr(self, 'points'):
+            self.set_photo_ROI()
+        draw = self._draw_measurement_area(self.image)
+        img = PIL_to_np(draw)
 
         x, y, w, h = self.photo_ROI_xywh
         rect_photo = patches.Rectangle((x, y), w, h, fill=False, edgecolor='g')
@@ -464,6 +474,8 @@ class SampleImageHandlerXRF(Convinience):
 
         if path_folder is not None:
             self.path_folder: str = path_folder
+        elif path_image_file is not None:
+            self.path_folder: str = os.path.dirname(path_image_file)
 
         if path_image_roi_file is None:
             path_image_roi_file: str = path_image_file
@@ -475,10 +487,14 @@ class SampleImageHandlerXRF(Convinience):
 
     @property
     def path_image_file(self):
+        assert self.image_file is not None
+        assert self.path_folder is not None
         return os.path.join(self.path_folder, self.image_file)
 
     @property
     def path_image_roi_file(self):
+        assert self.image_roi_file is not None
+        assert self.path_folder is not None
         return os.path.join(self.path_folder, self.image_roi_file)
 
     def set_photo(self) -> None:
@@ -660,7 +676,6 @@ class ProjectBaseClass:
     # flags
     _is_laminated = None
     _is_MSI = None
-    _corrected_tilt: bool = False
 
     def __repr__(self) -> str:
         return object_to_string(self)
@@ -848,7 +863,7 @@ class ProjectBaseClass:
         ----------
         obj_color: str, optional
             The color of the sample relative to the background (either 'dark'
-            or 'light'). If not specified, this parameter will be determined \
+            or 'light'). If not specified, this parameter will be determined
             automatically or loaded from the saved object, if available.
         use_extent_from_mis: bool, optional
             If True, will determine the image extent from the measurement area
@@ -861,13 +876,21 @@ class ProjectBaseClass:
         None
 
         """
-        self._image_sample: ImageSample = ImageSample(
-            path_folder=self.path_folder,
-            image=self.image_handler.image,
-            image_type='pil',
-            obj_color=obj_color
-        )
-
+        # pass image file from handler if it has it else the image
+        # that way we can save disk space as ImageSample only saves the Image
+        # if it does not know the image file
+        if check_attr(self.image_handler, 'image_file'):
+            image_file: str = self.image_handler.image_file
+            path_image_file: str = os.path.join(self.path_folder, image_file)
+            image_kwargs: dict = dict(path_image_file=path_image_file)
+        else:
+            image_kwargs: dict = dict(image=self.image_handler.image,
+                                      image_type='pil')
+            logger.warning('Handler does not have an image file, this should '
+                           'not happen and will increase the disk space needed')
+        self._image_sample: ImageSample = ImageSample(path_folder=self.path_folder,
+                                                      obj_color=obj_color,
+                                                      **image_kwargs)
         if (
                 use_extent_from_mis and
                 (not check_attr(self._image_sample, '_xywh_ROI'))
@@ -878,7 +901,7 @@ class ProjectBaseClass:
                     'Need an image handler with photo ROI'
             except Exception as e:
                 logger.error(e)
-                logger.info('Could not set photo ROI, continuing with fitting box')
+                logger.error('Could not set photo ROI, continuing with fitting box')
                 use_extent_from_mis = False
 
         if use_extent_from_mis:
@@ -909,12 +932,8 @@ class ProjectBaseClass:
                 or (tag is not None)
         ) and (not overwrite):
             logger.info('loading ImageSample')
-            self._image_sample: ImageSample = ImageSample(
-                path_folder=self.path_folder,
-                image=self.image_handler.image,
-                image_type='pil',
-                obj_color=obj_color
-            )
+            self._image_sample: ImageSample = ImageSample(path_folder=self.path_folder, image=self.image_handler.image,
+                                                          image_type='pil', obj_color=obj_color)
             try:
                 self._image_sample.load(tag)
                 if check_attr(self._image_sample, '_xywh_ROI'):
@@ -1049,7 +1068,11 @@ class ProjectBaseClass:
         self._image_classified: ImageClassified = ImageClassified.from_parent(
             self.image_roi, use_tilt_correction=use_tilt_correction, **kwargs
         )
-        self._image_classified.age_span = self.age_span
+        if (
+                not check_attr(self._image_classified, 'age_span')
+                and check_attr(self, 'age_span')
+        ):
+            self._image_classified.age_span = self.age_span
 
         logger.info('setting laminae in ImageClassified ...')
         self._image_classified.set_laminae_params_table(
@@ -1261,7 +1284,7 @@ class ProjectBaseClass:
         self.data_object.add_attribute_from_image(image, 'classification', **kwargs)
 
     def data_object_apply_tilt_correction(self) -> None:
-        assert not self._corrected_tilt, 'tilt has already been corrected'
+        assert not self.corrected_tilt, 'tilt has already been corrected'
         assert self._data_object is not None, 'set data_object.'
         assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
 
@@ -1299,7 +1322,6 @@ class ProjectBaseClass:
             )
             logger.info('successfully loaded mapper and applied tilt correction')
 
-            self._corrected_tilt: bool = True
         else:
             raise FileNotFoundError(
                 f'expected to find a Mapping at '
@@ -1309,7 +1331,7 @@ class ProjectBaseClass:
 
     @property
     def corrected_tilt(self) -> bool:
-        return self._corrected_tilt
+        return self._data_object.tilt_correction_applied
 
     def add_laminae_classification(self, **kwargs) -> None:
         """
@@ -1433,7 +1455,13 @@ class ProjectBaseClass:
             self.data_object.feature_table[depth_col]
         )
 
-    def set_xray(self, path_image_file: str, overwrite_long: bool = False, **kwargs):
+    def set_xray(
+            self,
+            path_image_file: str,
+            overwrite_long: bool = False,
+            plts: bool = False,
+            **kwargs
+    ) -> None:
         """
         Set the X-ray object from the specified image file and depth section.
 
@@ -1445,7 +1473,7 @@ class ProjectBaseClass:
         assert path_image_file is not None, \
             'Providing an image file is required for setting the xray instance'
         assert os.path.exists(path_image_file), f'could not find {path_image_file=}'
-        assert self.depth_span is not None, \
+        assert (self.depth_span is not None) or ('depth_section' in kwargs), \
             'set depth span or pass the depth_section argument'
 
         self._xray_long = XRay(path_image_file=path_image_file, **kwargs)
@@ -1456,12 +1484,12 @@ class ProjectBaseClass:
             self._xray_long.load(kwargs.get('tag'))
         else:
             self._xray_long.require_image_rotated()
-            self._xray_long.require_image_sample_area(**kwargs)
-            self._xray_long.remove_bars(**kwargs)
+            self._xray_long.require_image_sample_area(plts=plts, **kwargs)
+            self._xray_long.remove_bars(plts=plts, **kwargs)
             self._xray_long.save(kwargs.get('tag'))
 
         self._xray: XRayROI = self._xray_long.get_roi_from_section(
-            self.depth_span
+            self.depth_span, plts=plts
         )
         self._xray.save(kwargs.get('tag'))
 
@@ -2283,7 +2311,7 @@ class ProjectXRF(ProjectBaseClass):
         self.path_d_folder: str = self.path_folder
 
         if measurement_name is not None:
-            self.measurement_name = measurement_name
+            self.measurement_name: str = measurement_name
         else:
             self._set_measurement_name()
         self._set_files(
@@ -2292,7 +2320,7 @@ class ProjectXRF(ProjectBaseClass):
         self._is_laminated: bool = is_laminated
 
     def _set_measurement_name(self):
-        # folder should have measurement name in it --> a captial letter, 4 digits and
+        # folder should have measurement name in it --> a capital letter, 4 digits and
         # a lower letter
         folder = os.path.split(self.path_folder)[1]
         pattern = r'^[A-Z]\d{3,4}[a-z]'
@@ -2304,7 +2332,7 @@ class ProjectXRF(ProjectBaseClass):
                 f'Folder {folder} does not contain measurement name at beginning, please rename folder',
             )
         else:
-            self.measurement_name = result
+            self.measurement_name: str = result
 
     def _set_files(
             self,
@@ -2316,6 +2344,7 @@ class ProjectXRF(ProjectBaseClass):
         files: list[str] = os.listdir(self.path_folder)
 
         if path_bcf_file is None:
+            # it's fine to keep this on the error level without throwing an error
             bcf_file = find_matches(
                 substrings=self.measurement_name,
                 files=files,
@@ -2324,17 +2353,17 @@ class ProjectXRF(ProjectBaseClass):
         else:
             bcf_file = os.path.basename(path_bcf_file)
         if path_image_file is None:
-            try:
-                image_file = find_matches(
-                    substrings='Mosaic',
-                    files=files,
-                    file_types=['tif', 'bmp', 'png', 'jpg'],
-                    must_include_substrings=True
-                )
-            except ValueError as e:
-                # sometimes the image file does not contain 'Mosaic' in its name
-                logger.info(e)
-                logger.info('found no image file containing "Mosaic", expanding search')
+            image_file = find_matches(
+                substrings='Mosaic',
+                files=files,
+                file_types=['tif', 'bmp', 'png', 'jpg'],
+                must_include_substrings=True
+            )
+            if image_file is None:
+                logger.info(
+                    'found no image file containing "Mosaic", expanding search'
+                    ' to anything containing "ROI"')
+
                 image_file = find_matches(
                     substrings='ROI',
                     files=files,
@@ -2378,7 +2407,9 @@ class ProjectXRF(ProjectBaseClass):
         self.__dict__ |= dict_files
 
     @property
-    def path_bcf_file(self):
+    def path_bcf_file(self) -> str | None:
+        if not check_attr(self, 'bcf_file'):
+            return None
         return os.path.join(self.path_folder, self.bcf_file)
 
     @property
@@ -2536,8 +2567,9 @@ class ProjectMSI(ProjectBaseClass):
 
     def _set_files(self, d_folder: str | None = None, mis_file: str | None = None):
         """
-        Find d folder, mis file and saved objects inside the d folder. If multiple d folders are inside the .i folder,
-        the d folder must be specified
+        Find d folder, mis file and saved objects inside the d folder. If
+        multiple d folders are inside the .i folder, the d folder must be
+        specified
 
         Returns
         -------
@@ -2546,17 +2578,22 @@ class ProjectMSI(ProjectBaseClass):
         """
         folder_structure = get_folder_structure(self.path_folder)
         if d_folder is None:
-            d_folders = get_d_folder(self.path_folder, return_mode='valid')
-            assert len(d_folders) == 1, \
-                (f'Found multiple or no d folders {d_folders},'
+            d_folders: list[str] = get_d_folder(self.path_folder, return_mode='valid')
+            assert len(d_folders) < 2, \
+                (f'Found multiple d folders {d_folders},'
                  ' please specify the name of the file by providing the d_folder'
                  ' keyword upon initialization.')
-            d_folder = d_folders[0]
-            name_mis_file = d_folder.split('.')[0] + '.mis'
+            assert len(d_folders) > 0, \
+                (f'Found no d folder in {self.path_folder}, maybe the d '
+                 f'folder does not end in .d?')
+            d_folder: str = d_folders[0]
+            # best guess for mis file name is that it is the same as the folder
+            # name
+            name_mis_file: str = d_folder.split('.')[0] + '.mis'
         else:
-            name_mis_file = None
+            name_mis_file: None = None
         if mis_file is None:
-            mis_file = get_mis_file(self.path_folder, name_file=name_mis_file)
+            mis_file: str = get_mis_file(self.path_folder, name_file=name_mis_file)
 
         dict_files: dict[str, str] = {
             'd_folder': d_folder,
@@ -2564,29 +2601,30 @@ class ProjectMSI(ProjectBaseClass):
         }
 
         if dict_files.get('d_folder') is not None:
-            self.d_folder = dict_files['d_folder']
+            self.d_folder: str = dict_files['d_folder']
         else:
             raise FileNotFoundError(f'Found no d folder in {self.path_folder}')
 
         if dict_files.get('mis_file') is not None:
-            self.mis_file = dict_files['mis_file']
+            self.mis_file: str = dict_files['mis_file']
         else:
             raise FileNotFoundError(f'Found no mis file in {self.path_folder}')
 
         # try finding savefiles inside d-folder
-        targets_d_folder = [
+        targets_d_folder: list[str] = [
             'peaks.sqlite',
             'Spectra.pickle',
             'MSI.pickle',
             'AgeModel.pickle',
             'TimeSeries.pickle'
         ]
-        targets_folder = [
+        targets_folder: list[str] = [
             'ImageSample.pickle',
             'ImageROI.pickle',
             'ImageClassified.pickle',
             'SampleImageHandlerMSI.pickle',
-            'DataAnalysisExport.pickle'
+            'DataAnalysisExport.pickle',
+            'XRayROI.pickle'
         ]
 
         # get d_folder
@@ -2613,10 +2651,8 @@ class ProjectMSI(ProjectBaseClass):
             k_new = k.split('.')[0] + '_file'
             dict_files[k_new] = v
 
-        if os.path.exists(os.path.join(self.path_d_folder, 'Spectra.pickle')):
-            dict_files['hdf_file'] = 'Spectra.pickle'
-
-
+        if os.path.exists(os.path.join(self.path_d_folder, 'Spectra.hdf5')):
+            dict_files['hdf_file'] = 'Spectra.hdf5'
 
         self.__dict__ |= dict_files
 
@@ -2650,12 +2686,12 @@ class ProjectMSI(ProjectBaseClass):
         )
 
         self._image_handler.set_extent_data(
-            reader=kwargs.get('reader'), spot_info=kwargs.get('spot_info')
+            reader=kwargs.get('reader'),
+            spot_info=kwargs.get('spot_info')
         )
         self._image_handler.set_photo_ROI(**kwargs)
         self._image_handler.save()
         self._update_files()
-        self._image_handler.set_photo()
 
     def require_image_handler(
             self,
@@ -2674,7 +2710,6 @@ class ProjectMSI(ProjectBaseClass):
                 path_mis_file=self.path_mis_file
             )
             self._image_handler.load()
-            self._image_handler.set_photo()
             # make sure it has _extent_spots
             if check_attr(self._image_handler, '_extent_spots'):
                 return self._image_handler
@@ -2691,8 +2726,44 @@ class ProjectMSI(ProjectBaseClass):
         reader.create_spots()
         reader.set_meta_data()
         if 'limits' not in kwargs:
-            reader.set_casi_window()
+            try:
+                reader.set_casi_window()
+            except ValueError as e:
+                logger.error(e)
+                logger.error('setting window to broadband (400, 2000)')
+                reader.limits = (400, 2000)
         return reader
+
+    def set_hdf_file_targets(
+            self,
+            targets: Iterable[float],
+            tolerances: float | Iterable[float] = 3e-3 * 3,
+            **kwargs
+    ) -> None:
+        """
+        Sets an hdf5 file that only contains intensity values around targets.
+
+        Parameters
+        ----------
+        targets : Iterable[float]
+            The target masses
+        tolerances : float | Iterable[float], optional
+            The tolerances
+
+        """
+        if not hasattr(tolerances, '__iter__'):
+            tolerances: list[float] = [tolerances] * len(targets)
+        assert len(tolerances) == len(targets), \
+            'must provide float or iterable of same length as targets for tolerances'
+
+        reader: ReadBrukerMCF = kwargs.pop('reader', self.get_mcf_reader())
+        mzs = get_mzs_for_limits(reader.limits,
+                                 delta_mz=kwargs.pop('delta_mz', 1e-4))
+        mask = np.zeros_like(mzs, dtype=bool)
+        for target, tolerance in zip(targets, tolerances):
+            mask_target = (mzs > target - tolerance) & (mzs < target + tolerance)
+            mask |= mask_target
+        self.set_hdf_file(reader=reader, mzs=mzs[mask], **kwargs)
 
     def set_hdf_file(
             self, reader: ReadBrukerMCF | None = None, **kwargs
@@ -2701,7 +2772,7 @@ class ProjectMSI(ProjectBaseClass):
         logger.info(f'creating hdf5 file in {self.path_d_folder}')
 
         if reader is None:
-            reader = self.get_mcf_reader()
+            reader: ReadBrukerMCF = self.get_mcf_reader()
 
         handler.write(reader, **kwargs)
 
@@ -2752,7 +2823,6 @@ class ProjectMSI(ProjectBaseClass):
             self._spectra.add_calibrated_spectra(reader=reader, **kwargs)
             if plts:
                 self._spectra.plot_calibration_functions(reader, n_plot=3)
-            self._spectra.add_all_spectra(reader)
         if not check_attr(self.spectra, '_peaks'):
             logger.info('spectra object does not have peaks')
             self._spectra.set_peaks(**kwargs)
@@ -2761,11 +2831,11 @@ class ProjectMSI(ProjectBaseClass):
             self._spectra.set_kernels(**kwargs)
         if targets is not None:
             self._spectra.set_targets(targets, reader=reader, plts=plts, **kwargs)
-            self._spectra.filter_line_spectra(SNR_threshold=SNR_threshold, **kwargs)
+            self._spectra.filter_line_spectra(binned_snr_threshold=SNR_threshold, **kwargs)
         elif not check_attr(self._spectra, '_line_spectra', True):
             logger.info('spectra object does not have binned spectra')
             self._spectra.bin_spectra(reader, **kwargs)
-            self._spectra.filter_line_spectra(SNR_threshold=SNR_threshold, **kwargs)
+            self._spectra.filter_line_spectra(binned_snr_threshold=SNR_threshold, **kwargs)
         if not check_attr(self.spectra, '_feature_table'):
             self._spectra.set_feature_table(**kwargs)
 
@@ -2793,22 +2863,23 @@ class ProjectMSI(ProjectBaseClass):
             self._spectra: Spectra = Spectra(
                 path_d_folder=self.path_d_folder, initiate=False
             )
-            try:
+            if os.path.exists(self._spectra.get_save_file(tag=tag)):
                 self._spectra.load(tag)
-
+            else:
+                self._spectra = None
+                logger.warning(f'Could not find spectra object with {tag=} '
+                               f'in {self.path_d_folder}')
                 # if feature_table or line spectra are set, we are good to return
-                if check_attr(self._spectra, '_line_spectra'):
-                    logger.info('loaded fully initialized spectra object')
-                    self._spectra.set_feature_table()
-                if check_attr(self._spectra, '_feature_table'):
-                    logger.info('loaded fully initialized spectra object')
-                    return self._spectra
-                # if full is set to False, we can also return
-                logger.warning('loaded partially initialized spectra object')
-                if ('full' in kwargs) and (kwargs.get('full') is False):
-                    return self._spectra
-            except FileNotFoundError:
-                logger.warning(f'Could not find spectra object with {tag=}')
+            if check_attr(self._spectra, '_line_spectra'):
+                logger.info('loaded fully initialized spectra object')
+                self._spectra.set_feature_table()
+            if check_attr(self._spectra, '_feature_table'):
+                logger.info('loaded fully initialized spectra object')
+                return self._spectra
+            # if full is set to False, we can also return
+            logger.warning('loaded partially initialized spectra object')
+            if ('full' in kwargs) and (kwargs.get('full') is False):
+                return self._spectra
 
         if self._spectra is None:
             logger.info('Initializing new spectra object')
@@ -2985,6 +3056,7 @@ class IonImagePlotter:
             return
         if self._source != 'da_export_file':
             self._object = self._project.__getattribute__(self._source)
+        # don't need to set an object for da_export_file
 
     def _set_compound(
             self,
@@ -3000,9 +3072,7 @@ class IonImagePlotter:
                 logger.warning(
                     f'Target compound with mass {comp} is outside the mass window'
                     f'of the reader ({self._object.limits}')
-            self._comp = str(round(comp, 4))
-            return
-        if self._source == 'da_export_file':
+        if self._source in ('da_export_file', 'reader'):
             self._comp = str(round(comp, 4))
             return
         comp_, distance = self._object.get_closest_mz(
@@ -3071,7 +3141,9 @@ class IonImagePlotter:
                 )
             else:
                 raise NotImplementedError(
-                    f'internal error for object of type {type(obj)}'
+                    f'internal error for object of type {type(obj)}, '
+                    f'possible types are {type(Spectra)}, '
+                    f'{type(ReadBrukerMCF)}, {type(hdf5Handler)}'
                 )
             # window
             df.loc[it, self._comp] = self._max_window_spec(spec)
@@ -3149,6 +3221,11 @@ class IonImagePlotter:
         self._set_compound(comp)
 
         df: pd.DataFrame = self._get_df()
+
+        if self._source == 'time_series':
+            self._object.plot_comp(self._comp, title=title, **kwargs)
+            return
+
         self._set_data_object(df)
 
         # try to fetch distance_pixels
@@ -3180,7 +3257,9 @@ def get_project(is_MSI: bool, *args, **kwargs) -> ProjectMSI | ProjectXRF:
     return ProjectXRF(*args, **kwargs)
 
 
-def get_image_handler(is_MSI: bool, *args, **kwargs) -> SampleImageHandlerMSI | SampleImageHandlerXRF:
+def get_image_handler(
+        is_MSI: bool, *args, **kwargs
+) -> SampleImageHandlerMSI | SampleImageHandlerXRF:
     if is_MSI:
         return SampleImageHandlerMSI(*args, **kwargs)
     return SampleImageHandlerXRF(*args, **kwargs)

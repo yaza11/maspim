@@ -168,16 +168,13 @@ that before using this option'
                        - {'zones'})
         successes: np.ndarray = self.successes.loc[:, columns].to_numpy()
         # will encounter invalid values for 0 successes and any nans
-        sqrt_n = np.zeros_like(successes)  # out, where still throws errors
-        mask = (successes > 0).ravel()
-        sqrt_n.ravel()[mask] = np.sqrt(successes.ravel()[mask])
-
-        feature_table_standard_errors = np.divide(
-            self.deviations.loc[:, columns],
-            sqrt_n,
-            where=sqrt_n > 0,
-            out=np.full_like(successes, np.nan)
-        )
+        with np.errstate(invalid="ignore"):
+            feature_table_standard_errors = np.divide(
+                self.deviations.loc[:, columns],
+                np.sqrt(successes),
+                where=successes > 0,
+                out=np.full_like(successes, np.nan)
+            )
         # zones is more of an index
         feature_table_standard_errors.loc[:, 'zone'] = self.deviations.zone
         return feature_table_standard_errors
@@ -336,8 +333,6 @@ that before using this option'
             ft_contrast['x_ROI'] = self.feature_table.x_ROI.copy()
         if 'seed' in columns:
             ft_contrast['seed'] = self.feature_table.seed.copy()
-        if 'L' in columns:
-            ft_contrast['L'] = self.feature_table.contrast.copy()
 
         return ft_contrast
 
@@ -929,7 +924,7 @@ that before using this option'
             title: str | None = None,
             colors: list | None = None,
             names: list | None = None,
-            correct_tic: bool | Iterable[bool] = True,
+            correct_tic: bool | Iterable[bool] = False,
             norm_mode: str = 'normal_distribution',
             contrasts: bool = False,
             annotate_l_correlations: bool = False,
@@ -1022,6 +1017,11 @@ that before using this option'
                 'Cannot add correlations if contrasts is set to False.'
             )
             annotate_l_correlations = False
+        if contrasts and correct_tic:
+            logger.warning(
+                'Correcting TIC for contrasts does not make sense because '
+                'contrast values are scaled by neighbouring values'
+            )
 
         t: pd.Series = self.age
 

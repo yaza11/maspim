@@ -72,11 +72,18 @@ class hdf5Handler(ReaderBaseClass):
         if not os.path.exists(self.path_file):
             return
         time_hdf: float = os.path.getmtime(self.path_file)
-        time_mcf: float = max([
+        modify_times = [
             os.path.getmtime(os.path.join(self.path_d_folder, file))
-            for file in os.listdir(self.path_d_folder) 
+            for file in os.listdir(self.path_d_folder)
             if ('mcf' in file.split('.')[-1]) and (file != 'Storage.mcf_idx')
-        ])
+        ]
+        if len(modify_times) == 0:
+            logger.info(
+                'No mcf files found, so not checking modify times'
+            )
+            return
+
+        time_mcf: float = max(modify_times)
         if time_mcf > time_hdf:
             logger.warning(
                 'mcf files were modified after the creation of the hdf5 file, you may want to '
@@ -154,7 +161,15 @@ class hdf5Handler(ReaderBaseClass):
 
         # stored as float8 apparently
         size_GB: float = N * len(mzs) * 8 / 1024 ** 3
-        logger.info(f'Creating hdf5 file on disk with {size_GB:.1f} GB')
+        # warn above 100 GB
+        if size_GB > 1024:
+            logger.warning(f'Creating hdf5 file on disk with {size_GB / 1024:.1f} TB')
+        elif size_GB > 100:
+            logger.warning(f'Creating hdf5 file on disk with {size_GB:.1f} GB')
+        elif size_GB > 1:
+            logger.info(f'Creating hdf5 file on disk with {size_GB:.1f} GB')
+        else:
+            logger.info(f'Creating hdf5 file on disk with {size_GB * 1024:.1f} MB')
 
         with h5py.File(self.path_file, 'w') as f:
             # use file name as group name

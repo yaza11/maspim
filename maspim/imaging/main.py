@@ -515,9 +515,9 @@ class ImageSample(Image):
     Create an ImageSample object from an image on disk
     >>> i = ImageSample(path_image_file="/path/to/your/file")
     in this case the object color will be infered, it is adviced to set it manually
-    >>> i = ImageSample(path_image_file="/path/to/your/file", obj_color='light')
+    >>> i = ImageSample(path_image_file="/path/to/your/file",obj_color='light')
     or
-    >>> i = ImageSample(path_image_file="/path/to/your/file", obj_color='dark')
+    >>> i = ImageSample(path_image_file="/path/to/your/file",obj_color='dark')
     depending on your sample. The resolution of the image matters for downstream
     applications (e.g. combination of image with MSI measurement. Therefore,
     for MSI applications it is adviced to use the project class which takes
@@ -553,6 +553,7 @@ class ImageSample(Image):
 
     def __init__(
             self,
+            *,
             path_folder: str | None = None,
             image: np.ndarray[float | int] | None = None,
             image_type: str = 'cv',
@@ -964,26 +965,34 @@ class ImageSample(Image):
 
     def get_sample_area_from_xywh(self):
         """Get the region of the image corresponding to sample area from xywh."""
-        assert check_attr(self, '_xywh_ROI'), 'no roi found, call require_image_sample_area'
+        assert check_attr(self, '_xywh_ROI'), \
+            'no roi found, call require_image_sample_area'
         image: np.ndarray = self.image
         x, y, w, h = self._xywh_ROI
         return image[y:y + h, x:x + w].copy()
 
     def require_image_sample_area(
-            self, **kwargs
+            self, overwrite: bool = False, **kwargs
     ) -> tuple[np.ndarray[np.uint8], tuple[int, ...]]:
         """Set and return area of the sample in the image."""
         # does has _xywh_ROI and _image_ROI
+        if overwrite:
+            self.set_sample_area(**kwargs)
+            return self._image_roi, self._xywh_ROI
+
         if (
                 check_attr(self, '_xywh_ROI')
                 and check_attr(self, '_image_roi')
         ):
-            pass
-        elif check_attr(self, '_xywh_ROI'):  # only has _xywh_ROI
+            return self._image_roi, self._xywh_ROI
+
+        if check_attr(self, '_xywh_ROI'):  # only has _xywh_ROI
             self._image_roi: np.ndarray = self.get_sample_area_from_xywh()
-        else:  # only has _image_ROI
-            self.set_sample_area(**kwargs)
+            return self._image_roi, self._xywh_ROI
+
+        self.set_sample_area(**kwargs)
         return self._image_roi, self._xywh_ROI
+
 
     @property
     def xywh_ROI(self):
@@ -1009,7 +1018,7 @@ class ImageSample(Image):
             ax=axs[0, 0],
             image=self.image,
             title='input image',
-            swap_rb=False,
+            swap_rb=True,
             no_ticks=True
         )
         plt_rect_on_image(
@@ -1027,7 +1036,7 @@ class ImageSample(Image):
             image=np.stack([image_sub.image_simplified] * 3, axis=-1) * image_sub.image,
             contours=image_sub.main_contour,
             title='contour in simplified sub-region',
-            swap_rb=False,
+            swap_rb=True,
             hold=True,
             no_ticks=True
         )
@@ -1036,7 +1045,7 @@ class ImageSample(Image):
             ax=axs[1, 1],
             image=self.image_sample_area,
             title='final sample region', no_ticks=True,
-            swap_rb=False
+            swap_rb=True
         )
         fig.tight_layout()
         plt.show()
@@ -1053,7 +1062,7 @@ class ImageROI(Image):
     If the image is derived from an ImageSample object, it is advised to iniate the ImageROI instance from
     the 'from_parent' constructor:
     >>> from maspim import ImageROI
-    >>> i = ImageSample(...)
+    >>> i = ImageSample()
     >>> i.from_disk(...)
     >>> ir = ImageROI.from_parent(i)
 
@@ -1478,9 +1487,11 @@ class ImageROI(Image):
         if plts:
             plt_cv2_image(image_classification, title='classified image')
 
-    def require_classification(self, **kwargs) -> np.ndarray[np.uint8]:
+    def require_classification(
+            self, overwrite: bool = False, **kwargs
+    ) -> np.ndarray[np.uint8]:
         """Create and return the image classification with parameters."""
-        if not check_attr(self, '_image_classification'):
+        if not check_attr(self, '_image_classification') or overwrite:
             if not check_attr(self, 'age_span'):
                 logger.warning('No age span specified, falling back to more general method')
                 self.set_classification_varying_kernel_size(**kwargs)
@@ -1547,7 +1558,7 @@ class ImageROI(Image):
 
     def require_punchholes(
             self, *args, overwrite: bool = False, **kwargs
-    ) -> tuple[list[np.ndarray[int], np.ndarray[int]] | tuple[tuple[int, int]], float]:
+    ) -> tuple[list[np.ndarray[int]] | tuple[tuple[int, int]], float]:
         if (not check_attr(self, "_punchholes")) or overwrite:
             self.set_punchholes(*args, **kwargs)
         return self._punchholes, self._punchhole_size
@@ -1555,7 +1566,7 @@ class ImageROI(Image):
     @property
     def punchholes(
             self
-    ) -> list[np.ndarray[int], np.ndarray[int]] | tuple[tuple[int, int]]:
+    ) -> list[np.ndarray[int]] | tuple[tuple[int, int]]:
         if not check_attr(self, '_punchholes'):
             self.require_punchholes()
         return self._punchholes
@@ -1703,6 +1714,20 @@ class ImageClassified(Image):
     View the results
     >>> ic.plot_overview()
     """
+
+    _image_classification: np.ndarray | None = None
+    _image_classification_corrected: np.ndarray | None = None
+    _image_corrected: np.ndarray | None = None
+
+    _seeds_light: np.ndarray[int] | None = None
+    _seeds_dark: np.ndarray[int] | None = None
+    _width_light: np.ndarray[float] | None = None
+    _width_dark: np.ndarray[float] | None = None
+    _prominences_light: np.ndarray[float] | None = None
+    _prominences_dark: np.ndarray[float] | None = None
+
+    image_seeds: np.ndarray[int] | None = None
+    params_laminae_simplified: pd.DataFrame | None = None
 
     _save_attrs: set[str] = {
         'age_span',
@@ -1909,7 +1934,7 @@ class ImageClassified(Image):
             d.plot_corrected()
 
     def require_corrected_images(
-            self, overwrite=False, **kwargs
+            self, overwrite: bool = False, **kwargs
     ) -> tuple[np.ndarray, np.ndarray]:
         # return an existing corrected image
         if check_attr(self, '_image_corrected') and (not overwrite):
@@ -2068,34 +2093,59 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
             else:
                 return fig, axs
 
-    def _get_seeds_above_prominence(
-            self,
-            peak_prominence: float
-    ) -> tuple[np.ndarray[int], np.ndarray[int]]:
+    def reduce_to_n_factor_seeds(
+            self, factor_above_age_span: float | None = None
+    ) -> None:
         """
-        Return seeds above given prominence for light and dark as tuple.
-
-        Parameters
-        ----------
-        peak_prominence: float
-            The threshold prominence
-
-        Returns
-        -------
-        _seeds_light: np.ndarray[int]
-            Filtered light peaks.
-        _seeds_dark: np.ndarray[int]
-            Filtered dark peaks.
+        After setting peaks we want to keep more than predicted but not all
+        peaks
         """
-        seeds_light: np.ndarray[int] = \
-            self._seeds_light[self._prominences_light > peak_prominence]
-        seeds_dark: np.ndarray[int] = \
-            self._seeds_dark[self._prominences_dark > peak_prominence]
-        return seeds_light, seeds_dark
+        assert check_attr(self, 'age_span'), 'need an age span for this'
+        if factor_above_age_span is None:
+            factor_above_age_span = 1.5
+        if factor_above_age_span < 1:
+            logger.warning('a factor of less than 1 will keep less peaks than '
+                           'predicted by age model')
+
+        idx: int = int(
+            (self.age_span[1] - self.age_span[0]) * factor_above_age_span
+        )
+
+        proms_light = self._prominences_light.copy()
+        proms_light.sort()  # low to high
+        if idx + 1 >= len(proms_light):
+            thr_light = 0.
+        else:
+            thr_light = proms_light[idx]
+
+        proms_dark = self._prominences_dark.copy()
+        proms_dark.sort()
+        if idx + 1 >= len(proms_dark):
+            thr_dark = 0.
+        else:
+            thr_dark = proms_dark[idx]
+
+        thr: float = max((thr_light, thr_dark))
+
+        mask_light = self._prominences_light < thr
+        mask_dark = self._prominences_dark < thr
+
+        logger.info(f'Reducing number of layers to a factor of '
+                    f'{factor_above_age_span}, so light: '
+                    f'{len(self._prominences_light)} -> {mask_light.sum()}, '
+                    f'dark: '
+                    f'{len(self._prominences_dark)} -> {mask_dark.sum()}, ')
+
+        self._seeds_light: np.ndarray[int] = self._seeds_light[mask_light]
+        self._width_light: np.ndarray[float] = self._width_light[mask_light]
+        self._prominences_light: np.ndarray[float] = self._prominences_light[mask_light]
+
+        self._seeds_dark: np.ndarray[int] = self._seeds_dark[mask_dark]
+        self._width_dark: np.ndarray[float] = self._width_dark[mask_dark]
+        self._prominences_dark: np.ndarray[float] = self._prominences_dark[mask_dark]
 
     def set_params_laminae_simplified(
             self,
-            peak_prominence: float = 0,
             height0_mode: str = 'use_peak_widths',
             downscale_factor: float = 1,
             **kwargs
@@ -2137,8 +2187,6 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
             return dataframe_params
 
         image_classification: np.ndarray[int] = self.image_classification.copy()
-        # get seeds above prominence
-        seeds_light, seeds_dark = self._get_seeds_above_prominence(peak_prominence)
 
         if height0_mode == 'use_age_model':
             height0s_light: float = self.average_width_yearly_cycle
@@ -2156,26 +2204,27 @@ use_age_model, not {height0_mode}')
                 image_classification, downscale_factor
             )
             seeds_light: np.ndarray[int] = np.round(
-                seeds_light * downscale_factor
+                self._seeds_light * downscale_factor
             ).astype(int)
             seeds_dark: np.ndarray[int] = np.round(
-                seeds_dark * downscale_factor
+                self._seeds_dark * downscale_factor
             ).astype(int)
             height0s_light: np.ndarray[float] = height0s_light * downscale_factor
             height0s_dark: np.ndarray[float] = height0s_dark * downscale_factor
+        else:
+            seeds_light = self._seeds_light
+            seeds_dark = self._seeds_dark
 
         # find layers
         dataframe_params_light: pd.DataFrame = set_params_laminae('light')
 
         dataframe_params_dark: pd.DataFrame = set_params_laminae('dark')
 
-        for attr in [
-            '_width_light',
-            '_width_dark',
-            '_prominences_light',
-            '_prominences_dark'
-        ]:
-            self.__delattr__(attr)
+        # we don't need them anymore
+        self._width_light = None
+        self._width_dark = None
+        self._prominences_light = None
+        self._prominences_dark = None
 
         dataframe_params: pd.DataFrame = pd.concat(
             [dataframe_params_light, dataframe_params_dark]
@@ -2783,7 +2832,7 @@ use_age_model, not {height0_mode}')
                           title='Input image (tilt corrected: '
                                 f'{self.use_tilt_correction})',
                           no_ticks=True,
-                          swap_rb=False)
+                          swap_rb=True)
             plt_cv2_image(image=self.image_classification,
                           ax=axs[0, 1],
                           fig=fig,
@@ -2812,6 +2861,7 @@ use_age_model, not {height0_mode}')
         # set seeds with their prominences
         logger.info("setting seeds")
         self.set_seeds(**kwargs)
+        self.reduce_to_n_factor_seeds(kwargs.pop('factor_above_age_span', None))
         # initiate params dataframe with seeds and params for distorted rects
         logger.info("finding distorted rects")
         self.set_params_laminae_simplified(**kwargs)

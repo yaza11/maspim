@@ -4,6 +4,7 @@ This module implements the XRay class, which offers to obtain xray regions from 
 import functools
 import math
 import os
+from typing import Any
 
 import cv2
 import numpy as np
@@ -36,11 +37,8 @@ class XRay(ImageSample):
     Example usage
     -------------
     create a new object
-    >>> xray = XRay(
-    >>>     path_image_file='your/path/to/the/image/file',
-    >>>     depth_section=(100, 200),  # span of the entire image in cm
-    >>>     obj_color = 'dark'  # sediment color compared to background
-    >>> )
+    >>> from maspim import XRay
+    >>> xray = XRay(depth_section=(100, 200),path_image_file='your/path/to/the/image/file',obj_color='dark')
     set and get the sample area
     >>> xray.set_sample_area()
     oftentimes the plastic liner is included in the determined sample area
@@ -52,6 +50,7 @@ class XRay(ImageSample):
 
     if loaded from file, it is not necessary to specify the object color and
     depth section arguments again
+    >>> from maspim import XRay
     >>> xray = XRay(path_image_file='your/path/to/the/image/file')
     >>> xray.load()
 
@@ -69,6 +68,8 @@ class XRay(ImageSample):
     >>> img: np.ndarray = xray.get_section((100, 105))
 
     """
+    _use_rotated: bool | None = None
+
     _save_attrs = {
         'age_span',
         '_average_width_yearly_cycle',
@@ -85,17 +86,17 @@ class XRay(ImageSample):
         '_use_rotated'
     }
 
-    _use_rotated: bool | None = None
-
     def __init__(
             self,
+            *,
             depth_section: tuple[float, float] | None = None,
             path_folder: str | None = None,
             image: np.ndarray[float | int] | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
             obj_color: str | None = None,
-            use_rotated: bool = True
+            use_rotated: bool = True,
+            **_
     ) -> None:
         """
         Initialize the object.
@@ -119,13 +120,11 @@ class XRay(ImageSample):
             been corrected.
         """
 
-        super().__init__(
-            path_folder=path_folder,
-            image=image,
-            image_type=image_type,
-            path_image_file=path_image_file,
-            obj_color=obj_color
-        )
+        super().__init__(path_folder=path_folder,
+                         image=image,
+                         image_type=image_type,
+                         path_image_file=path_image_file,
+                         obj_color=obj_color)
 
         self.depth_section = depth_section
         self._bars_removed: bool = False
@@ -328,7 +327,7 @@ class XRay(ImageSample):
             section_start: int | float | tuple[int | float, int | float],
             section_end: int | float | None = None,
             section_length: int | float = 5,
-            **kwargs: dict
+            **kwargs: Any
     ) -> XRayROI:
         """
         Get an ImageROI object from a specific section.
@@ -361,7 +360,7 @@ class XRay(ImageSample):
         )
         return roi
 
-    def remove_bars(self, n_sections: int = 10, plts: bool = False) -> None:
+    def remove_bars(self, n_sections: int = 10, plts: bool = False, **_) -> None:
         """
         Remove liner bars at top and bottom of the image.
 

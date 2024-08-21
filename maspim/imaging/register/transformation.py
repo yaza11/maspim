@@ -854,7 +854,7 @@ class Transformation:
         plts: bool, optional
             If True, will plot the deformed images and stretching functions.
             Default is False.
-        deg: int, optional
+        degree: int, optional
             Degree of the stretching function. The default is 5.
         local: bool, optional
             Whether to perform local or global optimization. The default is True.

@@ -40,8 +40,8 @@ class ReadBrukerMCF(ReaderBaseClass):
     Example usage
     -------------
     Import and initialize a reader
-    >>> from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
-    >>> reader = ReadBrukerMCF(path="/path/to/d_folder.d")
+    >>> from maspim import ReadBrukerMCF
+    >>> reader = ReadBrukerMCF(path_d_folder="/path/to/d_folder.d")
     >>> reader.create_reader()  # this can take a while
     Get information about the indices and meta data
     >>> reader.create_indices()
@@ -61,14 +61,20 @@ class ReadBrukerMCF(ReaderBaseClass):
     -----
     The creation and reading of information from this class is fairly slow. Usually downstream
     analysis requires reading in information multiple times. It is therefore recommended to
-    create an hdf5 file, if you can affort the disk space (See the documentation of hdf5Reader).
+    create a hdf5 file, if you can affort the disk space (See the documentation of hdf5Reader).
     """
+    limits: tuple[float, float] | None = None
+    path_d_folder: str | None = None
+    reader: object | None = None
+    indices: np.ndarray[int] | None = None
+    spots: Spots | None = None
+    mzs: np.ndarray[float] | None = None
 
     def __init__(
             self,
             path_d_folder: str,
             limits: tuple[float, float] | None = None
-    ):
+    ) -> None:
         """
         Initializer
 
@@ -78,27 +84,25 @@ class ReadBrukerMCF(ReaderBaseClass):
             Path to the d-folder containing the mcf-files on disk.
         """
         self.path_d_folder: str = path_d_folder
-
-        if limits is not None:
-            self.limits: tuple[float, float] = limits
+        self.limits: tuple[float, float] | None = limits
 
     def create_reader(self):
         """Create a new BrukerMCFReader object."""
         logger.warning('creating BrukerMCF reader, this may take a while ...')
-        self.reader = rtms.newBrukerMCFReader(self.path_d_folder)
+        self.reader: object = rtms.newBrukerMCFReader(self.path_d_folder)
         logger.info('done creating reader')
 
     def create_indices(self):
         """Create indices of spectra in mcf file."""
-        assert hasattr(
-            self, 'reader'), 'create a reader with create_reader first'
+        assert check_attr(self, 'reader'), \
+            'create a reader with create_reader first'
         # get indices from reader
         self.indices: np.ndarray[int] = np.array(rtms.getBrukerMCFIndices(self.reader))
 
     def create_spots(self):
         """Create spots object with indices and names."""
-        assert hasattr(
-            self, 'reader'), 'create a reader with create_reader first'
+        assert check_attr(self, 'reader'), \
+            'create a reader with create_reader first'
         logger.info('creating spots table ...')
         # get spots from reader
         rspots = rtms.getBrukerMCFSpots(self.reader)

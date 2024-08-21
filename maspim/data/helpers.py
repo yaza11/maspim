@@ -1,8 +1,11 @@
+import math
+
 import scipy
 import numpy as np
 import pandas as pd
 import logging
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from skimage.transform import warp
 from scipy.interpolate import LinearNDInterpolator, griddata
@@ -211,8 +214,10 @@ def plot_comp(
         fig: plt.Figure | None = None,
         ax: plt.Axes | None = None,
         ticks_on_longer_axis: bool = True,
+        colorbar: bool = True,
+        cax_size: str | float = '10%',
         **kwargs
-) -> tuple[plt.Axes, plt.Axes] | None:
+) -> tuple[plt.Figure, plt.Axes] | None:
     """
     Plot the ion image of a compound or feature.
 
@@ -252,6 +257,7 @@ def plot_comp(
         kwargs['vmin'] = vmin
     if 'vmax' not in kwargs:
         kwargs['vmax'] = vmax
+    assert not math.isclose(vmin, vmax), f'Found same vmin/vmax for {comp}'
 
     if fig is None:
         assert ax is None
@@ -340,7 +346,7 @@ def plot_comp(
     ax.set_title(title)
 
     # decide where to put the colorbar
-    portait_mode = img_mz.shape[0] > img_mz.shape[1]
+    portrait_mode = img_mz.shape[0] > img_mz.shape[1]
 
     # SNR ratios
     if SNR_scale:
@@ -350,6 +356,7 @@ def plot_comp(
         ticks = [vmin, vmax]
         i = 0
         min_label = max_label = ''
+        # increase precision until a digit that is different is found
         while min_label == max_label:
             min_label = f'{vmin:.{i}e}'
             max_label = f'{vmax:.{i}e}'
@@ -359,19 +366,27 @@ def plot_comp(
         ticklabels[0] = r'$\leq$' + ticklabels[0]
     if vmax < np.nanmax(img_mz):
         ticklabels[-1] = r'$\geq$' + ticklabels[-1]
-    cbar = fig.colorbar(
-        im,
-        orientation='vertical' if portait_mode else 'horizontal',
-        shrink=.8
-    )
-    cbar.set_ticks(ticks=ticks, labels=ticklabels)
 
-    if portait_mode:
-        cbar.ax.set_yticklabels(ticklabels)
-        cbar.ax.set_ylabel('Intensity', rotation=270, fontsize='10')
-    else:
-        cbar.ax.set_xticklabels(ticklabels)
-        cbar.ax.set_xlabel('Intensity', fontsize='10')
+    if colorbar:
+        divider = make_axes_locatable(ax)
+        # TODO: fix padding, size, depending on image dimensions
+        cax = divider.append_axes('right' if portrait_mode else 'bottom',
+                                  size=cax_size,
+                                  pad=0.05)
+        cbar = fig.colorbar(
+            im,
+            orientation='vertical' if portrait_mode else 'horizontal',
+            shrink=.8,
+            cax=cax
+        )
+        cbar.set_ticks(ticks=ticks, labels=ticklabels)
+
+        if portrait_mode:
+            cbar.ax.set_yticklabels(ticklabels)
+            cbar.ax.set_ylabel('Intensity', rotation=270, fontsize='10')
+        else:
+            cbar.ax.set_xticklabels(ticklabels)
+            cbar.ax.set_xlabel('Intensity', fontsize='10')
     if save_png is not None:
         plt.savefig(save_png, dpi=300)
     if hold:

@@ -103,11 +103,11 @@ class XRF(Data):
         Initialize with a folder.
 
         """
-        self.path_folder = path_folder
+        self.path_folder: str = path_folder
         if distance_pixels is not None:
-            self.distance_pixels = distance_pixels
+            self._distance_pixels: int | float = distance_pixels
         if measurement_name is not None:
-            self.measurement_name = measurement_name
+            self.measurement_name: str = measurement_name
         else:
             self._set_measurement_name()
             
@@ -178,6 +178,8 @@ class XRF(Data):
             files=list(set(pres)),
             substrings=tag
         )
+        if closest_match is None:
+            raise ValueError(f'No matches found for {tag=} in {self.path_folder}')
         
         file_group = [
             '_'.join([pre, post])

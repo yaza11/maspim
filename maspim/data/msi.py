@@ -44,6 +44,7 @@ class MSI(Data):
     Now we are ready to do some analysis, e.g. nonnegative matrix factorization
     >>> msi.plot_nmf(k=5)
     """
+    mis_file: str | None = None
 
     _save_in_d_folder: bool = True
     _save_attrs: set[str] = {
@@ -78,9 +79,8 @@ class MSI(Data):
             up in mis file if not provided.
         """
         self._set_files(path_d_folder, path_mis_file)
-        
-        if distance_pixels is not None:
-            self._distance_pixels = distance_pixels
+
+        self._distance_pixels = distance_pixels
 
     def _set_files(self, path_d_folder: str, path_mis_file: str) -> None:
         path_folder1, d_folder = os.path.split(path_d_folder)

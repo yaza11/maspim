@@ -71,8 +71,12 @@ class AgeModel(Convinience):
     >>> age_model2 = AgeModel(path2, ...)
     >>> age_model_combined = age_model1 + age_model2
     """
+    path_folder: str | None = None
+    _in_file: str | None = None
+    _save_file: str | None = None
 
     _save_in_d_folder: bool = True
+
     _save_attrs: set[str] = {
         'df',
         '_in_file',
@@ -126,14 +130,9 @@ class AgeModel(Convinience):
         else:  # read from file
             self._read_file(depth_offset, conversion_to_cm, **kwargs_read_file)
 
-        self.path_folder: str | None = None
-        self._save_file: str | None = None
-
     def _set_files(self, path_file: str | None) -> None:
         self._save_file: None | str = None if path_file is None else 'AgeModel.pickle'
         if path_file is None:
-            self.path_folder: None = None
-            self._in_file: None = None
             return
 
         # check if file is directory, in that case require a AgeModel.pickle file

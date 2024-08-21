@@ -9,7 +9,7 @@ This package implements methods to process mass spectra, combine them with image
 Before you begin, ensure you have met the following requirements:
 <!--- These are just example requirements. Add, duplicate or remove as required --->
 
-* You have a version of `python3` installed (preferentially the up-to-date version).
+* You have a version of `python3` installed (preferentially the up-to-date version)
 * You have `R` installed
 * You have the `R` package `rtms` installed
 
@@ -31,8 +31,7 @@ This is just a quick overview. For more comprehensive tutorials please have a lo
 
 Generally it is advised to stick to the objects provided at the top level of `maspim`, which are
 
-* `ProjectMSI` to manage MSI measurements
-* `ProjectXRF` to manage µXRF measurements
+* `ProjectMSI` and `ProjectXRF` to manage MSI and µXRF measurements respectively and fetched with the `get_project` function
 * `ImageSample`, `ImageROI` and `ImageClassified` to set photo properties and finding the sample area
 * `Transformation` to register images
 * `ReadBrukerMCF` and `hdf5handler` for reading and storing data files.
@@ -40,8 +39,7 @@ Generally it is advised to stick to the objects provided at the top level of `ma
 * `MSI` and `XRF` for handling MSI and µXRF measurements.
 * `XRay` for adding information from an X-Ray
 * `AgeModel` to set an age model
-
-`ProjectMSI` and `ProjectXRF` are the core objects of this package, which manage most of the aforementioned objects. So unless you have a very specific application in mind, it is recommended to do everything with the methods provided by `ProjectMSI` and `ProjectXRF`.
+and a few others. `ProjectMSI` and `ProjectXRF` are the core objects of this package, which manage most of the aforementioned objects. So unless you have a very specific application in mind, it is recommended to do everything with the methods provided by `ProjectMSI` and `ProjectXRF`.
 
 Let's look at a short example of how to define the ${U\_{37}^{k}}^\\prime$ proxy, which you can use to check that your installation worked.
 ```python
@@ -52,7 +50,7 @@ p = get_project(is_MSI=True, path_folder='path/to/your/measurement.i', is_lamina
 # sets or loads ImageHandler, ImageSample, ImageROI and ImageClassified
 p.require_images()
 # perform all steps to extract intensities from alkenones
-p.set_spectra(targets=[mC37_2, mC37_3], surpress_warnings=True)
+p.set_spectra(targets=[mC37_2, mC37_3], suppress_warnings=True)
 p.set_data_object()
 p.add_pixels_ROI()
 # we did not provide any ages, so a time series does not make much sense, but 

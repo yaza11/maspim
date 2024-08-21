@@ -287,12 +287,9 @@ class Descriptor:
         assert check_attr(other, '_shifts'), 'call fit on descriptor first'
         # since this is constructed from angle corrected image, we are only
         # interested in one angle
-        if kwargs.get('n_angles') is None:
-            kwargs['n_angles'] = 1
-        if kwargs.get('n_sizes') is None:
-            kwargs['n_sizes'] = 16
-        if kwargs.get('n_phases') is None:
-            kwargs['n_phases'] = 16
+        kwargs['n_angles'] = kwargs.get('n_angles', 1)
+        kwargs['n_sizes'] = kwargs.get('n_sizes', 16)
+        kwargs['n_phases'] = kwargs.get('n_phases', 16)
 
         image_corrected = other.transform(other.image)
         new = cls(image=image_corrected, **kwargs)

@@ -143,6 +143,9 @@ class Convinience:
     def save_file(self):
         return self._get_disc_folder_and_file()[1]
 
+    def get_save_file(self, tag: str | None = None):
+        return self._get_disc_folder_and_file(tag=tag)[1]
+
     def __repr__(self) -> str:
         return object_to_string(self)
 
@@ -208,7 +211,7 @@ class Convinience:
         # new dict with only the desired attributes
         save_dict: dict[str, Any] = {key: self.__dict__[key] for key in keep_attributes}
 
-        logger.info(f'saving image object with {self.__dict__.keys()} to {folder}')
+        logger.info(f'saving image object with {keep_attributes} to {folder}')
         with open(file, 'wb') as f:
             pickle.dump(save_dict, f, pickle.HIGHEST_PROTOCOL)
 

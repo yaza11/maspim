@@ -132,7 +132,7 @@ class Spectra(Convinience):
     >>> spec.subtract_baseline(plts=True)
     
     Optionally, it is possible to perform lock mass calibration, e.g. with Pyropheophorbide a:
-    >>> spec.require_calibrate_functions(calibrants_mz=[557.25231],reader=reader,calib_SNR_threshold=2)
+    >>> spec.require_calibration_functions(calibrants_mz=[557.25231],reader=reader,calib_snr_threshold=2)
     >>> spec.add_all_spectra(reader=reader)
     Although not necessary, it is adviced to do this step after subtracting the
     baseline in order to have access to the SNR level. Afterward the calibration will be used
@@ -149,7 +149,7 @@ class Spectra(Convinience):
     If targets are set, the workflow continues with binning the spectra.
 
     It is possible to filter out peaks below a certain signal-to-noise-ratio threshold or sidepeaks:
-    >>> spec.filter_peaks(SNR_threshold=2, remove_sidepeaks=True, plts=True)
+    >>> spec.filter_peaks(peaks_snr_threshold=2, remove_sidepeaks=True, plts=True)
 
     The next step is to set kernels
     >>> spec.set_kernels()
@@ -194,7 +194,6 @@ class Spectra(Convinience):
 
     _save_in_d_folder: bool = True
     _save_attrs: set[str] = {
-        'd_folder',
         '_delta_mz',
         '_mzs',
         '_intensities',
@@ -364,7 +363,7 @@ class Spectra(Convinience):
         self._intensities = np.zeros_like(self._mzs)
 
     def _pre_save(self):
-        # only save feature table, if both exist
+        # only save line spectra, if both exist
         if (
                 check_attr(self, '_feature_table')
                 and check_attr(self, '_line_spectra')
@@ -373,15 +372,6 @@ class Spectra(Convinience):
 
     def _post_save(self):
         self._save_attrs.add('_feature_table')
-
-    def _post_load(self):
-        if (  # set feature_table from the saved line_spectra
-                not check_attr(self, '_feature_table')
-                and check_attr(self, '_line_spectra')
-        ):
-            self._line_spectra: np.ndarray[float] = self.feature_table. \
-                drop(columns=['R', 'x', 'y']). \
-                to_numpy()
 
     @property
     def indices(self) -> np.ndarray[int]:
@@ -819,7 +809,7 @@ class Spectra(Convinience):
             reader: ReadBrukerMCF | hdf5Handler,
             calibrants_mz: Iterable[float] = None,
             search_range: float = 5e-3,
-            calib_SNR_threshold: float = 4,
+            calib_snr_threshold: float = 4,
             max_degree: int = 1,
             min_height: float | int = 10_000,
             **_
@@ -830,7 +820,7 @@ class Spectra(Convinience):
         max_degree or less.
 
         This algorithm matches the cloesest peak fulfilling the criteria (search
-        range and SNR_threshold or min_height) to the theoretical masses.
+        range and calib_snr_threshold or min_height) to the theoretical masses.
         A polynomial of at most degree max_degree is fitted to the differences
         from the closest peak to theoretical masses. If not enough peaks are found,
         the degree of the polynomial will be lowered. If no peak is found, the
@@ -847,7 +837,7 @@ class Spectra(Convinience):
         search_range : float, optional
             Range in which to look for peaks in Da. The default is 5 mDa.
             This will look in a range of +/- 5 mDa around the theoretical mass.
-        calib_SNR_threshold : float, optional
+        calib_snr_threshold : float, optional
             Minimal prominence required for a peak to be considered (see
             prominence in set_peaks). By default, an SNR of 4 is used. If a value
             of 0 is provided, the min_height condition is applied instead.
@@ -857,7 +847,7 @@ class Spectra(Convinience):
             points, the best fit is used.
         min_height: float | int, optional
             Minimum intensity required. The default is 10_000. Only used, if
-            SNR_threshold is not provided.
+            calib_snr_threshold is not provided.
 
         Notes
         -----
@@ -889,9 +879,9 @@ class Spectra(Convinience):
         def calib_spec(_spectrum: np.ndarray[float]) -> int | tuple[np.ndarray[float], int]:
             """Find the calibration function for a single spectrum."""
             # pick peaks
-            if calib_SNR_threshold > 0:
+            if calib_snr_threshold > 0:  # only set peaks above the SNR threshold
                 peaks: np.ndarray[int] = find_peaks(
-                    _spectrum, height=self._noise_level * calib_SNR_threshold
+                    _spectrum, height=self._noise_level * calib_snr_threshold
                 )[0]
             else:
                 peaks: np.ndarray[int] = find_peaks(_spectrum, height=min_height)[0]
@@ -938,11 +928,11 @@ class Spectra(Convinience):
         assert check_attr(reader, 'mzs') and np.allclose(reader.mzs, self.mzs), \
             ('Make sure the mzs of the reader match that of the spectra object '
              '(consider calling reader.set_mzs(spec.mzs))')
-        if calib_SNR_threshold > 0:
+        if calib_snr_threshold > 0:
             assert check_attr(self, 'noise_level'), \
                 ('This step has to be performed after subtracting the baseline '
                  'to have access to the noise_level, unless you set the '
-                 'calib_SNR_threshold to 0.')
+                 'calib_snr_threshold to 0.')
         if calibrants_mz is None:
             calibrants_mz = get_calibrants(self.limits)
 
@@ -991,12 +981,12 @@ class Spectra(Convinience):
         self._calibration_settings: dict[str, Any] = {
             'calibrants': calibrants_mz,
             'search_range': search_range,
-            'calib_SNR_threshold': calib_SNR_threshold,
+            'calib_snr_threshold': calib_snr_threshold,
             'max_degree': max_degree,
             'presences calibrants': calibrant_matches
         }
 
-    def require_calibrate_functions(
+    def require_calibration_functions(
             self,
             *args,
             overwrite: bool = False,
@@ -1010,7 +1000,9 @@ class Spectra(Convinience):
         overwrite: bool, optional
             If this is set to True, previous calibrations will be overwritten
         """
-        if not check_attr(self, '_calibration_parameters', True):
+        if overwrite or (not check_attr(
+                self, '_calibration_parameters', True)
+        ):
             self.set_calibration_functions(*args, **kwargs)
 
         return self._calibration_parameters
@@ -1149,10 +1141,10 @@ class Spectra(Convinience):
     def filter_peaks(
             self,
             whitelist: Iterable[int] | None = None,
-            SNR_threshold: float = 0,
+            peaks_snr_threshold: float = 0,
             remove_sidepeaks: bool = False,
             plts=False,
-            **kwargs_sidepeaks: dict
+            **kwargs_sidepeaks: Any
     ) -> None:
         """
         Eliminate peaks not fulfilling the criteria from the peak list.
@@ -1160,9 +1152,9 @@ class Spectra(Convinience):
         Parameters
         ----------
         whitelist : Iterable[int] | None,
-            Peaks (idx corresponding to mz value in mzs) that shall not be removed. If this is provided,
-            no other filtering will be done.
-        SNR_threshold : float, optional
+            Peaks (indices refer to mz values array) that shall not be
+            removed. If this is provided, no other filtering will be done.
+        peaks_snr_threshold : float, optional
             Minimum SNR required for keeping peaks. The default is to not remove any peaks
             based on SNR.
         remove_sidepeaks : bool, optional
@@ -1170,13 +1162,13 @@ class Spectra(Convinience):
             The default is not to remove side peaks
         plts: bool, optional,
             Whether to plot the removed peaks.
-        kwargs_sidepeaks: dict
+        kwargs_sidepeaks: Any
             Additional kwargs passed on to set_side_peaks.
         """
         # skip filtering of valid peaks if a list of peaks to keep is provided
         skip_filtering: bool = whitelist is not None
 
-        if skip_filtering and (SNR_threshold != 0):
+        if skip_filtering and (peaks_snr_threshold != 0):
             logger.warning(
                 'A whitelist was provided as well as an SNR threshold, but ' +
                 'filtering will not be executed if a whitelist is provided. ' +
@@ -1196,8 +1188,8 @@ class Spectra(Convinience):
 
         if skip_filtering:  # exclude all peaks not in whitelist
             peaks_valid &= np.array([peak in whitelist for peak in self._peaks], dtype=bool)
-        if (not skip_filtering) and (SNR_threshold > 0):  # set peaks below SNR threshold to False
-            peaks_valid &= self.peaks_SNR > SNR_threshold
+        if (not skip_filtering) and (peaks_snr_threshold > 0):  # set peaks below SNR threshold to False
+            peaks_valid &= self.peaks_SNR > peaks_snr_threshold
         if (not skip_filtering) and remove_sidepeaks:  # set sidepeaks to False
             peaks_valid &= ~self.require_side_peaks(**kwargs_sidepeaks)
 
@@ -1213,7 +1205,7 @@ class Spectra(Convinience):
         # add flag
         self._peak_setting_parameters['modified'] = {
             'whitelist': whitelist,
-            'calib_SNR_threshold': SNR_threshold,
+            'calib_snr_threshold': peaks_snr_threshold,
             'remove_sidepeaks': remove_sidepeaks
         }
 
@@ -1322,7 +1314,7 @@ class Spectra(Convinience):
             peak_idx: int,
             sigma_max: float = 5e-3,
             suppress_warnings: bool = False,
-            **ignore
+            **_
     ) -> np.ndarray | None:
         """
         Fine-tune kernel parameters for a peak with the shape of a (bi)gaussian.
@@ -1344,9 +1336,6 @@ class Spectra(Convinience):
         assert check_attr(self, '_peaks'), 'call set_peaks first'
         assert check_attr(self, '_kernel_params'), \
             'call set_kernel_params first'
-
-        if len(ignore) > 0:
-            logger.info(f'unused kwargs in set_kernels: {ignore}')
 
         # width of peak at half maximum
         idx_l: np.ndarray[int] = np.around(
@@ -1545,8 +1534,10 @@ class Spectra(Convinience):
             self,
             targets: Iterable[float],
             tolerances: Iterable[float] | float | None = None,
+            method_peak_center: str = 'theory',
+            method: str = 'max',
             plts: bool = False,
-            **kwargs_binning
+            **kwargs
     ) -> None:
         """
         Set the peaks based on a number of target compounds (mass given in Da).
@@ -1554,7 +1545,8 @@ class Spectra(Convinience):
         assigned mass is within target +/- tolerance. If no tolerance is given,
         it is estimated from the kernel widths.
 
-        This function sets the kernel_params and then requires using the bin_spectra function.
+        This function sets the kernel_params and then requires using the
+        bin_spectra function.
 
         Parameters
         ----------
@@ -1562,29 +1554,70 @@ class Spectra(Convinience):
             The m/z values of interest in Da
         tolerances: Iterable[float] | float
             Tolerance(s) for deviation of peaks from theoretical masses.
+        method_peak_center: str, optional
+            How target mzs are set. Options are
+            - theo: theoretical m/z masses
+            - closest: will use found peaks and pick the closest one, if it is
+              inside the tolerance
+        method: str, optional
+            Method used to bin intensities. Will be provided to bin_spectra.
+            Options are
+            - max (default)
+            - height
+            - area
         plts: bool, optional
             Whether to plot the target kernels on top of the summed spectrum.
-        kwargs_binning: Any,
-            Keyword arguments provided to bin_spectra
+        kwargs: Any,
+            Keyword arguments provided to bin_spectra and require_peaks.
         """
+        assert method_peak_center in ["theory", "closest"], \
+            (f'available options for method_peak_center are "theo" and '
+             f'"closest, you provided {method_peak_center}')
 
         if plts:
             assert not np.all(self.intensities == 0), \
-                'if you want to plot the target kernels, add up the intensities first'
+                ('if you want to plot the target kernels, add up the '
+                 'intensities first')
 
         targets: np.ndarray[float] = np.array(targets)
 
         tolerances = self._find_tolerances(targets, tolerances)
 
+        # set peaks and kernels artificially from the target mzs and tolerances
+        if method_peak_center == 'theory':
+            self.reset_peaks()
+            self._peaks = [np.argmin(np.abs(self.mzs - target)) for target in targets]
+        elif method_peak_center == 'closest':
+            self.require_peaks(**kwargs)
+            whitelist = []
+            peak_mzs: np.ndarray = self.mzs[self._peaks]
+            valid_idcs = []
+            for i, (target, tolerance) in enumerate(zip(targets, tolerances)):
+                # idx of mz closest to
+                dists: np.ndarray[float] = np.abs(target - peak_mzs)
+                dist: float = np.min(dists)
+                idx_peak: int = self._peaks[np.argmin(dists)]
+                if dist > tolerance:
+                    logger.warning(
+                        f'did not find peak for {target} within {tolerance=}'
+                    )
+                    continue
+                whitelist.append(idx_peak)
+                valid_idcs.append(i)
+            self.filter_peaks(whitelist=whitelist)
+            # update targets and tolerances to those found
+            targets = [targets[i] for i in valid_idcs]
+            tolerances = [tolerances[i] for i in valid_idcs]
+            print(whitelist, targets, tolerances)
+        else:
+            raise NotImplementedError('internal error')
+
         n_peaks: int = len(targets)  # number of peaks equal to targets
         n_spectra: int = self._n_spectra
         self._line_spectra: np.ndarray[float] = np.zeros((n_spectra, n_peaks))
 
-        # set peaks and kernels artificially from the target mzs and tolerances
-        self.reset_peaks()
-        self._peaks = [np.argmin(np.abs(self.mzs - target)) for target in targets]
         self._peak_setting_parameters = {
-            'method': 'targeted',
+            'method': method_peak_center,
             'targets': np.array(targets),
             'tolerance': tolerances
         }
@@ -1632,7 +1665,7 @@ class Spectra(Convinience):
             plt.legend()
             plt.show()
 
-        self.bin_spectra(**kwargs_binning)
+        self.bin_spectra(method=method, **kwargs)
 
     def _get_kernels(self, norm_mode: str = 'area') -> np.ndarray[float]:
         """
@@ -2103,7 +2136,10 @@ class Spectra(Convinience):
             self._losses[c, :] = np.abs(y_rec - spec) / tic if tic else 0
 
     def filter_line_spectra(
-            self, SNR_threshold: float = 0, intensity_min: float = 0, **_: dict
+            self,
+            binned_snr_threshold: float = 0,
+            intensity_min: float = 0,
+            **_: Any
     ) -> np.ndarray[bool]:
         """
         Set the intensities that fall below SNR or min intensity to zero
@@ -2112,7 +2148,7 @@ class Spectra(Convinience):
 
         Parameters
         ----------
-        SNR_threshold : float, optional
+        binned_snr_threshold : float, optional
             Set intensities below this SNR threshold to False.
         intensity_min: float, optional
             Set intensities below this absolute threshold to False.
@@ -2122,9 +2158,9 @@ class Spectra(Convinience):
         mask : np.ndarray[bool]
             Mask object where values not meeting the criteria are set to False
         """
-        if SNR_threshold > 0:
+        if binned_snr_threshold > 0:
             assert check_attr(self, 'noise_level'), 'Call subtract_baseline first'
-            mask_snr_too_low: np.ndarray[bool] = self._get_SNR_table() < SNR_threshold
+            mask_snr_too_low: np.ndarray[bool] = self._get_SNR_table() < binned_snr_threshold
         else:
             mask_snr_too_low: np.ndarray[bool] = np.zeros(self._line_spectra.shape, dtype=bool)
         if intensity_min > 0:
@@ -2224,7 +2260,7 @@ class Spectra(Convinience):
     def add_calibrated_spectra(self, reader: ReadBrukerMCF | hdf5Handler, **kwargs: Any):
         self.add_all_spectra(reader=reader)
         self.subtract_baseline(**kwargs)
-        self.require_calibrate_functions(reader=reader, **kwargs)
+        self.require_calibration_functions(reader=reader, **kwargs)
         self.add_all_spectra(reader=reader)
         self.subtract_baseline(**kwargs)
 
@@ -2232,6 +2268,7 @@ class Spectra(Convinience):
         """Perform all steps with the provided parameters."""
         self.add_calibrated_spectra(reader=reader, **kwargs)
         self.set_peaks(**kwargs)
+        self.filter_peaks(**kwargs)
         self.set_kernels(**kwargs)
         self.bin_spectra(reader, **kwargs)
         self.filter_line_spectra(**kwargs)
@@ -2659,7 +2696,7 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.require_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibration_functions
         """
         for i, reader in enumerate(readers):
             self.specs[i].add_all_spectra(reader)
@@ -2673,7 +2710,7 @@ class MultiSectionSpectra(Spectra):
             self.noise_level += spec.noise_level
         self.noise_level /= len(self.specs)
 
-    def require_calibrate_functions(
+    def require_calibration_functions(
             self,
             *,
             readers: list[ReadBrukerMCF | hdf5Handler] | None = None,
@@ -2687,10 +2724,10 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.require_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibration_functions
         """
         for i, reader in enumerate(readers):
-            self.specs[i].require_calibrate_functions(reader=reader, **kwargs)
+            self.specs[i].require_calibration_functions(reader=reader, **kwargs)
 
     def distribute_peaks_and_kernels(self):
         """
@@ -2717,7 +2754,7 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.require_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibration_functions
         """
         line_spectra = []
         for i, reader in enumerate(readers):
@@ -2739,7 +2776,7 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.require_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibration_functions
         """
         if readers is None:
             readers = [None] * len(self.specs)
@@ -2761,11 +2798,11 @@ class MultiSectionSpectra(Spectra):
         readers : list[ReadBrukerMCF | hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.require_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibration_functions
         """
         self.add_all_spectra(readers=readers)
         self.subtract_baseline(**kwargs)
-        self.require_calibrate_functions(readers=readers, **kwargs)
+        self.require_calibration_functions(readers=readers, **kwargs)
         self.add_all_spectra(readers=readers)
         self.subtract_baseline(overwrite=True, **kwargs)
         self.set_peaks(**kwargs)
@@ -2791,11 +2828,11 @@ class MultiSectionSpectra(Spectra):
         targets: list[float]
             Target mzs.
         kwargs: dict[str, Any]
-            Keyword arguments passed on to Spectra.require_calibrate_functions
+            Keyword arguments passed on to Spectra.require_calibration_functions
         """
         self.add_all_spectra(readers=readers)
         self.subtract_baseline(**kwargs)
-        self.require_calibrate_functions(readers=readers, **kwargs)
+        self.require_calibration_functions(readers=readers, **kwargs)
         self.add_all_spectra(readers=readers)
         self.subtract_baseline(overwrite=True, **kwargs)
         # set target compounds
