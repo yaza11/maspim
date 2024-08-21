@@ -7,6 +7,9 @@ msi_workflow.egg-info/
 dists/
 maspim/test/
 maspim/testing/
+maspim/Notebooks/Demo.ipynb
+maspim/Notebooks/Data/*.pickle
+maspim/test_files/
 
 !test.py
 
