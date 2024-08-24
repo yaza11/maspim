@@ -68,7 +68,7 @@ def get_comp_as_img(
             (classification_column is not None) and
             (classification_column not in data_frame.columns)
     ):
-        logger.info(
+        logger.warning(
             f'did not find the column {classification_column} in '
             f'the feature table classifying the holes, so not excluding pixels'
         )

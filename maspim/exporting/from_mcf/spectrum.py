@@ -452,7 +452,7 @@ class Spectra(Convinience):
             reader: ReadBrukerMCF | hdf5Handler,
             index: int | str,
             only_intensity: bool,
-            **kwargs
+            **kwargs: Any
     ) -> np.ndarray[float] | Spectrum:
         """
         Function to obtain a spectrum or its intensities from a reader.
@@ -469,7 +469,7 @@ class Spectra(Convinience):
             Index of the spectrum to obtain (1-based).
         only_intensity : bool
             Whether to return only the intensity of the spectrum object.
-        **kwargs : dict
+        **kwargs : Any
             Additional keyword arguments to be passed on to reader.get_spectrum.
             Will be ignored if only_intensities is set to True.
 
@@ -1864,8 +1864,6 @@ class Spectra(Convinience):
                 spectrum: np.ndarray[float] = profile_spectra[:, it]
             _bin_spectrum(spectrum, it)
 
-        logger.info('done binning spectra')
-
     def _add_rxys_to_df(
             self,
             df: pd.DataFrame,
@@ -1885,8 +1883,8 @@ class Spectra(Convinience):
         df : pd.DataFrame
             Data frame on which to append the R, x, and y columns
         reader : ReadBrukerMCF | None, optional
-            Reader from which to obtain the spot data. Defaults to evoking new ImagingInfoXML
-            object.
+            Reader from which to obtain the spot data. Defaults to evoking new
+            ImagingInfoXML object.
         """
         if (reader is not None) and isinstance(reader, ReadBrukerMCF):
             reader.create_spots()

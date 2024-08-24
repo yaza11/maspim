@@ -2817,7 +2817,8 @@ use_age_model, not {height0_mode}')
 
         if fig is None:
             assert axs is None, "If ax is provided, must also provide fig"
-            fig, axs = plt.subplots(nrows=2, ncols=2, sharex=True, layout='constrained')
+            fig, axs = plt.subplots(nrows=2, ncols=2, sharex=True,
+                                    layout='constrained')
         else:
             assert axs is not None, "If fig is provided, must also provide ax"
 
@@ -2870,6 +2871,4 @@ use_age_model, not {height0_mode}')
         # add quality criteria for each layer
         logger.info("calculating quality score")
         self.set_quality_score(**kwargs)
-        # create classification image
-        self.set_laminae_images_from_params(**kwargs)
         self.reduce_laminae(**kwargs)

@@ -1015,12 +1015,16 @@ class ProjectBaseClass:
     def set_tilt_corrector(self, **kwargs) -> None:
         assert check_attr(self, '_image_roi'), \
             'need image_roi to initialize tilt corrector'
+        if not check_attr(self, '_image_classified'):
+            self.require_image_classified(full=False)
 
         self.image_classified.set_corrected_image(**kwargs)
         self._update_files()
 
     def require_tilt_corrector(self, overwrite=False, **kwargs) -> Mapper:
-        mapper = Mapper(self.image_classified._image.shape,
+        assert check_attr(self, '_image_roi'), \
+            'need image_roi to initialize tilt corrector'
+        mapper = Mapper(self.image_roi.image.shape,
                         self.path_folder,
                         'tilt_correction')
         if overwrite or (not os.path.exists(mapper.save_file)):
@@ -1038,6 +1042,7 @@ class ProjectBaseClass:
             downscale_factor: float = 1 / 16,
             reduce_laminae: bool = True,
             use_tilt_correction: bool | None = None,
+            full: bool = False,
             **kwargs
     ) -> None:
         """
@@ -1056,6 +1061,9 @@ class ProjectBaseClass:
         reduce_laminae: bool, optional
             Reduce the number of layers to that predicted by the age model.
             The default is True.
+        full: bool, optional
+            Whether to perform all processing steps, including determining
+            laminae parameters. The default is False
 
         Returns
         -------
@@ -1074,14 +1082,15 @@ class ProjectBaseClass:
         ):
             self._image_classified.age_span = self.age_span
 
-        logger.info('setting laminae in ImageClassified ...')
-        self._image_classified.set_laminae_params_table(
-            peak_prominence=peak_prominence,
-            downscale_factor=downscale_factor,
-            **kwargs
-        )
-        if reduce_laminae:
-            self._image_classified.reduce_laminae(**kwargs)
+        if full:
+            logger.info('setting laminae in ImageClassified ...')
+            self._image_classified.set_laminae_params_table(
+                peak_prominence=peak_prominence,
+                downscale_factor=downscale_factor,
+                **kwargs
+            )
+            if reduce_laminae:
+                self._image_classified.reduce_laminae(**kwargs)
         self._image_classified.save(kwargs.get('tag'))
         self._update_files()
 
