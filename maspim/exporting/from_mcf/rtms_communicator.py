@@ -7,7 +7,7 @@ import logging
 from typing import Iterable
 
 from maspim.exporting.from_mcf.helper import get_r_home, ReaderBaseClass, Spots, Spectrum
-from maspim.util.convinience import check_attr
+from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
 

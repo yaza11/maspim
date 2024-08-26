@@ -9,7 +9,7 @@ from maspim.exporting.from_mcf.spectrum import Spectra
 from maspim.data.main import Data
 from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
 from maspim.project.file_helpers import search_keys_in_xml
-from maspim.util.convinience import check_attr
+from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
 

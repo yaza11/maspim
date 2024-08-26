@@ -19,7 +19,7 @@ from maspim.imaging.util.coordinate_transformations import (
     kartesian_to_polar, polar_to_kartesian, rescale_values)
 from maspim.imaging.util.image_plotting import plt_contours, plt_cv2_image
 from maspim.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
-from maspim.util.convinience import check_attr
+from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
 

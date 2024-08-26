@@ -17,7 +17,7 @@ from scipy.interpolate import griddata, CubicSpline
 from maspim.imaging.register.helpers import Mapper, apply_displacement
 from maspim.imaging.util.coordinate_transformations import rescale_values
 from maspim.imaging.util.image_convert_types import ensure_image_is_gray
-from maspim.util.convinience import check_attr
+from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -378,7 +378,7 @@ class Descriptor:
 
     @property
     def get_kernel(self) -> Callable:
-        """Convinience function for fetching the right kernel function."""
+        """Convenience function for fetching the right kernel function."""
         if self.kernel_type == 'gabor':
             return self._get_kernel_gabor
         elif self.kernel_type == 'rect':

@@ -9,7 +9,7 @@ from collections.abc import Iterable
 
 from matplotlib import pyplot as plt
 
-from maspim.util import Convinience
+from maspim.util import Convenience
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def check_file_integrity(
     return False, f'{file=} does not exist'
 
 
-class AgeModel(Convinience):
+class AgeModel(Convenience):
     """
     Offer depth-age conversions for tabled data.
 

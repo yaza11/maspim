@@ -18,7 +18,7 @@ from maspim.imaging.interactive import InteractiveImage
 from maspim.imaging.register.helpers import Mapper
 from maspim.imaging.register.descriptor import Descriptor
 from maspim.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
-from maspim.util.convinience import Convinience, check_attr
+from maspim.util.convenience import Convenience, check_attr
 from maspim.imaging.misc.fit_distorted_rectangle import find_layers, distorted_rect
 from maspim.imaging.misc.find_punch_holes import find_holes
 
@@ -49,7 +49,7 @@ from maspim.imaging.util.image_boxes import get_mean_intensity_box, region_in_bo
 logger = logging.getLogger(__name__)
 
 
-class Image(Convinience):
+class Image(Convenience):
     """
     Base function to get sample images and analyze them.
 

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from maspim.data.msi import MSI
 from maspim.data.xrf import XRF
 from maspim.imaging.main import ImageClassified
-from maspim.util.convinience import check_attr
+from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def get_averaged_tables(
          ' average by')
 
     if exclude_holes:
-        if holes_column in data_object.columns:
+        if holes_column not in data_object.columns:
             logging.warning(
                 f'cannot use {holes_column=} because the column is not in the '
                 f'feature table, proceeding with not excluding holes'
@@ -56,15 +56,22 @@ def get_averaged_tables(
         columns = data_object.feature_table.drop(columns=average_by_col).columns
         # set to nan to exclude from average
         data_object.feature_table.loc[mask_holes, columns] = np.nan
+        logging.info(
+            f'excluding {mask_holes.sum()} data points that were identified as '
+            'holes'
+        )
+    else:
+        columns = data_object.feature_table.columns
 
     ft_seeds_avg, ft_seeds_std, ft_seeds_success = data_object.processing_zone_wise_average(
         zones_key=average_by_col,
-        columns=feature_table.columns,
+        columns=columns,
         calc_std=kwargs.pop('calc_std', True),
         exclude_zeros=kwargs.pop('exclude_zeros', True),
         **kwargs
     )
 
+    #
     ft_seeds_avg = ft_seeds_avg.fillna(0)
 
     if not is_continuous:
@@ -102,7 +109,10 @@ def get_averaged_tables(
         # plot the qualities
         if plts:
             plt.figure()
-            plt.plot(quals_weighted.index, quals_weighted.quality, '+', label='qual')
+            plt.plot(quals_weighted.index,
+                     quals_weighted.quality,
+                     '+',
+                     label='qual')
             plt.plot(ft_seeds_avg.index, ft_seeds_avg.quality, 'x', label='ft')
             plt.legend()
             plt.xlabel('zone')

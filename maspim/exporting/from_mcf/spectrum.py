@@ -25,8 +25,8 @@ from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
 from maspim.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
 from maspim.exporting.from_mcf.helper import get_mzs_for_limits
 from maspim.res.calibrants import get_calibrants
-from maspim.util import Convinience
-from maspim.util.convinience import check_attr
+from maspim.util import Convenience
+from maspim.util.convenience import check_attr
 from maspim.project.file_helpers import ImagingInfoXML, get_rxy, get_spots
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ def bigaussian(
     return np.hstack([y_l, y_r])
 
 
-class Spectra(Convinience):
+class Spectra(Convenience):
     """
     Container for multiple Spectrum objects and binning.
 

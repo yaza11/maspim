@@ -17,7 +17,7 @@ from skimage.transform import rotate
 from maspim.imaging.main import ImageSample, ImageROI
 from maspim.imaging.util.image_convert_types import ensure_image_is_gray
 from maspim.imaging.util.image_plotting import plt_cv2_image
-from maspim.util.convinience import check_attr
+from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
 

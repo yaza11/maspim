@@ -8,8 +8,8 @@ from skimage.data import checkerboard
 from skimage.transform import warp, resize
 import logging
 
-from maspim.util import Convinience
-from maspim.util.convinience import check_attr
+from maspim.util import Convenience
+from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ def apply_displacement(u: np.ndarray, v: np.ndarray, image: np.ndarray, **kwargs
     return warped
 
 
-class Mapper(Convinience):
+class Mapper(Convenience):
     """
     Object to store shift matrices U and V and apply them to Images/ Feature tables.
     """

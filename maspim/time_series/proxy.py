@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-from maspim.util.convinience import check_attr
+from maspim.util.convenience import check_attr
 
 try:
     import bayspline

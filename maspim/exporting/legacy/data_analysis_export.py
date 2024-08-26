@@ -12,8 +12,8 @@ from mfe.from_txt import (
     Spectrum as mfe_spectrum
 )
 
-from maspim.util import Convinience
-from maspim.util.convinience import check_attr
+from maspim.util import Convenience
+from maspim.util.convenience import check_attr
 
 
 def msi_from_txt(raw_txt_path: str, **kwargs) -> dict:
@@ -91,7 +91,7 @@ def create_feature_table(
     return feature_table, err_table
 
 
-class DataAnalysisExport(Convinience):
+class DataAnalysisExport(Convenience):
     path_file: str | None = None
     _peak_thr: float | None = None
     _normalization: str | None = None

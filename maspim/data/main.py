@@ -19,7 +19,7 @@ from maspim.data.helpers import plot_comp, plt_comps
 from maspim.imaging.util.coordinate_transformations import rescale_values
 from maspim.res.constants import elements
 from maspim.res.constants import dict_labels
-from maspim.util.convinience import Convinience, check_attr
+from maspim.util.convenience import Convenience, check_attr
 from maspim.imaging.util.image_plotting import plt_cv2_image
 
 
@@ -238,8 +238,8 @@ class DataBaseClass:
 
 
 # need to inherit from DataBaseClass first, otherwise feature_table will be
-# taken from Convinience
-class Data(DataBaseClass, Convinience):
+# taken from Convenience
+class Data(DataBaseClass, Convenience):
     """
     Class to manipulate and analyze MSI or XRF data.
 

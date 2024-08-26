@@ -12,7 +12,7 @@ from astropy.timeseries import LombScargle
 from maspim.data.combine_feature_tables import combine_feature_tables
 from maspim.data.main import DataBaseClass
 from maspim.time_series.distances import sign_corr, sign_weighted_corr
-from maspim.util.convinience import Convinience, check_attr
+from maspim.util.convenience import Convenience, check_attr
 from maspim.res.constants import elements, YD_transition
 from maspim.imaging.util.coordinate_transformations import rescale_values
 
@@ -20,7 +20,7 @@ from maspim.imaging.util.coordinate_transformations import rescale_values
 logger = logging.getLogger(__name__)
 
 
-class TimeSeries(DataBaseClass, Convinience):
+class TimeSeries(DataBaseClass, Convenience):
     _save_in_d_folder: bool = True
 
     _feature_table: pd.DataFrame | None = None
@@ -46,8 +46,10 @@ class TimeSeries(DataBaseClass, Convinience):
     ) -> None:
         """Initialize."""
 
-        assert isinstance(n_successes_required, int), 'n_successes_required must be an integer'
-        assert isinstance(path_folder, str | None), 'path_folder must be string or None'
+        assert isinstance(n_successes_required, int), \
+            'n_successes_required must be an integer'
+        assert isinstance(path_folder, str | None), \
+            'path_folder must be string or None'
 
         self.n_successes_required: int = n_successes_required
 
@@ -928,8 +930,11 @@ that before using this option'
             norm_mode: str = 'normal_distribution',
             contrasts: bool = False,
             annotate_l_correlations: bool = False,
+            fig: plt.Figure | None = None,
+            ax: plt.Axes | None = None,
+            hold: bool = False,
             **kwargs
-    ) -> None:
+    ) -> None | tuple[plt.Figure, plt.Axes]:
         """
         Plot a specific compound or list of compounds
 
@@ -956,6 +961,12 @@ that before using this option'
         annotate_l_correlations: bool, optional
             Whether to add correlation scores. Only available if contrasts is
             True.
+        fig: plt.Figure | None, optional
+            Figure in which to place axes. Creates new fig and ax by default.
+        ax: plt.Axes | None, optional
+            The axis on which to draw. Creates new axis by default.
+        hold: bool,
+            If True, will return fig and ax, otherwise plot.
         """
         def _filter_plot_data(comp_):
             if exclude_layers_low_successes and (comp_ in self.successes.columns):
@@ -991,7 +1002,7 @@ that before using this option'
                 if c_index not in season_to_color:
                     continue
 
-                axs.axvspan(
+                ax.axvspan(
                     bounds[idx],
                     bounds[idx + 1],
                     facecolor=season_to_color[c_index],
@@ -1003,7 +1014,7 @@ that before using this option'
         def _add_yd_transition():
             if (t.min() < YD_transition) and (YD_transition < t.max()):
                 logger.info('Pl-H transition in slice!')
-                axs.vlines(YD_transition,
+                ax.vlines(YD_transition,
                            y_bounds[0],
                            y_bounds[1],
                            linestyles='solid',
@@ -1102,7 +1113,11 @@ that before using this option'
 
             seas: pd.Series = self.get_seasonalities(cols=comps)
 
-        fig, axs = plt.subplots(figsize=(10, 2))
+        if fig is None:
+            assert ax is None, "If ax is provided, must also provide fig"
+            fig, ax = plt.subplots(figsize=(10, 2))
+        else:
+            assert ax is not None, "If fig is provided, must also provide ax"
 
         # mask to keep track of which layers have a compound with enough successful spectra
         mask_any = np.zeros_like(t, dtype=bool)
@@ -1123,13 +1138,13 @@ that before using this option'
                 label: str = names[idx]
 
             if errors:
-                axs.fill_between(t_plot,
+                ax.fill_between(t_plot,
                                  values_plot - error_plot,
                                  values_plot + error_plot,
                                  color=colors[idx],
                                  alpha=.5,
                                  zorder=-.5)
-            axs.plot(
+            ax.plot(
                 t_plot,
                 values_plot,
                 label=label,
@@ -1156,13 +1171,13 @@ that before using this option'
 
             if errors:
                 L_errors = errors_scaled.loc[mask_any, 'L']
-                axs.fill_between(t[mask_any],
+                ax.fill_between(t[mask_any],
                                  L[mask_any] - L_errors,
                                  L[mask_any] + L_errors,
                                  color='k',
                                  alpha=.5,
                                  zorder=-.5)
-            axs.plot(
+            ax.plot(
                 t[mask_any],
                 L[mask_any],
                 label=label_l,
@@ -1174,9 +1189,9 @@ that before using this option'
         _add_yd_transition()
 
         # axs.set_xlim((t.min(), t.max()))
-        axs.set_ylim(y_bounds)
-        axs.set_xlabel('age (yr B2K)')
-        axs.set_ylabel(f'{"scaled" if norm_mode != "none" else ""} '
+        ax.set_ylim(y_bounds)
+        ax.set_xlabel('age (yr B2K)')
+        ax.set_ylabel(f'{"scaled" if norm_mode != "none" else ""} '
                        f'{"contrasts" if contrasts else "intensities"}')
         if title is None:
             title = (f'excluded layers with less than '
@@ -1184,10 +1199,12 @@ that before using this option'
                      f'{exclude_layers_low_successes}, '
                      f'scaled mode: {norm_mode}')
         fig.suptitle(title)
-        axs.grid(True)
-        axs.legend()
+        ax.grid(True)
+        ax.legend()
 
         fig.tight_layout()
+        if hold:
+            return fig, ax
         plt.show()
 
 

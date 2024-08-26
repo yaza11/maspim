@@ -91,7 +91,7 @@ def object_to_string(obj: object | dict, pad=0) -> str:
     return '\n'.join(out)
 
 
-class Convinience:
+class Convenience:
     path_d_folder: str | None = None
     path_folder: str | None = None
 

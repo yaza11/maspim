@@ -24,7 +24,7 @@ from maspim.imaging.util.image_boxes import region_in_box
 from maspim.imaging.util.image_plotting import plt_rect_on_image, plt_cv2_image
 from maspim.time_series.helpers import get_averaged_tables
 
-from maspim.util import Convinience
+from maspim.util import Convenience
 
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
 from maspim.exporting.from_mcf.helper import Spectrum, get_mzs_for_limits
@@ -53,7 +53,7 @@ from maspim.imaging.register.helpers import Mapper
 
 from maspim.time_series.main import TimeSeries
 from maspim.time_series.proxy import UK37
-from maspim.util.convinience import check_attr, object_to_string
+from maspim.util.convenience import check_attr, object_to_string
 from maspim.util.read_msi_align import get_teaching_points, get_teaching_point_pairings_dict
 
 PIL_Image.MAX_IMAGE_PIXELS = None
@@ -61,7 +61,7 @@ PIL_Image.MAX_IMAGE_PIXELS = None
 logger = logging.getLogger(__name__)
 
 
-class SampleImageHandlerMSI(Convinience):
+class SampleImageHandlerMSI(Convenience):
     """
     Given the mis file and folder, find image and area (of MSI) of sample.
 
@@ -381,7 +381,7 @@ class SampleImageHandlerMSI(Convinience):
         plt.show()
 
 
-class SampleImageHandlerXRF(Convinience):
+class SampleImageHandlerXRF(Convenience):
     """
     Image handler for XRF measurements. Finds the image region corresponding
     to the measurement area.
@@ -2907,9 +2907,10 @@ class ProjectMSI(ProjectBaseClass):
         return self.require_spectra()
 
     def set_da_export(self, path_file: str, **kwargs):
+        tag = kwargs.pop('tag', None)
         self._da_export = DataAnalysisExport(path_file=path_file, **kwargs)
         self._da_export.set_feature_table()
-        self._da_export.save(kwargs.get('tag'))
+        self._da_export.save(tag)
 
         self._update_files()
 
