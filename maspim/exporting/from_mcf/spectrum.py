@@ -260,8 +260,34 @@ class Spectra(Convinience):
         if initiate:
             self._initiate(reader, indices, limits)
         else:
-            self._indices: np.ndarray[int] = np.array(indices)
-            self._limits: tuple[float, float] = limits
+            if indices is not None:
+                self._indices: np.ndarray[int] = np.array(indices)
+            if limits is not None:
+                self._limits: tuple[float, float] = limits
+
+    def _from_reader(self, reader: ReadBrukerMCF | hdf5Handler) -> None:
+        """
+        Inherit indices and limits from reader if self does not have them.
+
+        This method also attempts to set the mz values from the limits.
+        """
+        def try_inherit(attr: str) -> None:
+            """Inherit attribute if self does not but reader does have it"""
+            private_attr = f'_{attr}'
+            if check_attr(self, private_attr):
+                return
+            if not check_attr(reader, attr):
+                return
+
+            logger.info(f'inherited {attr} from reader')
+            setattr(self, private_attr, getattr(reader, attr))
+
+        try_inherit('indices')
+        try_inherit('limits')
+
+        # set mzs
+        if not check_attr(self, '_mzs') and check_attr(self, '_limits'):
+            self._mzs = get_mzs_for_limits(self._limits, self._delta_mz)
 
     def _set_files(
             self,
@@ -375,7 +401,7 @@ class Spectra(Convinience):
 
     @property
     def indices(self) -> np.ndarray[int]:
-        check_attr(self, '_indices')
+        assert check_attr(self, '_indices')
         return self._indices
 
     @property
@@ -518,12 +544,20 @@ class Spectra(Convinience):
         reader : ReadBrukerMCF | hdf5Handler
             Reader from which to obtain the spectra.
         """
-        logger.info(f'adding up {self._n_spectra} spectra ...')
-
-        self.reset_intensities()
+        # inherit indices and limits if not set before
+        self._from_reader(reader)
+        assert check_attr(self, '_indices'), \
+            ('No indices were set and also none were found in the reader. '
+             'Make sure to initialize the reader correctly')
+        assert check_attr(self, '_mzs'), \
+            ('instance does not have mz values and it was also not possible to '
+             'get the limits from the reader. Please make sure to initialize '
+             'either the instance with limits or the reader')
 
         if not check_attr(reader, 'mzs'):
             reader.set_mzs(self.mzs)
+
+        self.reset_intensities()
 
         # iterate over all spectra
         for i, index in tqdm(
@@ -557,6 +591,12 @@ class Spectra(Convinience):
             Reader from which to obtain the spectra.
         """
         self.reset_intensities()
+
+        # inherit indices and limits if not set before
+        self._from_reader(reader)
+        assert check_attr(self, '_indices'), \
+            ('No indices were set and also none were found in the reader. '
+             'Make sure to initialize the reader correctly')
 
         for it, index in tqdm(
                 enumerate(self.indices),

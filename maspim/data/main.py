@@ -481,7 +481,7 @@ class Data(DataBaseClass, Convinience):
             plt.show()
 
     def combine_with(self, other: Self) -> None:
-        """Combine two Data objects based on the depth column."""
+        """Combine two data objects based on the depth column."""
 
         def both_have(attr: str, obj1=self, obj2=other) -> bool:
             return check_attr(obj1, attr) & check_attr(obj2, attr)

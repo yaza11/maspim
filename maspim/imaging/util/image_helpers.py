@@ -344,8 +344,8 @@ def restore_unique_values(
     n_unique: int = len(unique_values)
 
     for i, uval in tqdm(enumerate(unique_values), total=n_unique, desc='setting unique values'):
-        left_uval: int = unique_values[i - 1] if i > 0 else -np.infty
-        right_uval: int = unique_values[i + 1] if i < n_unique - 1 else np.infty
+        left_uval: int = unique_values[i - 1] if i > 0 else -np.inf
+        right_uval: int = unique_values[i + 1] if i < n_unique - 1 else np.inf
         left_bound: float = (left_uval + uval) / 2
         right_bound: float = (uval + right_uval) / 2
         mask = (image >= left_bound) & (image < right_bound)

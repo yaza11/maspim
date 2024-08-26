@@ -90,7 +90,7 @@ def match_template_scale(
     scales: np.ndarray[float] = np.linspace(scale_guess / 10, scale_guess, N_guesses)
 
     # initialize holders for guesses
-    min_val_best: float = np.infty
+    min_val_best: float = np.inf
     loc_best: tuple[int, int] = (0, 0)
     scale_best: float = 0
     for scale in scales:

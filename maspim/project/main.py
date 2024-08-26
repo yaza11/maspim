@@ -1986,6 +1986,7 @@ class ProjectBaseClass:
     def _require_combine_mapper(
             self,
             other: Self,
+            apply_tilt_correction: bool,
             plts: bool = False,
             **kwargs
     ) -> Mapper:
@@ -2009,6 +2010,8 @@ class ProjectBaseClass:
         )
 
         t.estimate('bounding_box', plts=plts, **kwargs)
+        if apply_tilt_correction:
+            t.estimate('tilt', plts=plts, **kwargs)
         t.estimate('laminae', plts=plts, **kwargs)
 
         if plts:
@@ -2073,12 +2076,10 @@ class ProjectBaseClass:
         if self_correct_tilt:
             self.require_tilt_corrector()
             self.data_object_apply_tilt_correction()
-        if other_correct_tilt:
-            other.require_tilt_corrector()
-            other.data_object_apply_tilt_correction()
 
         # setting the warp mapper
-        mapper_warp = self._require_combine_mapper(other, plts=plts, **kwargs)
+        # perform tilt correction after matching bounding rectangles
+        mapper_warp = self._require_combine_mapper(other, plts=plts, apply_tilt_correction=other_correct_tilt, **kwargs)
 
         x_ROI = other.data_object.feature_table.x_ROI
         y_ROI = other.data_object.feature_table.y_ROI

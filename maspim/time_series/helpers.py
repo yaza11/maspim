@@ -16,6 +16,9 @@ def get_averaged_tables(
         image_classified: ImageClassified,
         is_continuous: bool,
         average_by_col: str = 'classification_se',
+        exclude_holes: bool = True,
+        holes_column: str | float | int = 'valid',
+        holes_key: str | float | int = 0,
         plts: bool = False,
         **kwargs
 ) -> tuple[pd.DataFrame, ...]:
@@ -37,11 +40,22 @@ def get_averaged_tables(
         ('call add_laminae_classification or use a different column name to'
          ' average by')
 
-    # x column always included in processing_zone_wise_average
-    # columns_feature_table = np.append(
-    #     self.data_object.data_columns,
-    #     ['x_ROI', 'R', 'L', 'depth']
-    # )
+    if exclude_holes:
+        if holes_column in data_object.columns:
+            logging.warning(
+                f'cannot use {holes_column=} because the column is not in the '
+                f'feature table, proceeding with not excluding holes'
+            )
+            exclude_holes = False
+    if exclude_holes:
+        # TODO: test
+        # set rows with holes to nan in copy
+        data_object = data_object.copy()
+        mask_holes = data_object.feature_table.loc[:, holes_column] == holes_key
+        # all columns except the average by column
+        columns = data_object.feature_table.drop(columns=average_by_col).columns
+        # set to nan to exclude from average
+        data_object.feature_table.loc[mask_holes, columns] = np.nan
 
     ft_seeds_avg, ft_seeds_std, ft_seeds_success = data_object.processing_zone_wise_average(
         zones_key=average_by_col,
@@ -83,7 +97,7 @@ def get_averaged_tables(
             set(ft_seeds_success.columns)
         )
         for col in missing_cols:
-            ft_seeds_success.loc[:, col] = np.infty
+            ft_seeds_success.loc[:, col] = np.inf
 
         # plot the qualities
         if plts:
@@ -123,10 +137,11 @@ def get_averaged_tables(
     ft_seeds_success = ft_seeds_success.sort_values(by='x_ROI')
 
     # drop columns with seed == 0
-    mask_drop = ft_seeds_avg.zone == 0
-    ft_seeds_avg.drop(index=ft_seeds_avg.index[mask_drop], inplace=True)
-    ft_seeds_std.drop(index=ft_seeds_std.index[mask_drop], inplace=True)
-    ft_seeds_success.drop(index=ft_seeds_success.index[mask_drop], inplace=True)
+    if 'classification' in average_by_col:
+        mask_drop = ft_seeds_avg.zone == 0
+        ft_seeds_avg.drop(index=ft_seeds_avg.index[mask_drop], inplace=True)
+        ft_seeds_std.drop(index=ft_seeds_std.index[mask_drop], inplace=True)
+        ft_seeds_success.drop(index=ft_seeds_success.index[mask_drop], inplace=True)
 
     # reset index
     ft_seeds_avg.reset_index(inplace=True, drop=True)

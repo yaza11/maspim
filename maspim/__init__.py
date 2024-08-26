@@ -25,3 +25,6 @@ from maspim.data.combine_feature_tables import combine_feature_tables
 from maspim.data.msi import MSI
 from maspim.data.xrf import XRF
 from maspim.data.helpers import plot_comp, plot_comp_on_image
+
+from maspim.time_series.main import TimeSeries, MultiSectionTimeSeries
+from maspim.time_series.proxy import UK37, Proxy, RatioProxy, ProxiesGDGT
