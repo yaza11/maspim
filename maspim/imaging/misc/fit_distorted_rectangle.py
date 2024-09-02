@@ -190,7 +190,6 @@ converged: {params.success}, score: {params.fun:.3f} (from {score0:.3f})')
 
     return [a, b, c, d, height] + [params.success]
 
-rescale_values
 
 def find_layers(
         image_classification: np.ndarray,

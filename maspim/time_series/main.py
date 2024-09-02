@@ -930,6 +930,7 @@ that before using this option'
             norm_mode: str = 'none',
             contrasts: bool = False,
             annotate_l_correlations: bool = False,
+            two_y_scales: bool | None = None,
             fig: plt.Figure | None = None,
             ax: plt.Axes | None = None,
             hold: bool = False,
@@ -961,6 +962,9 @@ that before using this option'
         annotate_l_correlations: bool, optional
             Whether to add correlation scores. Only available if contrasts is
             True.
+        two_y_scales: bool | None, optional
+            If this is set to None (default), two y axes will be added if there
+            are two compounds to be plotted.
         fig: plt.Figure | None, optional
             Figure in which to place axes. Creates new fig and ax by default.
         ax: plt.Axes | None, optional
@@ -1088,7 +1092,14 @@ that before using this option'
             comps.append('L')
 
         # y ticks left and right for two comps and norm_mode none
-        two_y_scales: bool = (len(comps) == 2) and (norm_mode == 'none')
+        if two_y_scales is None:
+            two_y_scales: bool = (len(comps) == 2) and (norm_mode == 'none')
+        elif two_y_scales:
+            assert len(comps) == 2, \
+                'can only create two y scales for two compounds'
+            assert (norm_mode == 'none'), \
+                ('can only create two y scales for unscaled data, '
+                 'set norm_mode to "none"')
 
         # get data for relevant columns
         if hasattr(correct_tic, '__iter__'):  # possibly mixed true and false
@@ -1269,7 +1280,12 @@ that before using this option'
                      f'scaled mode: {norm_mode}')
         fig.suptitle(title)
         ax.grid(True)
-        ax.legend()
+        if two_y_scales:
+            lines, labels = ax.get_legend_handles_labels()
+            lines2, labels2 = ax_.get_legend_handles_labels()
+            ax_.legend(lines + lines2, labels + labels2)
+        else:
+            ax.legend()
 
         fig.tight_layout()
         if hold:

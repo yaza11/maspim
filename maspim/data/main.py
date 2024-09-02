@@ -1143,7 +1143,7 @@ class Data(DataBaseClass, Convenience):
         Parameters
         ----------
         plot_log_scale : bool, optional
-            If True, intensities of the images will be scaled logarithmicly.
+            If True, intensities of the images will be scaled logarithmically.
         hold : bool, optional
             If True, will return the fig and axs objects for further modification.
         """
