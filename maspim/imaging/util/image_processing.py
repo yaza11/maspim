@@ -481,7 +481,7 @@ def test():
 
 
 def compare_adaptive_means():
-    from imaging.util.Image_plotting import plt_cv2_image
+    from maspim.imaging.util.image_plotting import plt_cv2_image
     test_img = convert('np', 'cv', skimage.data.brick())
     mask = (test_img > 100).astype(np.uint8)
     plt_cv2_image(test_img, 'original')

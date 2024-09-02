@@ -164,7 +164,6 @@ class Descriptor:
     _shifts: np.ndarray[float] | None = None
     _shifts_inverse: np.ndarray[float] | None = None
 
-
     def __init__(
             self,
             image: np.ndarray,
@@ -985,7 +984,7 @@ class Descriptor:
 
         x, y = np.meshgrid(np.arange(w), np.arange(h))
 
-        every: int = round(h / n_row)
+        every: int = max([round(h / n_row), 1])
         idxs = np.index_exp[::every, ::every]
 
         if plt_res := (fig is None):

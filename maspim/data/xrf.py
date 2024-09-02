@@ -90,7 +90,8 @@ class XRF(Data):
         'distance_pixels',
         '_feature_table',  # it could be processed, so not necessarily redundant information
         'depth_section',
-        'age_span'
+        'age_span',
+        'tilt_correction_applied'
     }
 
     def __init__(

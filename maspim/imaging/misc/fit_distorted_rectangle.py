@@ -136,8 +136,9 @@ def find_layer(
         raise ValueError('internal error')
 
     if (key_light not in image_classification) or (key_dark not in image_classification):
-        raise ValueError(f'Specify keys (values) for light and dark \
-classification. Either {key_light=} or {key_dark=} is not in image.')
+        raise ValueError(f'Specify keys (values) for light and dark '
+                         f'classification. Either {key_light=} or {key_dark=} '
+                         f'is not in image.')
 
     if color.lower() not in ('light', 'dark'):
         raise KeyError(
@@ -189,6 +190,7 @@ converged: {params.success}, score: {params.fun:.3f} (from {score0:.3f})')
 
     return [a, b, c, d, height] + [params.success]
 
+rescale_values
 
 def find_layers(
         image_classification: np.ndarray,

@@ -1726,6 +1726,8 @@ class ImageClassified(Image):
     _prominences_light: np.ndarray[float] | None = None
     _prominences_dark: np.ndarray[float] | None = None
 
+    _qualities: np.ndarray[float] | None = None
+
     image_seeds: np.ndarray[int] | None = None
     params_laminae_simplified: pd.DataFrame | None = None
 
@@ -1925,6 +1927,15 @@ class ImageClassified(Image):
         mapper.save()
 
         self._set_corrected_using_mapper(mapper)
+
+        # upscale and undistort values of descriptor as qualities
+        self._qualities: np.ndarray[float] = mapper.fit(
+            skimage.transform.resize(
+                d.vals,
+                (self._image.shape[0], self._image.shape[1])
+            ),
+            preserve_range=True
+        ).mean(axis=0)
 
         if plts:
             d.plot_kernels()

@@ -59,7 +59,6 @@ class TimeSeries(DataBaseClass, Convenience):
         self._feature_table_successes: pd.DataFrame = pd.DataFrame()
         self._feature_table_standard_deviations: pd.DataFrame = pd.DataFrame()
 
-
     def _sort_tables(self) -> None:
         if check_attr(self, '_feature_table'):
             self._feature_table = self._feature_table\
@@ -615,35 +614,36 @@ that before using this option'
             seasonalities: pd.Series = ft.median(axis=0)
         return seasonalities
 
+    @staticmethod
     def scale_data(
-            self,
             norm_mode: str,
             data: np.ndarray | pd.DataFrame,
             errors: np.ndarray | pd.DataFrame | None = None,
             y_bounds: tuple[int | float, int | float] | None = None
     ):
+        norm_mode = norm_mode.lower()
         modes = ['normal_distribution', 'upper_lower', 'contrast', 'none']
         assert norm_mode in modes, \
             f"choose one of {modes}, not {norm_mode=}"
 
         # std = 1, mean = 0
-        if norm_mode.lower() == 'normal_distribution':
+        if norm_mode == 'normal_distribution':
             if y_bounds is None:
                 y_bounds = (-3, 3)
             data_scaled = StandardScaler().fit_transform(data)
         # bound between 0 and 1
-        elif norm_mode.lower() == 'upper_lower':
+        elif norm_mode == 'upper_lower':
             if y_bounds is None:
                 y_bounds = (0, 1)
             data_scaled = rescale_values(
                 data, new_min=y_bounds[0], new_max=y_bounds[1], axis=0
             )
         # bound between -1 and 1
-        elif norm_mode.lower() == 'contrast':
+        elif norm_mode == 'contrast':
             data_scaled = data.multiply(1 / data.abs().max(axis=0))
             y_bounds = (-1, 1)
         # dont scale
-        elif norm_mode.lower() == 'none':
+        elif norm_mode == 'none':
             if y_bounds is None:
                 y_bounds = (data.min().min(), data.max().max())
             data_scaled = data
@@ -927,7 +927,7 @@ that before using this option'
             colors: list | None = None,
             names: list | None = None,
             correct_tic: bool | Iterable[bool] = False,
-            norm_mode: str = 'normal_distribution',
+            norm_mode: str = 'none',
             contrasts: bool = False,
             annotate_l_correlations: bool = False,
             fig: plt.Figure | None = None,
@@ -968,18 +968,28 @@ that before using this option'
         hold: bool,
             If True, will return fig and ax, otherwise plot.
         """
-        def _filter_plot_data(comp_):
+        def _filter_plot_data(
+                comp_: str | int | float
+        ) -> tuple[
+            pd.Series | np.ndarray[bool],
+            pd.Series,
+            pd.Series,
+            pd.Series | None
+        ]:
             if exclude_layers_low_successes and (comp_ in self.successes.columns):
-                mask_valid = (self.successes.loc[:, comp_]
-                              >= self.n_successes_required)
+                mask_valid: pd.Series = (self.successes.loc[:, comp_]
+                                         >= self.n_successes_required)
             else:
-                mask_valid = np.ones_like(t, dtype=bool)
-            _t = t[mask_valid]
-            _values = data_scaled.loc[mask_valid, comp_]
+                mask_valid: np.ndarray[bool] = np.ones_like(t, dtype=bool)
+            # filtered times
+            _t: pd.Series = t[mask_valid]
+            # filtered values
+            _values: pd.Series = data_scaled.loc[mask_valid, comp_]
             if errors_scaled is not None:
-                _error = errors_scaled.loc[mask_valid, comp_]
+                # filtered errors
+                _error: pd.Series = errors_scaled.loc[mask_valid, comp_]
             else:
-                _error = None
+                _error: None = None
 
             return mask_valid, _t, _values, _error
 
@@ -1012,6 +1022,8 @@ that before using this option'
                 )
 
         def _add_yd_transition():
+            # TODO: this function is quite specific for Cariaco, should not be
+            # part of default plotting
             if (t.min() < YD_transition) and (YD_transition < t.max()):
                 logger.info('Pl-H transition in slice!')
                 ax.vlines(YD_transition,
@@ -1023,76 +1035,104 @@ that before using this option'
                            color='black',
                            linewidth=2)
 
+        # can only add l correlations when plotting contrasts
         if annotate_l_correlations and (not contrasts):
             logger.warning(
                 'Cannot add correlations if contrasts is set to False.'
             )
             annotate_l_correlations = False
+        # correcting tic likely unnecessary for ratios
         if contrasts and correct_tic:
             logger.warning(
                 'Correcting TIC for contrasts does not make sense because '
                 'contrast values are scaled by neighbouring values'
             )
 
-        t: pd.Series = self.age
+        if 'age' in self.feature_table.columns:
+            t: pd.Series = self.age
+        else:
+            logger.warning(
+                'No age column found in the feature table, using indices instead'
+            )
+            t: pd.Series = self.feature_table.index
 
         # put comps in list if it is only one
         if isinstance(comps, float | str):
-            comps = [comps]
+            comps: list[float | str] = [comps]
         n_comps: int = len(comps)
 
+        # check provided colors or use default matplotlib colors
         if colors is not None:
             assert len(colors) == n_comps, \
                 f'expected {n_comps=} colors, got {len(colors)}'
         else:
-            colors = [f'C{idx + 2}' for idx in range(n_comps)]
+            colors: list[str] = [f'C{idx + 2}' for idx in range(n_comps)]
 
         # find closest mz for comps in feature table
-        comps: list = [
+        comps: list[str] = [
             self.get_closest_mz(comp)
             if (comp not in self.feature_table.columns)
             else comp
             for comp in comps
         ]
 
+        # check provided names or use comps as names
         if names is not None:
             assert len(names) == n_comps, \
                 f'expected {n_comps=} names, got {len(names)}'
         else:
             names = comps
 
+        # make sure L is in comps if annotate_l_correlations is set to True
         if ('L' not in comps) and annotate_l_correlations:
             comps.append('L')
 
+        # y ticks left and right for two comps and norm_mode none
+        two_y_scales: bool = (len(comps) == 2) and (norm_mode == 'none')
+
         # get data for relevant columns
-        if hasattr(correct_tic, '__iter__'):
-            assert len(correct_tic) == n_comps, 'Provide a value for each compound'
-            data = self.feature_table.loc[:, comps].copy()
-            data_scaled = self.get_feature_table_tic_corrected(**kwargs).loc[:, comps].copy()
+        if hasattr(correct_tic, '__iter__'):  # possibly mixed true and false
+            assert len(correct_tic) == n_comps, \
+                'Provide a value for each compound'
+            # get scaled and unscaled data to fetch scaled and unscaled comps
+            data: pd.DataFrame = self.feature_table.loc[:, comps].copy()
+            data_scaled: pd.DataFrame = self.get_feature_table_tic_corrected(
+                **kwargs
+            ).loc[:, comps].copy()
+            # overwrite copy of feature table with scaled values where desired
             for comp, correct in zip(comps, correct_tic):
-                if not correct:
+                if not correct:  # keep data if correct_tic is False
                     continue
                 data.loc[:, comp] = data_scaled.loc[:, comp]
-        if correct_tic:
-            data = self.get_feature_table_tic_corrected(**kwargs).loc[:, comps].copy()
+        elif correct_tic:
+            data = self.get_feature_table_tic_corrected(
+                **kwargs
+            ).loc[:, comps].copy()
         else:
             data = self.feature_table.loc[:, comps].copy()
 
+        # get either errors or contrast errors
         if errors:
             if contrasts:
                 errors_data: pd.DataFrame = self._get_contrast_errors().loc[:, comps]
             else:
                 errors_data: pd.DataFrame = self.errors.loc[:, comps]
             if correct_tic:
-                errors_data = errors_data.divide(self._get_tic_scales(), axis=0)
+                assert not contrasts, \
+                    ('Calculating errors for contrasts and tic corrected '
+                     'intensities is not implemented. Set correct_tic to False.')
+                errors_data: pd.DataFrame = errors_data.divide(
+                    self._get_tic_scales(), axis=0
+                )
         else:
-            errors_data = None
+            errors_data: None = None
 
-        # contrasts will be returned from feature_table_zone_averages as it is already in there
+        # contrasts
         if contrasts:
             logger.info(f'getting contrasts for {data.columns}')
-            data = self.get_contrasts_table(feature_table=data)
+            data: pd.DataFrame = self.get_contrasts_table(feature_table=data)
 
+        # scale data and errors
         data_scaled, y_bounds, errors_scaled = self.scale_data(
             norm_mode=norm_mode,
             data=data,
@@ -1100,6 +1140,7 @@ that before using this option'
             y_bounds=kwargs.get('y_bounds')
         )
 
+        # calculate correlations with luminance
         if annotate_l_correlations:
             # split off L
             L: pd.Series = data_scaled.L
@@ -1109,42 +1150,59 @@ that before using this option'
             # calculate weights
             w: pd.Series = (self.feature_table.contrast *
                             np.sign(self.feature_table.homogeneity))
+            # clip weights below 0 to 0
             w[w < 0] = 0
 
             seas: pd.Series = self.get_seasonalities(cols=comps)
 
+        # use provided fig and ax or create new
         if fig is None:
             assert ax is None, "If ax is provided, must also provide fig"
             fig, ax = plt.subplots(figsize=(10, 2))
         else:
             assert ax is not None, "If fig is provided, must also provide ax"
 
-        # mask to keep track of which layers have a compound with enough successful spectra
-        mask_any = np.zeros_like(t, dtype=bool)
+        # mask to keep track of which layers have a compound with enough
+        # successful spectra
+        mask_any: np.ndarray[bool] = np.zeros_like(t, dtype=bool)
+
+        # loop over compounds and plot them
         for idx, comp in enumerate(comps):
+            # change axis for second compound
+            if two_y_scales and (idx == 1):
+                ax_ = ax.twinx()
+            else:
+                ax_ = ax
+
             mask_comp, t_plot, values_plot, error_plot = _filter_plot_data(comp)
 
             if annotate_l_correlations:
                 l_values: pd.Series = L.loc[mask_comp]
                 # get corr with L
-                rho = l_values.corr(values_plot, method='pearson')
+                rho: float = l_values.corr(values_plot, method='pearson')
                 # get corr of signs
-                s = sign_corr(l_values, values_plot)
-                ws = sign_weighted_corr(l_values, values_plot, w[mask_comp])
-                sea = seas[comp]
-                label: str = (fr'{names[idx]} ($\rho_L$={rho:.2f}, $f_L=${s:.2f}, '
-                              fr'$w_L=${ws:.2f}, $seas=${sea:.3f})')
+                s: float = sign_corr(l_values, values_plot)
+                ws: float = sign_weighted_corr(l_values, values_plot, w[mask_comp])
+                sea: float = seas[comp]
+                label: str = (fr'{names[idx]} ' +
+                              fr'($\rho_L$={rho:.2f}, ' +
+                              fr'$f_L=${s:.2f}, ' +
+                              fr'$w_L=${ws:.2f}, ' +
+                              fr'$seas=${sea:.3f})')
             else:
                 label: str = names[idx]
 
+            # shade area between upper and lower limit of confidence interval
             if errors:
-                ax.fill_between(t_plot,
+                ax_.fill_between(t_plot,
                                  values_plot - error_plot,
                                  values_plot + error_plot,
                                  color=colors[idx],
                                  alpha=.5,
                                  zorder=-.5)
-            ax.plot(
+
+            # plot the averaged values
+            ax_.plot(
                 t_plot,
                 values_plot,
                 label=label,
@@ -1156,7 +1214,12 @@ that before using this option'
         if color_seasons:
             _add_seasons_coloring()
 
+        # annotations and plot for luminance
         if annotate_l_correlations:
+            if two_y_scales:
+                ax_ = ax.twinx()
+            else:
+                ax_ = ax
             s_l = sign_corr(
                 self.feature_table.contrast[mask_any],
                 self.feature_table.seed[mask_any]
@@ -1171,13 +1234,13 @@ that before using this option'
 
             if errors:
                 L_errors = errors_scaled.loc[mask_any, 'L']
-                ax.fill_between(t[mask_any],
+                ax_.fill_between(t[mask_any],
                                  L[mask_any] - L_errors,
                                  L[mask_any] + L_errors,
                                  color='k',
                                  alpha=.5,
                                  zorder=-.5)
-            ax.plot(
+            ax_.plot(
                 t[mask_any],
                 L[mask_any],
                 label=label_l,
@@ -1188,11 +1251,17 @@ that before using this option'
         # add vertical line to mark the transition
         _add_yd_transition()
 
+        # set ticks and labels
         # axs.set_xlim((t.min(), t.max()))
-        ax.set_ylim(y_bounds)
         ax.set_xlabel('age (yr B2K)')
-        ax.set_ylabel(f'{"scaled" if norm_mode != "none" else ""} '
-                       f'{"contrasts" if contrasts else "intensities"}')
+        if two_y_scales:
+            ax.set_ylabel(names[0])
+            ax_.set_ylabel(names[1])
+        else:
+            ax.set_ylim(y_bounds)
+            ax.set_ylabel(f'{"scaled" if norm_mode != "none" else ""} '
+                          f'{"contrasts" if contrasts else "intensities"}')
+        # set title, grid and legend
         if title is None:
             title = (f'excluded layers with less than '
                      f'{self.n_successes_required}: '

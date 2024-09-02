@@ -545,7 +545,7 @@ class Data(DataBaseClass, Convenience):
         data_valid: pd.DataFrame = data.loc[mask_valid_rows, :].copy()
         # fill remaining nans with zeros
         data_valid: pd.DataFrame = data_valid.fillna(0)
-        self._pca_xy: pd.DataFrame = self.xy[mask_valid_rows]
+        self._pca_xy: pd.DataFrame = self.xy.loc[mask_valid_rows, :]
         FT_s = StandardScaler().fit_transform(data_valid)
         # do PCA:
         self._pca: PCA = PCA(n_components=th_pca)
@@ -594,7 +594,7 @@ class Data(DataBaseClass, Convenience):
             data_valid[data_valid < 0] = 0
         # fill remaining nans with zeros
         data_valid: pd.DataFrame = data_valid.fillna(0)
-        self._nmf_xy: pd.DataFrame = self.xy[mask_valid_rows]
+        self._nmf_xy: pd.DataFrame = self.xy.loc[mask_valid_rows, :]
         feature_table_scaled = MaxAbsScaler().fit_transform(data_valid)
 
         if use_repeated_NMF:
@@ -1122,7 +1122,7 @@ class Data(DataBaseClass, Convenience):
         )
         # df with x, y like original FT
         for i in range(n_top):
-            pc_mode[i] = self._pcs[:, i]
+            pc_mode.loc[:, i] = self._pcs[:, i]
             axs[i, 0].imshow(pc_mode.pivot(index='y', columns='x', values=i),
                              aspect='equal',
                              interpolation='none')
