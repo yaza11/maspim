@@ -1838,18 +1838,21 @@ class Spectra(Convenience):
             # pick values of profile spectrum at kernel maxima
             self._line_spectra[_idx, :] = _spectrum[idxs_mzs_c]
 
-        def _bin_spectrum_max(_spectrum: np.ndarray[float], _idx: int) -> None:
+        def _bin_spectrum_max(_spectrum: np.ndarray[float], _idx_spectrum: int) -> None:
             # 2D matrix with intensities windowed to kernels: each column is the
             # product of a kernel with the spectrum
             vals = kernels * _spectrum[:, None]
             # the position of the highest value for each kernel
-            idcs = np.argmax(vals, axis=0)
+            idcs_max = np.argmax(vals, axis=0)
             # only accept value if it is not at the boundary of the kernel window
+            # --> check that idx is not at boundary by checking that the next
+            #     value is not 0 (because only values inside the kernel window
+            #     are nonzero)
             mask_valid = np.array([
-                (vals[_idx - 1, i] > 0) & (vals[_idx + 1, i] > 0)
-                for i, idx in enumerate(idcs)
+                (vals[idx_max - 1, i] > 0) & (vals[idx_max + 1, i] > 0)
+                for i, idx_max in enumerate(idcs_max)
             ])
-            self._line_spectra[_idx, :] = vals.max(axis=0) * mask_valid
+            self._line_spectra[_idx_spectrum, :] = vals.max(axis=0) * mask_valid
 
         assert len(self._peaks) > 0, 'need at least one peak'
         assert check_attr(self, '_kernel_params'), \
