@@ -1887,9 +1887,14 @@ class Spectra(Convenience):
                     f'max only implemented for gaussian kernels, not {self._kernel_shape}'
                 )
             _bin_spectrum: Callable[[np.ndarray[float], int], None] = _bin_spectrum_max
-            kernels: np.ndarray[float] = self._get_kernels(norm_mode='height')
             # from taking 1 sigma interval
-            kernels = (kernels > np.exp(-1)).astype(float)
+            # H is 1 since g(x = sigma) is required to be 1
+            # from g(x = mu +/- sigma) it follows that g must be bigger than
+            # exp(-1 / 2) inside the kernel window
+            kernels: np.ndarray[float] = (
+                    self._get_kernels(norm_mode='height')
+                    > np.exp(-1 / 2)
+            ).astype(float)
         else:
             raise NotImplementedError()
 

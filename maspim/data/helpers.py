@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_comp_as_img(
-        data_frame,
+        data_frame: pd.DataFrame,
         comp: str | int | float,
         exclude_holes: bool = True,
         classification_column: str = None,
@@ -34,6 +34,8 @@ def get_comp_as_img(
 
     Parameters
     ----------
+    data_frame: pd.DataFrame
+        Table from which to fetch values
     comp: str | int | float
         The compound or feature to fetch.
     exclude_holes: bool, optional
@@ -270,7 +272,6 @@ def plot_comp(
                  if ticks_on_longer_axis
                  else np.argmin(img_clipped.shape))
     tick_axis: str = ['y', 'x'][tick_axis]
-
 
     if 'aspect' not in kwargs:
         kwargs['aspect'] = 'equal'
