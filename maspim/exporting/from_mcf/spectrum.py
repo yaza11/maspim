@@ -171,8 +171,10 @@ class Spectra(Convenience):
     _delta_mz: float | None = None
     _intensities: np.ndarray[float] | None = None
     _tic: np.ndarray[float] | None = None
+
     _noise_level: np.ndarray[float] | None = None
     _noise_level_subtracted: bool = False
+    _noise_level_parameters: dict[str, float] | None = None
 
     _calibration_parameters: np.ndarray[float] | None = None
     _calibration_settings: np.ndarray[float] | None = None
@@ -212,6 +214,7 @@ class Spectra(Convenience):
         '_losses',
         '_binning_by',
         '_noise_level',
+        '_noise_level_parameters'
         '_noise_level_subtracted',
         '_calibration_parameters',
         '_calibration_settings'
@@ -694,6 +697,9 @@ class Spectra(Convenience):
         ys_min: np.ndarray[float] = median_filter(ys_min, size=window_size)
         # store for SNR estimation
         self._noise_level: np.ndarray[float] = ys_min / n_spectra
+        self._noise_level_parameters: dict[str, float] = dict(
+            window_size=window_size
+        )
 
         if plts:
             plt.figure()

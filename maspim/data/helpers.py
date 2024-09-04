@@ -284,7 +284,7 @@ def plot_comp(
     ).split()
     kwargs_imshow = {k: v for k, v in kwargs.items() if k in keys_imshow}
 
-    im = plt.imshow(
+    im = ax.imshow(
         img_clipped,
         **kwargs_imshow
     )
