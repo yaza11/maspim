@@ -214,7 +214,7 @@ class Spectra(Convenience):
         '_losses',
         '_binning_by',
         '_noise_level',
-        '_noise_level_parameters'
+        '_noise_level_parameters',
         '_noise_level_subtracted',
         '_calibration_parameters',
         '_calibration_settings'

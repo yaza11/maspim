@@ -1973,6 +1973,10 @@ class ImageClassified(Image):
         )
 
     @property
+    def image_uncorrected(self) -> np.ndarray:
+        return self._image
+
+    @property
     def image_corrected(self) -> np.ndarray:
         return self.require_corrected_images()[0]
 

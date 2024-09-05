@@ -482,7 +482,10 @@ def transform_feature_table(
 
     It is assumed that x_ROI and y_ROI are columns in the feature table.
     Transformed coordinates have to be either in the data frame
-    (as x_ROI_T and y_ROI_T) or
+    (as x_ROI_T and y_ROI_T) or p_ROI_T.
+
+    After applying the transformation, x_ROI_T and y_ROI_T will not be in the
+    feature table.
     """
     def get_comp_as_arr(comp: str | float | int) -> np.ndarray:
         return df.pivot(index='y_ROI', columns='x_ROI', values=comp).to_numpy()

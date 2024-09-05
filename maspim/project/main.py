@@ -271,8 +271,7 @@ class SampleImageHandlerMSI(Convenience):
 
         """
         assert check_attr(self, '_extent_spots'), 'call set_extent_data'
-        if not check_attr(self, 'image'):
-            self.set_photo()
+
         # search the mis file for the point data and image file
         mis_dict: dict = search_keys_in_xml(self.path_mis_file, ['Point'])
 
@@ -1338,7 +1337,6 @@ class ProjectBaseClass:
         )
         logger.info('successfully loaded mapper and applied tilt correction')
 
-
         self._data_object.tilt_correction_applied = True
 
     @property
@@ -1989,7 +1987,8 @@ class ProjectBaseClass:
     def _require_combine_mapper(
             self,
             other: Self,
-            apply_tilt_correction: bool,
+            self_tilt_correction: bool,
+            other_tilt_correction: bool,
             plts: bool = False,
             **kwargs
     ) -> Mapper:
@@ -2002,18 +2001,22 @@ class ProjectBaseClass:
             mapper.load()
             return mapper
 
-        target: np.ndarray = self.image_classified.image
-        source: ImageROI = other.image_classified.image
+        target: np.ndarray = (self.image_classified.image_corrected
+                              if self_tilt_correction
+                              else self.image_classified.image_uncorrected)
+        # for source we must not use tilt corrected, otherwise there is nothing
+        # left to correct in transformer
+        source: ImageROI = other.image_roi.image
 
         t: Transformation = Transformation(
             source=source,
             target=target,
-            source_obj_color=other.image_classified.obj_color,
-            target_obj_color=self.image_classified.obj_color
+            source_obj_color=other.image_roi.obj_color,
+            target_obj_color=self.image_roi.obj_color
         )
 
         t.estimate('bounding_box', plts=plts, **kwargs)
-        if apply_tilt_correction:
+        if other_tilt_correction:
             t.estimate('tilt', plts=plts, **kwargs)
         t.estimate('laminae', plts=plts, **kwargs)
 
@@ -2077,6 +2080,9 @@ class ProjectBaseClass:
 
         # apply tilt corrections
         if self_correct_tilt:
+            assert check_attr(self, '_image_classified'), \
+                'Need instance of ImageClassified for correcting tilt'
+
             self.require_tilt_corrector()
             self.data_object_apply_tilt_correction()
 
@@ -2085,7 +2091,8 @@ class ProjectBaseClass:
         mapper_warp = self._require_combine_mapper(
             other,
             plts=plts,
-            apply_tilt_correction=other_correct_tilt,
+            self_tilt_correction=self_correct_tilt,
+            other_tilt_correction=other_correct_tilt,
             **kwargs
         )
 
@@ -2114,12 +2121,12 @@ class ProjectBaseClass:
                 fill_value=0
             )
 
-            # use (new) transformer to handle rescaling
+            # use transformer to handle rescaling
             t: Transformation = Transformation(
                 source=ion_image,
-                target=self.image_classified.image,
-                source_obj_color=other.image_classified.obj_color,
-                target_obj_color=self.image_classified.obj_color
+                target=self.image_roi.image,
+                source_obj_color=other.image_roi.obj_color,
+                target_obj_color=self.image_roi.obj_color
             )
 
             warped_xray: np.ndarray[float] = mapper_warp.fit(
@@ -2882,16 +2889,17 @@ class ProjectMSI(ProjectBaseClass):
                 path_d_folder=self.path_d_folder, initiate=False
             )
             if os.path.exists(self._spectra.get_save_file(tag=tag)):
+                logger.info(f'loaded spectra with {tag=}')
                 self._spectra.load(tag)
             else:
-                self._spectra = None
+                self._spectra: None = None
                 logger.warning(f'Could not find spectra object with {tag=} '
                                f'in {self.path_d_folder}')
                 # if feature_table or line spectra are set, we are good to return
             if check_attr(self._spectra, '_line_spectra'):
                 logger.info('loaded fully initialized spectra object')
                 self._spectra.set_feature_table()
-            if check_attr(self._spectra, '_feature_table'):
+            elif check_attr(self._spectra, '_feature_table'):
                 logger.info('loaded fully initialized spectra object')
                 return self._spectra
             # if full is set to False, we can also return

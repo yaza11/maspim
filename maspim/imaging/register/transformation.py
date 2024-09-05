@@ -556,7 +556,9 @@ class Transformation:
             return 'bottom'
         return 'top'
 
-    def _get_classified(self, simplify: bool = True) -> tuple[np.ndarray, np.ndarray]:
+    def _get_classified(
+            self, simplify: bool = True, **_
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Get the classified images of source and target."""
         target: ImageROI = self.target.copy()
         source: ImageROI = self.source.copy()
@@ -594,7 +596,8 @@ class Transformation:
             is_piecewise: bool,
             contour_source: np.ndarray[int] = None,
             contour_target: np.ndarray[int] = None,
-            is_rescaled: bool = False
+            is_rescaled: bool = False,
+            **_
     ) -> None:
         """
         Stretch and resize ROIs to match.
@@ -711,7 +714,7 @@ class Transformation:
         self.trafo_types.append(transform_type)
 
     def _transform_from_bounding_box(
-            self, plts: bool = False
+            self, plts: bool = False, **_
     ) -> None:
         """Projective fit between corners of bounding boxes."""
 
