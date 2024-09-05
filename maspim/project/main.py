@@ -1311,31 +1311,34 @@ class ProjectBaseClass:
                 'image classified set, but tilt correction set to False, '
                 'not correcting tilts'
             )
-        if os.path.exists(mapper.save_file):
-            mapper.load()
-            # get transformed coordinates
-            XT, YT = mapper.get_transformed_coords()
+            return
 
-            # insert into feature table
-            self.data_object.add_attribute_from_image(
-                XT, 'x_ROI_T', fill_value=np.nan
-            )
-            self.data_object.add_attribute_from_image(
-                YT, 'y_ROI_T', fill_value=np.nan
-            )
-
-            # fit feature table
-            self.data_object.inject_feature_table_from(
-                transform_feature_table(self.data_object.feature_table),
-                supress_warnings=True
-            )
-            logger.info('successfully loaded mapper and applied tilt correction')
-
-        else:
+        if not os.path.exists(mapper.save_file):
             raise FileNotFoundError(
                 f'expected to find a Mapping at '
                 f'{mapper.save_file}, call require_tilt_corrector'
             )
+
+        mapper.load()
+        # get transformed coordinates
+        XT, YT = mapper.get_transformed_coords()
+
+        # insert into feature table
+        self.data_object.add_attribute_from_image(
+            XT, 'x_ROI_T', fill_value=np.nan
+        )
+        self.data_object.add_attribute_from_image(
+            YT, 'y_ROI_T', fill_value=np.nan
+        )
+
+        # fit feature table
+        self.data_object.inject_feature_table_from(
+            transform_feature_table(self.data_object.feature_table),
+            supress_warnings=True
+        )
+        logger.info('successfully loaded mapper and applied tilt correction')
+
+
         self._data_object.tilt_correction_applied = True
 
     @property
@@ -2079,7 +2082,12 @@ class ProjectBaseClass:
 
         # setting the warp mapper
         # perform tilt correction after matching bounding rectangles
-        mapper_warp = self._require_combine_mapper(other, plts=plts, apply_tilt_correction=other_correct_tilt, **kwargs)
+        mapper_warp = self._require_combine_mapper(
+            other,
+            plts=plts,
+            apply_tilt_correction=other_correct_tilt,
+            **kwargs
+        )
 
         x_ROI = other.data_object.feature_table.x_ROI
         y_ROI = other.data_object.feature_table.y_ROI

@@ -8,6 +8,7 @@ from maspim.project.file_helpers import ImagingInfoXML
 from maspim.imaging.xray.main import XRay, XRayROI
 from maspim.imaging.register.transformation import Transformation
 from maspim.imaging.register.descriptor import Descriptor
+from maspim.imaging.register.helpers import Mapper
 from maspim.imaging.misc.find_punch_holes import find_holes
 from maspim.imaging.main import Image, ImageSample, ImageROI, ImageClassified
 from maspim.imaging.util.image_plotting import plt_cv2_image

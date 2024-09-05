@@ -10,6 +10,8 @@ import logging
 
 from typing import Callable, Self
 from collections.abc import Iterable
+
+from scipy.interpolate import RectBivariateSpline
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA, NMF
 from sklearn.preprocessing import StandardScaler, MaxAbsScaler
@@ -430,27 +432,21 @@ class Data(DataBaseClass, Convenience):
             # dpixels/2 x dpixels/2 area to classify point
             image = cv2.medianBlur(image, length_median)
 
-        # zero pad for pixels outside of image _extent
-        # number of pixels in the data ROI (in image coordinates)
-        y_ROI_max: int = int(np.ceil(self.feature_table.loc[:, y_col].max()))
-        x_ROI_max: int = int(np.ceil(self.feature_table.loc[:, x_col].max()))
-        image_zeropad = np.full(
-            (
-                np.max([y_ROI_max, image.shape[0]]) + 1,
-                np.max([x_ROI_max, image.shape[1]]) + 1
-            ), fill_value, dtype=image.dtype
+        # use interpolator:
+        # we know values at p_roi_image
+        # need values at x_roi_table, y_roi_table
+        y_roi_image, x_roi_image = np.indices(image.shape, sparse=True)
+        # grid in feature table may be irregular
+        y_roi_table = self.feature_table.loc[:, y_col]
+        x_roi_table = self.feature_table.loc[:, x_col]
+
+        interpolator: RectBivariateSpline = RectBivariateSpline(
+            x_roi_image, y_roi_image, image.T
         )
 
-        # set values in zeropadded array
-        image_zeropad[:image.shape[0], :image.shape[1]] = image
-        # add values for each row according to pixels in image
-        # 0 + to avoid bug???
-        self._feature_table[column_name] = self.feature_table.apply(
-            # iterate over rows of df and fill image_zeropad with corresponding values
-            # (gets values in image at x_ROI, y_ROI)
-            lambda row: 0 + image_zeropad[int(row.loc[y_col]), int(row.loc[x_col])],
-            axis='columns'
-        )
+        interpolated = interpolator(x_roi_table, y_roi_table, grid=False)
+        # for each point in feature table, find closest in image
+        self._feature_table[column_name] = interpolated
 
         if plts:
             idxs = np.c_[
@@ -462,7 +458,7 @@ class Data(DataBaseClass, Convenience):
             plt.plot(idxs[:, 1], idxs[:, 0], '-')
             plt.show()
 
-            plt_cv2_image(image_zeropad,'zeropaded')
+            # plt_cv2_image(image_zeropad,'zeropaded')
 
             if median:
                 plt_cv2_image(
@@ -470,7 +466,7 @@ class Data(DataBaseClass, Convenience):
                     'classification after blurring according to data points'
                 )
 
-            plt_cv2_image(image_zeropad, 'final classification')
+            # plt_cv2_image(image_zeropad, 'final classification')
 
             plt.figure()
             plt.imshow(
