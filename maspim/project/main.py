@@ -1273,6 +1273,10 @@ class ProjectBaseClass:
 
         image = self.image_roi.image_binary
         self.data_object.add_attribute_from_image(image, 'valid', **kwargs_)
+        # round and int
+        self.data_object.feature_table.valid = np.round(
+            self.data_object.feature_table.valid
+        ).astype(int)
 
     def add_light_dark_classification(self, **kwargs) -> None:
         """
@@ -1290,6 +1294,10 @@ class ProjectBaseClass:
 
         image: np.ndarray[int] = self.image_roi.image_classification
         self.data_object.add_attribute_from_image(image, 'classification', **kwargs)
+        # round and int
+        self.data_object.feature_table.valid = np.round(
+            self.data_object.feature_table.valid
+        ).astype(int)
 
     def data_object_apply_tilt_correction(self) -> None:
         assert not self.corrected_tilt, 'tilt has already been corrected'
@@ -2151,17 +2159,17 @@ class ProjectBaseClass:
                               True), \
                 'make sure image_classified has parameters for laminae'
 
-        if 'L' not in self.data_object.feature_table.columns:
+        if 'L' not in self.data_object.columns:
             logger.warning(
-                'No depth column set yet, proceeding anyway, but you might want to '
-                'call add_photo'
+                'No grayscale column set yet, proceeding anyway, but you might '
+                'want to call add_photo'
             )
-        if ignore_depth := ('depth' not in self.data_object.feature_table.columns):
+        if ignore_depth := ('depth' not in self.data_object.columns):
             logger.warning(
                 'No depth column set yet, proceeding anyway, but you might want to '
                 'add the depths to data_object with add_depth_column first'
             )
-        if ignore_age := ('age' not in self.data_object.feature_table.columns):
+        if ignore_age := ('age' not in self.data_object.columns):
             logger.warning(
                 'No age column set yet, proceeding anyway, but you might want to '
                 'add the ages to data_object with add_age_column first'
@@ -2173,13 +2181,17 @@ class ProjectBaseClass:
             is_continuous=is_continuous,
             **kwargs
         )
-        # add age column
-        if not (ignore_age or ignore_depth):
+
+        # add age column if it is not present yet
+        if (not (ignore_age or ignore_depth)) and ('age' not in ft_seeds_avg.columns):
+            logging.info(
+                'Adding age column by converting depths to age using age model.'
+            )
             ft_seeds_avg['age'] = self.age_model.depth_to_age(
                 ft_seeds_avg.depth
             )
 
-        self._time_series = TimeSeries(self.path_d_folder)
+        self._time_series: TimeSeries = TimeSeries(self.path_d_folder)
         self._time_series.set_feature_tables(ft_seeds_avg,
                                              ft_seeds_success,
                                              ft_seeds_std)

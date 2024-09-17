@@ -117,9 +117,9 @@ class TimeSeries(DataBaseClass, Convenience):
         if deviations is not None:
             assert intensities.shape[0] == deviations.shape[0]
 
-        self._feature_table = intensities
-        self._feature_table_successes = successes
-        self._feature_table_standard_deviations = deviations
+        self._feature_table: pd.DataFrame = intensities
+        self._feature_table_successes: pd.DataFrame | None = successes
+        self._feature_table_standard_deviations: pd.DataFrame | None = deviations
 
         self._sort_tables()
 

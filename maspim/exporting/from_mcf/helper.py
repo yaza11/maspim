@@ -11,6 +11,8 @@ from subprocess import Popen, PIPE
 from typing import Iterable, Callable, Any, Self
 from matplotlib import pyplot as plt
 
+from maspim.util.convenience import check_attr
+
 
 def get_r_home():
     """Find the folder of R installation on the system."""
@@ -265,6 +267,9 @@ class ReaderBaseClass:
     - calibrate_spectrum
     - get_spectrum_resampled_intensities
     """
+
+    mzs: Iterable[float] | None = None
+
     @staticmethod
     def calibrate_spectrum(
             spectrum: Spectrum,
@@ -324,6 +329,8 @@ class ReaderBaseClass:
         spectrum_intensities: np.ndarray[float]
             The intensities of the resampled (and possibly calibrated) spectrum.
         """
+        assert check_attr(self, 'mzs'), 'need mz values to resample'
+
         spectrum: Spectrum = self.get_spectrum(index, poly_coeffs=poly_coeffs)
         spectrum.resample(self.mzs)
         return spectrum.intensities

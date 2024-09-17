@@ -50,10 +50,14 @@ def get_averaged_tables(
     if exclude_holes:
         # TODO: test
         # set rows with holes to nan in copy
-        data_object = data_object.copy()
-        mask_holes = data_object.feature_table.loc[:, holes_column] == holes_key
+        data_object: MSI | XRF = data_object.copy()
+        mask_holes: pd.Series = (
+                data_object.feature_table.loc[:, holes_column] == holes_key
+        )
         # all columns except the average by column
-        columns = data_object.feature_table.drop(columns=average_by_col).columns
+        columns: pd.Series = (
+            data_object.feature_table.drop(columns=average_by_col).columns
+        )
         # set to nan to exclude from average
         data_object.feature_table.loc[mask_holes, columns] = np.nan
         logging.info(
@@ -71,7 +75,6 @@ def get_averaged_tables(
         **kwargs
     )
 
-    #
     ft_seeds_avg = ft_seeds_avg.fillna(0)
 
     if not is_continuous:
@@ -130,9 +133,10 @@ def get_averaged_tables(
     ft_seeds_success.reset_index(inplace=True)
 
     # change column type
-    ft_seeds_avg.loc[:, 'zone'] = ft_seeds_avg.zone.astype(int)
-    ft_seeds_std.loc[:, 'zone'] = ft_seeds_std.zone.astype(int)
-    ft_seeds_success.loc[:, 'zone'] = ft_seeds_success.zone.astype(int)
+    if not is_continuous:
+        ft_seeds_avg.loc[:, 'zone'] = ft_seeds_avg.zone.astype(int)
+        ft_seeds_std.loc[:, 'zone'] = ft_seeds_std.zone.astype(int)
+        ft_seeds_success.loc[:, 'zone'] = ft_seeds_success.zone.astype(int)
 
     # need to insert the x_ROI from avg
     ft_seeds_std['spread_x_ROI'] = ft_seeds_std.x_ROI.copy()

@@ -1189,7 +1189,8 @@ class Spectra(Convenience):
             whitelist: Iterable[int] | None = None,
             peaks_snr_threshold: float = 0,
             remove_sidepeaks: bool = False,
-            plts=False,
+            thr_sigma: Iterable[float] | None = None,
+            plts: bool = False,
             **kwargs_sidepeaks: Any
     ) -> None:
         """
@@ -1198,14 +1199,17 @@ class Spectra(Convenience):
         Parameters
         ----------
         whitelist : Iterable[int] | None,
-            Peaks (indices refer to mz values array) that shall not be
+            Peaks (indices refer to mz values array in _peaks) that shall not be
             removed. If this is provided, no other filtering will be done.
         peaks_snr_threshold : float, optional
-            Minimum SNR required for keeping peaks. The default is to not remove any peaks
-            based on SNR.
+            Minimum SNR required for keeping peaks. The default is to not
+            remove any peaks based on SNR. Recommended value range: 0 to 10.
         remove_sidepeaks : bool, optional
             Remove peaks likely introduced by spectral leakage (see set_side_peaks).
-            The default is not to remove side peaks
+            The default is not to remove side peaks.
+        thr_sigma: tuple[float, float], optional
+            Realistic bounds for peak widths. Recommended: thr_sigma=(2e-3, 5e-3).
+            This only keeps kernels whose sigma is between 2 and 5 mDa.
         plts: bool, optional,
             Whether to plot the removed peaks.
         kwargs_sidepeaks: Any
@@ -1214,30 +1218,57 @@ class Spectra(Convenience):
         # skip filtering of valid peaks if a list of peaks to keep is provided
         skip_filtering: bool = whitelist is not None
 
-        if skip_filtering and (peaks_snr_threshold != 0):
+        if skip_filtering and (
+                (peaks_snr_threshold != 0)
+                or remove_sidepeaks
+                or (peaks_snr_threshold > 0)
+                or (thr_sigma is not None)
+        ):
             logger.warning(
-                'A whitelist was provided as well as an SNR threshold, but ' +
+                'A whitelist was provided as well as other criteria but ' +
                 'filtering will not be executed if a whitelist is provided. ' +
                 'If this is what you want, consider performing two filtering ' +
                 'steps instead.'
-            )
-        if skip_filtering and remove_sidepeaks:
-            logger.warning(
-                'A whitelist was provided and remove_sidepeaks was set to ' +
-                'True, but filtering will not be executed if a whitelist ' +
-                'is provided. If this is what you want, consider performing ' +
-                'two filtering steps instead.'
             )
 
         n_peaks: int = len(self._peaks)
         peaks_valid: np.ndarray[bool] = np.full(n_peaks, True, dtype=bool)
 
         if skip_filtering:  # exclude all peaks not in whitelist
-            peaks_valid &= np.array([peak in whitelist for peak in self._peaks], dtype=bool)
-        if (not skip_filtering) and (peaks_snr_threshold > 0):  # set peaks below SNR threshold to False
-            peaks_valid &= self.peaks_SNR > peaks_snr_threshold
+            whitelisted = np.array([peak in whitelist
+                                    for peak in self._peaks], dtype=bool)
+            peaks_valid &= whitelisted
+            logging.info(f'keeping {whitelisted.sum()} whitelisted '
+                         f'out of {n_peaks} peaks')
+        if (not skip_filtering) and (peaks_snr_threshold > 0):
+            # set peaks below SNR threshold to False
+            snred = self.peaks_SNR > peaks_snr_threshold
+            peaks_valid &= snred
+            logging.info(f'keeping {snred.sum()} out of {n_peaks} peaks with SNR '
+                         f'above {peaks_snr_threshold}')
         if (not skip_filtering) and remove_sidepeaks:  # set sidepeaks to False
-            peaks_valid &= ~self.require_side_peaks(**kwargs_sidepeaks)
+            side_peaks = self.require_side_peaks(**kwargs_sidepeaks)
+            peaks_valid &= ~side_peaks
+            logging.info(f'Removing {side_peaks.sum()} peaks identified as side peaks')
+        if (not skip_filtering) and (thr_sigma is not None):
+            if not check_attr(self, '_kernel_params'):
+                logger.warning(f'Kernel parameters not set, peak filtering '
+                               f'with {thr_sigma=} has no effect.')
+            else:
+                assert (
+                        hasattr(thr_sigma, '__iter__')
+                        and (len(thr_sigma) == 2)
+                        and (thr_sigma[0] < thr_sigma[1])
+                ), (f'thr_sigma must be a 2-tuple with the first value being '
+                    f'strictly less than the second one, you provided {thr_sigma=}')
+                sigma_filtered: np.ndarray[bool] = (
+                        (self._kernel_params[:, -1] > thr_sigma[0])
+                        & (self._kernel_params[:, -1] < thr_sigma[1])
+                )
+                peaks_valid &= sigma_filtered
+                logger.info(f'Keeping {sigma_filtered.sum()} out of {n_peaks} '
+                            f'with sigma between {thr_sigma[0] * 1e3:.1f} and '
+                            f'{thr_sigma[1] * 1e3:.1f} mDa')
 
         if plts:  # keep a copy of the original peaks
             peaks = self._peaks.copy()
@@ -1467,25 +1498,35 @@ class Spectra(Convenience):
             self,
             use_bigaussian: bool = False,
             fine_tune: bool = True,
-            **kwargs
+            discard_invalid: bool = True,
+            **kwargs: Any
     ) -> None:
         """
-        Based on the peak properties, find (bi)gaussian parameters to approximate spectrum.
+        Based on the peak properties, find (bi)gaussian parameters to
+        approximate spectrum.
 
-        Creates kernel_params where cols correspond to
-        peaks and rows different properties. Properties are: m/z, intensity H, sigma (left, sigma right)
+        Creates kernel_params where cols correspond to peaks and rows different
+        properties. Properties are: m/z, intensity H, sigma (left, sigma right)
 
         Parameters
         ----------
         use_bigaussian : bool, optional
-            Whether to use bigaussian or gaussian kernels (testing recommends using gaussian kernels).
-            The default is False (so using gaussian kernels).
+            Whether to use bigaussian or gaussian kernels (testing recommends
+            using gaussian kernels). The default is False (so using gaussian
+            kernels).
         fine_tune : bool, optional
-            If this is set to False, kernel parameters will only be estimated from the height and width
-            of the peak. This can be inaccurate for noisy peaks. It is recommeded to set this parameter
-            to True in which case an optimizer will be used to find the peak shape on all points within
-            a few standard deviations. The default is True.
-        kwargs: dict
+            If this is set to False, kernel parameters will only be estimated
+            from the height and width of the peak. This can be inaccurate for
+            noisy peaks. It is recommeded to set this parameter to True in
+            which case an optimizer will be used to find the peak shape on all
+            points within a few standard deviations. The default is True.
+        discard_invalid: bool, optional
+            This controls what happens with kernels for which the fine-tuning
+            failed. By default, those peaks will be discarded but it may be
+            desirable to keep those peaks. In that case set discard_invalid to
+            False. This will leave the kernel parameters from the rough
+            estimate.
+        kwargs: Any
             Additional keyword arguments for _kernel_fit_from_peak
 
         Notes
@@ -1494,9 +1535,10 @@ class Spectra(Convenience):
         kernel_shape : str
             Flag defining whether gaussian or bigaussian kernels are used.
         kernel_params : np.ndarray[float]
-            Array storing parameters describing the kernels. Each row corresponds to a kernel.
-            Depending on the kernel shape, columns are either mz_c, H, sigma (for gaussian)
-            or mz_c, H, sigma_l, sigma_r (for bigaussian).
+            Array storing parameters describing the kernels. Each row
+            corresponds to a kernel. Depending on the kernel shape, columns are
+            either mz_c, H, sigma (for gaussian) or mz_c, H, sigma_l, sigma_r
+            (for bigaussian).
 
         """
         assert check_attr(self, '_peaks'), 'call set peaks first'
@@ -1511,9 +1553,16 @@ class Spectra(Convenience):
             self._kernel_params: np.ndarray[float] = np.zeros((len(self._peaks), 3))
 
         # start with heighest peak, work down
-        idxs_peaks: np.ndarray[int] = np.argsort(self._peak_properties['prominences'])[::-1]
+        idxs_peaks: np.ndarray[int] = np.argsort(
+            self._peak_properties['prominences']
+        )[::-1]
         mask_valid: np.ndarray[bool] = np.ones(len(self._peaks), dtype=bool)
-        for idx in idxs_peaks:
+        for idx in tqdm(
+                idxs_peaks,
+                desc='setting peak parameters',
+                total=len(idxs_peaks),
+                smoothing=50/len(idxs_peaks)
+        ):
             params: tuple = self._kernel_func_from_peak(idx)
             if self._kernel_shape == 'bigaussian':
                 mz_c, H, sigma_l, sigma_r = params
@@ -1539,7 +1588,8 @@ class Spectra(Convenience):
         self._intensities: np.ndarray[float] = y
 
         # delete invalid peaks
-        self.filter_peaks(whitelist=self._peaks[mask_valid])
+        if discard_invalid:
+            self.filter_peaks(whitelist=self._peaks[mask_valid])
 
     def require_kernels(self, **kwargs) -> np.ndarray[float]:
         if not check_attr(self, '_kernel_params', True):
@@ -2191,6 +2241,7 @@ class Spectra(Convenience):
             self,
             binned_snr_threshold: float = 0,
             intensity_min: float = 0,
+            success_rate_threshold: float = 0,
             **_: Any
     ) -> np.ndarray[bool]:
         """
@@ -2204,6 +2255,10 @@ class Spectra(Convenience):
             Set intensities below this SNR threshold to False.
         intensity_min: float, optional
             Set intensities below this absolute threshold to False.
+        success_rate_threshold: float, optional
+            Remove compounds with low success rates. Default is 0. For gentle
+            filtering a value of .01 is recommended. This filtering step is
+            performed after the intensity and snr threshold filtering.
 
         Returns
         -------
@@ -2224,6 +2279,11 @@ class Spectra(Convenience):
 
         mask = mask_snr_too_low | mask_intensity_too_low
         self._line_spectra[mask] = 0
+
+        if success_rate_threshold > 0:
+            mask_successes = (self._line_spectra > 0).mean(axis=0) > success_rate_threshold
+            self._line_spectra = self._line_spectra[:, mask_successes]
+            self.filter_peaks(whitelist=self._peaks[mask_successes].copy())
 
         return mask
 

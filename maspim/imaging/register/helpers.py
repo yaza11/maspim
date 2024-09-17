@@ -293,8 +293,8 @@ class Mapper(Convenience):
 
     def fit(self, image: np.ndarray, **kwargs) -> np.ndarray:
         assert image.ndim in (2, 3), 'Image must be 2D or 3D'
-        assert image.shape[:2] == self._image_shape, \
-            f'Expected image of shape {self._image_shape}, got {image.shape}'
+        assert image.shape[:2] == self._image_shape[:2], \
+            f'Expected image of shape {self._image_shape[:2]}, got {image.shape[:2]}'
         if (n_trafos := len(self._Us)) == 0:
             return image
         elif n_trafos == 1:

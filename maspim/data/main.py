@@ -978,29 +978,31 @@ class Data(DataBaseClass, Convenience):
 
         """
         if columns is None:
-            columns: Iterable = self.data_columns
+            columns: pd.Series = self.data_columns
         # column-wise if no key is given
         if zones_key is None:
             zones_key: str = 'zones_row_wise'
             # set zones as x-val starting with 0
-            self._feature_table[zones_key] = self.x - self.x.min()
+            self._feature_table.loc[:, zones_key] = self.x - self.x.min()
 
         data_table: pd.DataFrame = (self.get_data_for_columns(columns)
                                     .copy().
                                     astype(astype))
 
         # get zones
-        zones: np.ndarray = np.unique(self.feature_table[zones_key])
+        zones: np.ndarray = np.unique(self.feature_table.loc[:, zones_key])
         # remove nan key
         mask_keys: np.ndarray[bool] = ~np.isnan(zones)
         zones: np.ndarray = zones[mask_keys]
 
+        n_zones: int = len(zones)
+
         # calculate zone wise averages
-        averages: np.ndarray = np.empty((len(zones), data_table.shape[1]))
+        averages: np.ndarray = np.empty((n_zones, data_table.shape[1]))
 
         if calc_std:
-            stds: np.ndarray = np.empty((len(zones), data_table.shape[1]))
-            Ns: np.ndarray = np.empty((len(zones), data_table.shape[1]))
+            stds: np.ndarray = np.empty((n_zones, data_table.shape[1]))
+            Ns: np.ndarray = np.empty((n_zones, data_table.shape[1]))
         average_x_idx: np.ndarray[float] = np.zeros_like(zones, dtype=float)
 
         zones_column: pd.Series = self.feature_table.loc[:, zones_key].copy()
@@ -1016,7 +1018,7 @@ class Data(DataBaseClass, Convenience):
         # iterate over zones
         for idx, zone in tqdm(
                 enumerate(zones),
-                total=len(zones),
+                total=n_zones,
                 desc='averaging values for zones'
         ):
             # average of each component in that zone
@@ -1039,20 +1041,21 @@ class Data(DataBaseClass, Convenience):
             index=zones)
         # add the mean x-value to data frame
         feature_table_averages['x'] = average_x_idx
-        if calc_std:
-            feature_table_stds: pd.DataFrame = pd.DataFrame(
-                data=stds,
-                columns=columns,
-                index=zones)
-            feature_table_stds['x'] = average_x_idx
-            feature_table_Ns: pd.DataFrame = pd.DataFrame(
-                data=Ns,
-                columns=columns,
-                index=zones)
-            feature_table_Ns['x'] = average_x_idx
+        if not calc_std:
+            return feature_table_averages
 
-            return feature_table_averages, feature_table_stds, feature_table_Ns
-        return feature_table_averages
+        feature_table_stds: pd.DataFrame = pd.DataFrame(
+            data=stds,
+            columns=columns,
+            index=zones)
+        feature_table_stds['x'] = average_x_idx
+        feature_table_Ns: pd.DataFrame = pd.DataFrame(
+            data=Ns,
+            columns=columns,
+            index=zones)
+        feature_table_Ns['x'] = average_x_idx
+
+        return feature_table_averages, feature_table_stds, feature_table_Ns
 
     def get_data_zeros_corrected(self) -> pd.DataFrame:
         """
