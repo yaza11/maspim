@@ -1,9 +1,5 @@
-name: maspim
-channel:
-  - conda-forge
 dependencies:
   - python==3.12
-  - r-base
   - matplotlib
   - numpy
   - pandas
