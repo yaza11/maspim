@@ -3,6 +3,7 @@ channel:
   - conda-forge
 dependencies:
   - python==3.12
+  - r-base
   - matplotlib
   - numpy
   - pandas
@@ -19,3 +20,4 @@ dependencies:
   - pip:
     - opencv-python
     - mfe
+    - maspim
