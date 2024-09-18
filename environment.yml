@@ -1,0 +1,21 @@
+name: maspim
+channels:
+  - conda-forge
+dependencies:
+  - r-base
+  - python>=3.12
+  - matplotlib
+  - numpy
+  - pandas
+  - rpy2
+  - scipy
+  - tqdm
+  - opencv-python
+  - scikit-learn
+  - scikit-image
+  - psutil
+  - h5py
+  - pillow
+  - textdistance
+  - astropy
+  - mfe
