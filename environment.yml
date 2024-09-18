@@ -2,15 +2,14 @@ name: maspim
 channels:
   - conda-forge
 dependencies:
+  - python==3.12
   - r-base
-  - python>=3.12
   - matplotlib
   - numpy
   - pandas
   - rpy2
   - scipy
   - tqdm
-  - opencv-python
   - scikit-learn
   - scikit-image
   - psutil
@@ -18,4 +17,6 @@ dependencies:
   - pillow
   - textdistance
   - astropy
-  - mfe
+  - pip:
+    - opencv-python
+    - mfe
