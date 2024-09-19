@@ -858,6 +858,7 @@ class Spectra(Convenience):
             calib_snr_threshold: float = 4,
             max_degree: int = 1,
             min_height: float | int = 10_000,
+            nearest: bool = False,
             **_
 
     ):
@@ -894,6 +895,9 @@ class Spectra(Convenience):
         min_height: float | int, optional
             Minimum intensity required. The default is 10_000. Only used, if
             calib_snr_threshold is not provided.
+        nearest: bool, optional
+            If True, will only take the nearest peak to the calibrant. The default
+            is False, which will take the highest peak within the search range.
 
         Notes
         -----
@@ -932,6 +936,7 @@ class Spectra(Convenience):
             else:
                 peaks: np.ndarray[int] = find_peaks(_spectrum, height=min_height)[0]
             peaks_mzs: np.ndarray[float] = self.mzs[peaks]
+            peaks_intensities: np.ndarray[float] = self.intensities[peaks]
 
             # find valid peaks for each calibrant
             closest_peak_mzs: list[float] = []
@@ -944,7 +949,13 @@ class Spectra(Convenience):
                     )
                     calibrator_presences[it, jt] = False
                     continue
-                closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
+                # select the highest peak within the search_range
+                if nearest:
+                    closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
+                else:
+                    peaks_mzs_within_range: np.ndarray[float] = peaks_mzs[distances < search_range]
+                    peaks_intensities_within_range: np.ndarray[float] = peaks_intensities[distances < search_range]
+                    closest_peak_mzs.append(peaks_mzs_within_range[np.argmax(peaks_intensities_within_range)])
                 closest_calibrant_mzs.append(calibrant)
 
             # search the coefficients of the polynomial
@@ -954,6 +965,14 @@ class Spectra(Convenience):
                 logger.debug(f'found no calibrant for {index=}')
                 return -1
             degree: int = min([max_degree, n_calibrants - 1])
+
+            # forbid degree>=2 if the calibrants are far away from the beginning and end of the spectrum, set 5Da for now.
+            if degree > 1:
+                assert(abs(min(calibrants_mz) - min(peaks_mzs)) <= 5), \
+                    'calibrants are too far away from the beginning of the spectrum'
+                assert(abs(max(calibrants_mz) - max(peaks_mzs)) <= 5), \
+                    'calibrants are too far away from the end of the spectrum'
+
             # polynomial coefficients
             # theory - actual
             yvals = [t - a for t, a in zip(closest_calibrant_mzs, closest_peak_mzs)]
