@@ -860,7 +860,6 @@ class Spectra(Convenience):
             min_height: float | int = 10_000,
             nearest: bool = False,
             **_
-
     ):
         """
         Calibrate spectra using calibrants by fitting a polynomial of degree

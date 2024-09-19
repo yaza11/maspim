@@ -51,7 +51,7 @@ def gabor(nx, width, theta, psi, sigma=.5, gamma=.5):
     return g
 
 
-def rect(nx_rect: int, nx: int, phase: float) -> np.ndarray[float]:
+def rect(nx_rect: int, nx: int, phase: float, n_periods: int) -> np.ndarray[float]:
     """
     Rectangular function with length nx_rect.
 
@@ -77,12 +77,14 @@ def rect(nx_rect: int, nx: int, phase: float) -> np.ndarray[float]:
         Length of the return vector. Should be greater than or equal to nx_rect.
     phase : float
         The phase of the wave
+    n_periods: int
+        How many periods are in the kernel. 1 will produce the sketch from above.
     """
     assert nx_rect <= nx, \
         f"nx_rect must be smaller than nx (got {nx_rect} and {nx})"
     # phase = phase % (2 * np.pi)
     x_rect: np.ndarray[float] = (np.linspace(
-        0, 2*np.pi, nx_rect
+        0, 2 * np.pi * n_periods, nx_rect
     ) - phase) % (2 * np.pi)
     # fill everything with -1 to begin with
     y_rect: np.ndarray[float] = np.full_like(x_rect, -1)
@@ -172,6 +174,7 @@ class Descriptor:
             n_angles: int = 32,
             n_sizes: int = 8,
             n_phases: int = 8,
+            n_periods: int = 1,
             min_period: int | float = None,
             max_period: int | float = None,
             min_angle: float = 0,
@@ -200,6 +203,11 @@ class Descriptor:
         n_phases : int, optional
             The number of phases for which to create kernels (evenly distributed
             between [0, 2 * pi)).
+        n_periods : int, optional
+            How many periods are in the kernel. Only used if kernel_type is 'rect'.
+            The default is 1. For tilt correction applications this is the
+            recommended value. For laminae description a higher value of ~3 is
+            recommended.
         min_period: int | float, optional
             The size of the smallest kernel. If this value is <= 1, this value
             is assumed to be in terms of the image dimension, so for example
@@ -240,6 +248,8 @@ class Descriptor:
             f'Unknown kernel type: {kernel_type}, must be one in {self.kernel_types}'
         assert np.min(image.shape[:2]) >= 5, \
             'image must have at least 5 pixels in each direction'
+        assert isinstance(n_periods, int) and (n_periods > 0), \
+            'n_periods must be natural number'
 
         if max_period is None:
             max_period: float = .1
@@ -263,9 +273,10 @@ class Descriptor:
         self.n_angles: int = n_angles
         self.n_sizes: int = n_sizes
         self.n_phases: int = n_phases
+        self.n_periods: int = n_periods
         # account for rotating square out of original footprint
         self.nx: int = np.ceil(self.max_period * np.sqrt(2)).astype(int)
-        self.pad = self.nx - self.max_period
+        self.pad: int = self.nx - self.max_period
 
         if self.n_sizes > 1:
             self.widths: np.ndarray[int] = np.linspace(
@@ -378,7 +389,7 @@ class Descriptor:
             self, width: int, angle: float, phase: float
     ) -> np.ndarray[float]:
         """Get kernel with specified width, angle and phase."""
-        profile: np.ndarray[float] = rect(width, self.nx, phase)
+        profile: np.ndarray[float] = rect(width, self.nx, phase, self.n_periods)
         return self._profile_to_kernel(profile, angle)
 
     def _get_kernel_gabor(
