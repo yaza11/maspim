@@ -23,6 +23,7 @@ def get_r_home():
     # Get R_HOME
     try:
         r_home = robjects.r['Sys.getenv']('R_HOME')[0]
+        return r_home
     except:
         raise EnvironmentError("R_HOME could not be determined. Please set it manually or ensure R is installed.")
 
