@@ -932,6 +932,7 @@ class Spectra(Convenience):
             else:
                 peaks: np.ndarray[int] = find_peaks(_spectrum, height=min_height)[0]
             peaks_mzs: np.ndarray[float] = self.mzs[peaks]
+            peaks_intensities: np.ndarray[float] = self.intensities[peaks]
 
             # find valid peaks for each calibrant
             closest_peak_mzs: list[float] = []
@@ -944,7 +945,11 @@ class Spectra(Convenience):
                     )
                     calibrator_presences[it, jt] = False
                     continue
-                closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
+                # select the highest peak within the search_range
+                peaks_mzs_within_range: np.ndarray[float] = peaks_mzs[distances < search_range]
+                peaks_intensities_within_range: np.ndarray[float] = peaks_intensities[distances < search_range]
+
+                closest_peak_mzs.append(peaks_mzs_within_range[np.argmax(peaks_intensities_within_range)])
                 closest_calibrant_mzs.append(calibrant)
 
             # search the coefficients of the polynomial
