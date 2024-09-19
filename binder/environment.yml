@@ -1,0 +1,19 @@
+dependencies:
+  - python==3.12
+  - matplotlib
+  - numpy
+  - pandas
+  - rpy2
+  - scipy
+  - tqdm
+  - scikit-learn
+  - scikit-image
+  - psutil
+  - h5py
+  - pillow
+  - textdistance
+  - astropy
+  - pip:
+    - opencv-python
+    - mfe
+    - git+https://github.com/yaza11/maspim.git
