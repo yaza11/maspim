@@ -1166,7 +1166,8 @@ class Spectra(Convenience):
         This function scales the intensities by the estimated noise level, 
         thereby assigning SNR values to all peaks in each spectrum.
         """
-        assert check_attr(self, 'noise_level'), 'call subtract_baseline'
+        assert check_attr(self, '_noise_level'), \
+            'call set_noise_level first'
         
         heights: np.ndarray[float] = self.get_heights()
         # noise level is assumed to be the same for each spectrum

@@ -138,13 +138,13 @@ class MSI(Data):
         assert (
             (is_df := isinstance(upstream, pd.DataFrame)) or
             check_attr(upstream, 'feature_table')
-        ), 'upstream object must have a or be feature table'
-
-        if (not is_df) and (not check_attr(  # check if feature table is meaningful
-                upstream,
-                'feature_table',
-                True
-        )) and (not supress_warnings):
+        ), 'upstream object must have or be a feature table'
+        # check if feature table is meaningful
+        if (
+                (not is_df) and
+                (not check_attr(upstream,'feature_table',True))
+                and (not supress_warnings)
+        ):
             logger.warning('found empty feature table')
         if is_df and (not supress_warnings):
             logger.warning(

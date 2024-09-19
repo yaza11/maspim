@@ -21,7 +21,7 @@ def distorted_rect(
     width : int
         The lateral extension of the rectangle. Function returns transposed image.
     height : float
-        The thickness of the layer.
+        The thickness of the layer in pixels.
     coeffs : Iterable[float]
         The coefficients of the polynomial in relative coordinates.
     plts : bool, optional
@@ -36,8 +36,11 @@ def distorted_rect(
     x: np.ndarray[float] = np.linspace(-1, 1, width, dtype=float)
 
     Y: np.ndarray[float] = x[:, None] * np.ones(width)[None, :]
+    # polynomial values
     y: np.ndarray[float] = np.poly1d(coeffs)(x)
-    y += coeffs[-1] - y.mean()
+    # center curve around center of mass
+    y -= y.mean()
+    #
     y_shift: float = height / width / 2
     y_upper: np.ndarray[float] = y + y_shift
     y_lower: np.ndarray[float] = y - y_shift
@@ -125,6 +128,7 @@ def find_layer(
         return score_layer
 
     assert (degree is not None) or (x0 is not None)
+
     if degree is None:
         # subtract 1 because need n+1 parameters to define polynomial of degree
         # n
@@ -166,7 +170,7 @@ def find_layer(
     params = minimize(
         metric,  # function to minimize
         x0=x0,  # start values
-        method='COBYLA',
+        method='Nelder-Mead',
         bounds=bounds
     )
 

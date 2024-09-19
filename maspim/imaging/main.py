@@ -801,7 +801,10 @@ class ImageSample(Image):
             box_ratio_y=box_ratio_y
         )
         if plts:
-            plt_rect_on_image(image_downscaled, box_params, title='Detected ROI of sample', **kwargs)
+            plt_rect_on_image(image_downscaled,
+                              box_params,
+                              title='Detected ROI of sample',
+                              **kwargs)
 
         # dilate the box slightly for finer sample definition
         if dilate_factor > 1:
@@ -812,7 +815,9 @@ class ImageSample(Image):
             box_ratio_y += dilate_factor
         # calculate new box
         if dilate_factor != 1:
-            box_params = region_in_box(image=image_downscaled, center_box=center_box, box_ratio_x=box_ratio_x,
+            box_params = region_in_box(image=image_downscaled,
+                                       center_box=center_box,
+                                       box_ratio_x=box_ratio_x,
                                        box_ratio_y=box_ratio_y)
 
         x: int = box_params['x']
@@ -1004,7 +1009,27 @@ class ImageSample(Image):
         x, y, w, h = self.require_image_sample_area()[1]
         return self.image[y:y + h, x:x + w].copy()
 
-    def plot_overview(self, **kwargs):
+    def plot_sample_area(self, **kwargs: Any) -> None | tuple[plt.Figure, plt.Axes]:
+        """Plot the detected sample area as rectangle on original image."""
+        assert check_attr(self, '_xywh_ROI'), \
+            'call require_image_sample_area first'
+        xb, yb, wb, hb = self._xywh_ROI
+
+        return plt_rect_on_image(
+            image=self.image,
+            title=kwargs.pop('title', 'Detected sample area'),
+            no_ticks=kwargs.pop('no_ticks', True),
+            box_params=region_in_box(
+                image=self.image_binary,
+                x=xb,
+                y=yb,
+                w=wb,
+                h=hb
+            ),
+            **kwargs
+        )
+
+    def plot_overview(self, **kwargs: Any) -> None:
         """Plot diagnostic images"""
         # original image
         image_box, (xb, yb, wb, hb) = self.get_sample_area_box(dilate_factor=0.1)
@@ -2176,7 +2201,8 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
         height0_mode: str, optional
             How to determine the initial guess for the thickness of layers.
             The default is 'use_peak_widths'. Another option is to use the
-            thickness predicted by the age model (same for each layer).
+            thickness predicted by the age model (same for each layer) by
+            specifying 'use_age_model'.
         downscale_factor: int, optional
             The downsampling applied before fitting the rectangle.
             The default is 1 (no downscaling). Acceptable values have to be

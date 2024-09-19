@@ -213,10 +213,10 @@ class SampleImageHandlerMSI(Convenience):
                 ymax: int = img_y
             if img_y < ymin:
                 ymin: int = img_y
-        self._extent_spots = (xmin, xmax, ymin, ymax)
+        self._extent_spots: tuple[int, int, int, int] = (xmin, xmax, ymin, ymax)
 
     @property
-    def extent_spots(self):
+    def extent_spots(self) -> tuple[int, int, int, int]:
         if not check_attr(self, '_extent_spots'):
             self.set_extent_data()
         return self._extent_spots
@@ -355,6 +355,28 @@ class SampleImageHandlerMSI(Convenience):
             box=(x_min_area, y_min_area, x_max_area, y_max_area),  # area of photo
             resample=PIL_Image.Resampling.LANCZOS  # supposed to be best
         )
+
+    def plot_shots(self, s=.1):
+        """Plot positions of measurement points on the sample area."""
+        # first, draw bounds of measurement area
+        if not check_attr(self, 'points'):
+            self.set_photo_ROI()
+        draw = self._draw_measurement_area(self.image)
+        img = PIL_to_np(draw)
+
+        # get data coordinates
+        spots_df: pd.DataFrame = get_spots(self.path_d_folder)
+        # convert to pixel coordinates using Data
+        data: MSI = MSI(path_d_folder=self.path_d_folder)
+        data.inject_feature_table_from(spots_df, supress_warnings=True)
+        data.pixels_get_photo_ROI_to_ROI(data_ROI_xywh=self._data_roi_xywh,
+                                         photo_ROI_xywh=self._photo_roi_xywh,
+                                         image_ROI_xywh=(0, 0, img.shape[1], img.shape[0]))
+
+        plt.imshow(img)
+
+        plt.scatter(data.feature_table.x_ROI, data.feature_table.y_ROI, s=s)
+        plt.show()
 
     def plot_overview(
             self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False

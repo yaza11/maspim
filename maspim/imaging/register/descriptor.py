@@ -172,8 +172,10 @@ class Descriptor:
             n_angles: int = 32,
             n_sizes: int = 8,
             n_phases: int = 8,
-            max_period: int | float = None,
             min_period: int | float = None,
+            max_period: int | float = None,
+            min_angle: float = 0,
+            max_angle: float = np.pi,
             kernel_type: str = 'rect',
             **_
     ):
@@ -210,6 +212,12 @@ class Descriptor:
             is assumed to be in terms of the image dimension, so for example
             a value of 0.1 (which is the default behavior) results in a max_period
             of round(0.1 * N) for an N x M image with N < M.
+        min_angle: float, optional
+            Minimum angle swept by kernels. Default is -pi / 2 (-90 degrees),
+            which means that the angle deviates 90 degrees from the depth axis.
+        max_angle: float, optional
+            Maximum angle swept by kernels. Default is pi / 2 (90 degrees),
+            which means that the angle deviates 90 degrees from the depth axis.
         kernel_type : str, optional
             The type of kernel to be used. Currently, options are 'rect' (default)
              and 'gabor'.
@@ -267,9 +275,18 @@ class Descriptor:
             self.widths: np.ndarray[int] = np.array(
                 [self.max_period], dtype=int
             )
+        # since widths are integers, there may be duplicates that we can remove
+        if self.widths.shape[0] > np.unique(self.widths).shape[0]:
+            logger.warning('Found duplicate widths, reducing to unique widths')
+            self.widths = np.unique(self.widths)
+            self.n_sizes = self.widths.shape[0]
+
         # equally spaced between 0 and 180 degrees
         self.angles: np.ndarray[float] = np.linspace(
-            0, np.pi, self.n_angles, endpoint=False
+            min_angle,
+            max_angle,
+            self.n_angles,
+            endpoint=False
         )
         self.phases: np.ndarray[float] = np.linspace(
             0, 2 * np.pi, self.n_phases, endpoint=False
