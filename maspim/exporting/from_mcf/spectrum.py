@@ -965,6 +965,14 @@ class Spectra(Convenience):
                 logger.debug(f'found no calibrant for {index=}')
                 return -1
             degree: int = min([max_degree, n_calibrants - 1])
+
+            # forbid degree>=2 if the calibrants are far away from the beginning and end of the spectrum, set 5Da for now.
+            if degree > 1:
+                assert(abs(min(calibrants_mz) - min(peaks_mzs)) <= 5), \
+                    'calibrants are too far away from the beginning of the spectrum'
+                assert(abs(max(calibrants_mz) - max(peaks_mzs)) <= 5), \
+                    'calibrants are too far away from the end of the spectrum'
+
             # polynomial coefficients
             # theory - actual
             yvals = [t - a for t, a in zip(closest_calibrant_mzs, closest_peak_mzs)]
