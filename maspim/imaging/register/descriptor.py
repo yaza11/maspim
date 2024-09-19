@@ -251,19 +251,20 @@ class Descriptor:
         assert isinstance(n_periods, int) and (n_periods > 0), \
             'n_periods must be natural number'
 
+        min_kernel_size = n_periods * 3 + 2
         if max_period is None:
             max_period: float = .1
         if max_period < 1:
             max_period: int = round(np.min(image.shape[:2]) * max_period)
-        # make sure this value is at least 5
-        self.max_period: int = max([5, max_period])
+        # make sure this value is at least min_kernel_size
+        self.max_period: int = max([min_kernel_size, max_period])
 
         if min_period is None:
             min_period: float = round(max_period / 10)
         elif min_period < 1:
-            min_period: int = max([5, round(np.min(image.shape[:2]) * min_period)])
-        # make sure this value is at least 5
-        self.min_period: int = max([5, min_period])
+            min_period: int = round(np.min(image.shape[:2]) * min_period)
+        # make sure this value is at least min_kernel_size
+        self.min_period: int = max([min_kernel_size, min_period])
 
         assert min_period <= max_period
 
