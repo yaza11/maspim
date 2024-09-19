@@ -16,4 +16,4 @@ dependencies:
   - pip:
     - opencv-python
     - mfe
-    - maspim
+    - git+https://github.com/yaza11/maspim.git
