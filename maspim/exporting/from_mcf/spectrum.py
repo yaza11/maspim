@@ -858,6 +858,7 @@ class Spectra(Convenience):
             calib_snr_threshold: float = 4,
             max_degree: int = 1,
             min_height: float | int = 10_000,
+            nearest: bool = False,
             **_
 
     ):
@@ -894,6 +895,9 @@ class Spectra(Convenience):
         min_height: float | int, optional
             Minimum intensity required. The default is 10_000. Only used, if
             calib_snr_threshold is not provided.
+        nearest: bool, optional
+            If True, will only take the nearest peak to the calibrant. The default
+            is False, which will take the highest peak within the search range.
 
         Notes
         -----
@@ -946,10 +950,12 @@ class Spectra(Convenience):
                     calibrator_presences[it, jt] = False
                     continue
                 # select the highest peak within the search_range
-                peaks_mzs_within_range: np.ndarray[float] = peaks_mzs[distances < search_range]
-                peaks_intensities_within_range: np.ndarray[float] = peaks_intensities[distances < search_range]
-
-                closest_peak_mzs.append(peaks_mzs_within_range[np.argmax(peaks_intensities_within_range)])
+                if nearest:
+                    closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
+                else:
+                    peaks_mzs_within_range: np.ndarray[float] = peaks_mzs[distances < search_range]
+                    peaks_intensities_within_range: np.ndarray[float] = peaks_intensities[distances < search_range]
+                    closest_peak_mzs.append(peaks_mzs_within_range[np.argmax(peaks_intensities_within_range)])
                 closest_calibrant_mzs.append(calibrant)
 
             # search the coefficients of the polynomial
