@@ -274,6 +274,7 @@ class SampleImageHandlerMSI(Convenience):
 
         # search the mis file for the point data and image file
         mis_dict: dict = search_keys_in_xml(self.path_mis_file, ['Point'])
+        assert len(mis_dict) > 0, 'found no region in mis file'
 
         # get points specifying the measurement area
         points_mis: list[str] = mis_dict['Point']
