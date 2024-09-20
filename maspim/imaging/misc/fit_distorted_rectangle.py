@@ -2,6 +2,9 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import imageio
+
+from io import BytesIO
 from typing import Iterable
 from scipy.optimize import minimize
 from tqdm import tqdm
@@ -57,21 +60,58 @@ def distorted_rect(
     return region
 
 
+def animate_optimization(x0s: list, path_file: str, image_classification, seed, is_dark):
+    width = image_classification.shape[0]
+
+    # List to store images in memory
+    images = []
+    for idx, x0 in enumerate(x0s):
+        *coeffs, height = x0
+
+        coeffs4: list[float] = [0.] * 4
+        n_missing: int = 4 - len(coeffs)
+        for i, coeff in enumerate(coeffs):
+            coeffs4[i + n_missing] = coeff
+        a, b, c, d = coeffs4
+
+        region: np.ndarray[bool] = distorted_rect(width, height, (a, b, c, d))
+        image_region: np.ndarray = image_classification[:, seed:seed + width]
+        plt.figure(figsize=(6, 6))
+        plt.imshow(image_region + (1 - is_dark * 2) * 255 * region)
+        plt.plot(width / 2, width / 2, 'ro')
+        plt.plot(width / 2 + d, width / 2, 'bo')
+        plt.title(f'{a=:.3f}, {b=:.3f}, {c=:.3f} {d=:.3f} {height=:.1f}')
+
+        # Save figure to an in-memory buffer
+        buf = BytesIO()
+        plt.savefig(buf, format='png')
+        buf.seek(0)  # Rewind the buffer to the beginning
+        images.append(imageio.imread(buf))  # Read the image from buffer
+
+        # Close the plot to avoid memory issues
+        plt.close()
+
+    # Create a GIF from in-memory images
+    imageio.mimsave(path_file, images, duration=0.5)
+
+
 def find_layer(
         image_classification: np.ndarray[int | float],
         seed: int | float,
         height0: float,
         color: str,
+        fixate_height: bool = False,
         key_light: int = 255,
         key_dark: int = 127,
         max_slope: float = .1,
         x0: np.ndarray[float] | None = None,
         degree: int | None = None,
         bounds: tuple[tuple[float, float], ...] | None = None,
+        return_steps: bool = False,
         plts: bool = False,
         plts_region: bool = False,
-        **_
-) -> list[float | bool]:
+        **kwargs
+) -> list[float | bool] | tuple[list, list]:
     """
     Find parameters for distorted rectangle around seed in classified image.
 
@@ -82,7 +122,10 @@ def find_layer(
     seed : int | float
         Start depth of centerpoint of rectangle.
     height0 : float
-        Initial guess for width of layer (width of peak).
+        Initial guess for width of layer in pixels.
+    fixate_height: bool, optional
+            If this is set to True, will not optimize the heights but instead
+            use height0 values.
     color : str
         "light" or "dark", the color of the layer.
     key_light : int, optional
@@ -108,14 +151,19 @@ def find_layer(
         Parameters of best distorted rectangle for seed.
 
     """
-    def metric(x0: np.ndarray) -> float:
+    def metric(x0_: np.ndarray) -> float:
         """Evaluation function for parameters of rectangle."""
-        *coeffs, height = x0
-        layer_region: np.ndarray[bool] = distorted_rect(
-            width, height, coeffs, plts=plts_region)
-        image_region: np.ndarray = image_classification[:, seed:seed + width]
+        *coeffs_, height_ = x0_
+        x0s.append(x0_)
 
-        vision_layer: np.ndarray = image_region * layer_region
+        if height_ < 0:
+            return -1
+
+        layer_region: np.ndarray[bool] = distorted_rect(
+            width, height_, coeffs_, plts=plts_region)
+        image_region_: np.ndarray = image_classification[:, seed:seed + width]
+
+        vision_layer: np.ndarray = image_region_ * layer_region
         num_light_layer: int = np.sum(vision_layer == key_light)
         num_dark_layer: int = np.sum(vision_layer == key_dark)
         num_layer: int = num_light_layer + num_dark_layer + 1
@@ -124,10 +172,16 @@ def find_layer(
         )
         density: float = num_light_layer / num_layer
         density: float = is_dark - density
-        score_layer: float = advantage_layer * density * height / width
+        score_layer: float = advantage_layer * density * height_ / width
         return score_layer
 
+    def metric_constant_height(x0_: np.ndarray) -> float:
+        x0_new = np.append(x0_, [max(height0, 1)])
+        return metric(x0_new)
+
     assert (degree is not None) or (x0 is not None)
+
+    x0s = []
 
     if degree is None:
         # subtract 1 because need n+1 parameters to define polynomial of degree
@@ -135,9 +189,15 @@ def find_layer(
         # and another one because one of the parameters in x0 is the height
         degree: int = len(x0) - 2
     elif x0 is None:
-        x0: list[float] = [0.] * (degree + 1) + [height0]
+        x0: list[float] = [0.] * (degree + 1)
+        if not fixate_height:
+            x0.append(height0)
     else:
         raise ValueError('internal error')
+
+    # in this case there is nothing left to optimize
+    if (degree == 0) and fixate_height:
+        return [0, 0, 0, 0, height0, True]
 
     if (key_light not in image_classification) or (key_dark not in image_classification):
         raise ValueError(f'Specify keys (values) for light and dark '
@@ -162,20 +222,25 @@ def find_layer(
             (-max_slope / deg / 3, max_slope / deg / 3) for deg in range(degree, 0, -1)
         ) + (
             (-height0 / 2 / width, height0 / 2 / width),  # d
-            (height0 / 2, height0 * 2)  # thickness layer
         )
+        if not fixate_height:
+            bounds += ((height0 / 2, height0 * 2),)  # thickness layer
 
     score0: float = metric(x0)
 
     params = minimize(
-        metric,  # function to minimize
+        metric_constant_height if fixate_height else metric,  # function to minimize
         x0=x0,  # start values
-        method='Nelder-Mead',
+        method=kwargs.pop('method', 'Nelder-Mead'),
         bounds=bounds
     )
 
     # get values
-    *coeffs, height = params.x
+    if fixate_height:
+        coeffs = params.x
+        height = height0
+    else:
+        *coeffs, height = params.x
     coeffs4: list[float] = [0.] * 4
     n_missing: int = 4 - len(coeffs)
     for i, coeff in enumerate(coeffs):
@@ -192,7 +257,11 @@ def find_layer(
 converged: {params.success}, score: {params.fun:.3f} (from {score0:.3f})')
         plt.show()
 
-    return [a, b, c, d, height] + [params.success]
+    ret = [a, b, c, d, height] + [params.success]
+
+    if not return_steps:
+        return ret
+    return ret, x0s
 
 
 def find_layers(
