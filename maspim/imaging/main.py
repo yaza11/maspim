@@ -161,11 +161,11 @@ class Image(Convenience):
         self._image: np.ndarray[int | float] = image
 
     @classmethod
-    def from_disk(cls, path_folder: str) -> Self:
+    def from_disk(cls, path_folder: str, tag: str | None = None) -> Self:
         """Load an image object from disk."""
         # initiate dummy object that provides all, albeit nonsensical, parameters
         dummy: Self = cls(path_folder=path_folder, image=np.ones((3, 3)), obj_color='light')
-        dummy.load()
+        dummy.load(tag)
         # load messes with _image, _image_original, the constructor can take care of that
         new: Self = cls(
             obj_color=dummy.obj_color,
@@ -1895,15 +1895,13 @@ class ImageClassified(Image):
         )
         self._tilt_descriptor: Mapper = mapper
 
-    def set_corrected_image(
+    def get_descriptor(
             self,
-            plts: bool = False,
             nx_pixels_downscaled: int = 500,
             **kwargs
-    ) -> None:
+    ) -> Descriptor:
         """
-        Use Descriptor class to find tilts of layers in the image and set
-        corrected images.
+
 
         Parameters
         ----------
@@ -1912,6 +1910,52 @@ class ImageClassified(Image):
             For memory efficiency it is recommended to downscale the image. The
             default is 500 (so image provided to Descriptor has 500 pixels in
             the x-direction).
+        kwargs: Any
+            Additional keywords for descriptor initialization and fit.
+
+        Returns
+        -------
+
+        """
+        # downscaled image has at most nx_pixels_downscaled pixels in x-direction
+        downscale_factor: float = min((
+            nx_pixels_downscaled / self._image.shape[1],
+            1
+        ))
+        downscaled_shape = (
+            round(self._image.shape[0] * downscale_factor),
+            round(self._image.shape[1] * downscale_factor)
+        )
+        image_downscaled: np.ndarray = skimage.transform.resize(
+            self._image, downscaled_shape
+        )
+
+        logger.info(
+            f'initializing descriptor with image of shape '
+            f'{image_downscaled.shape} (instead of {self._image.shape})'
+        )
+        # TODO: set max_size and min_size from age model, if available
+        descriptor = Descriptor(image=image_downscaled, **kwargs)
+
+        descriptor.set_conv()
+        descriptor.fit(**kwargs)
+
+        return descriptor
+
+    def set_corrected_image(
+            self,
+            descriptor: Descriptor | None = None,
+            plts: bool = False,
+            **kwargs
+    ) -> None:
+        """
+        Use Descriptor class to find tilts of layers in the image and set
+        corrected images.
+
+        Parameters
+        ----------
+        descriptor: Descriptor, optional
+            Descriptor used for the tilt correction
         plts: bool, optional
             If this option is set to True, plot the kerrnels, kernels on image,
             parameter images, angles and corrected image of the Descriptor.
@@ -1925,29 +1969,11 @@ class ImageClassified(Image):
         mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
 
         logger.info('getting new tilt correction transformation')
-        # downscaled image has at most nx_pixels_downscaled pixels in x-direction
-        downscale_factor: float = min((
-            nx_pixels_downscaled / self._image.shape[1],
-            1
-        ))
-        downscaled_shape = (
-            round(self._image.shape[0] * downscale_factor),
-            round(self._image.shape[1] * downscale_factor)
-        )
-        image_downscaled: np.ndarray = skimage.transform.resize(
-            self._image, downscaled_shape
-        )
-        logger.info(
-            f'initializing descriptor with image of shape '
-            f'{image_downscaled.shape} (instead of {self._image.shape})'
-        )
-        # TODO: set max_size and min_size from age model, if available
-        d = Descriptor(image=image_downscaled, **kwargs)
 
-        d.set_conv()
-        d.fit(**kwargs)
+        if descriptor is None:
+            descriptor = self.get_descriptor(**kwargs)
 
-        U = d.get_shift_matrix(self._image.shape[:2])
+        U = descriptor.get_shift_matrix(self._image.shape[:2])
         mapper.add_UV(U=U)
         mapper.save()
 
@@ -1956,18 +1982,18 @@ class ImageClassified(Image):
         # upscale and undistort values of descriptor as qualities
         self._qualities: np.ndarray[float] = mapper.fit(
             skimage.transform.resize(
-                d.vals,
+                descriptor.vals,
                 (self._image.shape[0], self._image.shape[1])
             ),
             preserve_range=True
         ).mean(axis=0)
 
         if plts:
-            d.plot_kernels()
-            d.plot_kernel_on_img()
-            d.plot_parameter_images()
-            d.plot_quiver()
-            d.plot_corrected()
+            descriptor.plot_kernels()
+            descriptor.plot_kernel_on_img()
+            descriptor.plot_parameter_images()
+            descriptor.plot_quiver()
+            descriptor.plot_corrected()
 
     def require_corrected_images(
             self, overwrite: bool = False, **kwargs
@@ -2023,6 +2049,7 @@ class ImageClassified(Image):
 
     def set_seeds(
             self,
+            image: np.ndarray | None = None,
             in_classification: bool = True,
             peak_prominence: float = 0,
             min_distance: int | None = None,
@@ -2035,6 +2062,10 @@ class ImageClassified(Image):
 
         Parameters
         ----------
+        image: np.ndarray, optional
+            An image that matches the shape of the input image along the depth
+            direction. If not provided, in_classification will be used to
+            determine the image used for getting the brightness function.
         in_classification : bool, optional
             If True, will use the classified image to identify peaks. The
             default is True.
@@ -2050,21 +2081,28 @@ class ImageClassified(Image):
             If True, will return the created figure and axes.
         """
         mask_foreground: np.ndarray[int] = self.mask_foreground
-        horizontal_extent: int = mask_foreground.shape[0]
 
-        if in_classification:
+        if image is not None:
+            assert image.shape[1] == self.image.shape[1], \
+                (f'input image must match the image provided on initialization,'
+                 f'so expecting {self.image.shape[1]} but got {image.shape[1]}')
+            image_light = image
+            mask_foreground = np.ones_like(image_light, dtype=bool)
+        elif in_classification:
             image_light: np.ndarray = self.image_classification.copy()
         else:
             image_light: np.ndarray = self.image_grayscale.copy()
 
         brightness: np.ndarray[float] = self.column_wise_average(
-            image_light, mask=self.mask_foreground
+            image_light, mask=mask_foreground
         )
+
+        horizontal_extent: int = image_light.shape[0]
 
         if check_attr(self, 'age_span') and (self.age_span is not None):
             yearly_thickness: float = self.average_width_yearly_cycle
         else:
-            yearly_thickness: float = 12  # results in min distance of 3 pixels
+            yearly_thickness: float = 12.  # results in min distance of 3 pixels
         if min_distance is None:
             min_distance: float = yearly_thickness / 4
 
@@ -2184,6 +2222,7 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
         self._width_dark: np.ndarray[float] = self._width_dark[mask_dark]
         self._prominences_dark: np.ndarray[float] = self._prominences_dark[mask_dark]
 
+    # TODO: option to fix layer widths
     def set_params_laminae_simplified(
             self,
             height0_mode: str = 'use_peak_widths',
@@ -2216,7 +2255,7 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
                 seeds_light if is_light else seeds_dark,
                 height0s_light if is_light else height0s_dark,
                 color=color,
-                degree=0 if self.use_tilt_correction else 3,
+                degree=pol_degree,
                 **kwargs
             )
             dataframe_params['width'] = (
@@ -2226,6 +2265,8 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
                 self._prominences_light if is_light else self._prominences_dark
             )
             return dataframe_params
+
+        pol_degree = kwargs.pop('degree', 0 if self.use_tilt_correction else 3)
 
         image_classification: np.ndarray[int] = self.image_classification.copy()
 
