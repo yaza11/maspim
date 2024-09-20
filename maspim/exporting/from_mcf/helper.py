@@ -1,13 +1,9 @@
 """
 Helper functions for Spectra class.
 """
-import os
-import platform
-
 import numpy as np
 import pandas as pd
 
-from subprocess import Popen, PIPE
 from typing import Iterable, Callable, Any, Self
 from matplotlib import pyplot as plt
 
@@ -16,8 +12,6 @@ from maspim.util.convenience import check_attr
 
 def get_r_home():
     """Find the folder of R installation on the system."""
-
-    import rpy2
     from rpy2 import robjects
 
     # Get R_HOME
@@ -25,7 +19,8 @@ def get_r_home():
         r_home = robjects.r['Sys.getenv']('R_HOME')[0]
         return r_home
     except:
-        raise EnvironmentError("R_HOME could not be determined. Please set it manually or ensure R is installed.")
+        raise EnvironmentError("R_HOME could not be determined. Please set it "
+                               "manually or ensure R is installed.")
 
 
 def get_mzs_for_limits(
