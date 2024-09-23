@@ -12,15 +12,14 @@ from maspim.util.convenience import check_attr
 
 def get_r_home():
     """Find the folder of R installation on the system."""
-    from rpy2 import robjects
 
-    # Get R_HOME
-    try:
-        r_home = robjects.r['Sys.getenv']('R_HOME')[0]
-        return r_home
-    except:
-        raise EnvironmentError("R_HOME could not be determined. Please set it "
-                               "manually or ensure R is installed.")
+    import rpy2.situation
+    if rpy2.situation.get_r_home() is not None:
+        return rpy2.situation.get_r_home()
+    else:
+        raise FileNotFoundError(
+            "R_HOME not found. Please set the R_HOME environment variable."
+        )
 
 
 def get_mzs_for_limits(
