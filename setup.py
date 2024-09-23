@@ -26,7 +26,7 @@ setup(
     install_requires=['matplotlib',
                       'numpy',
                       'pandas',
-                      'rpy2',
+                      'rpy2==3.5.12',
                       'scipy',
                       'tqdm',
                       'opencv-python',
