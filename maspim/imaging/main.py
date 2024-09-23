@@ -1643,8 +1643,6 @@ class ImageROI(Image):
 
         plt.show()
 
-
-
     def plot_overview(
             self,
             fig: plt.Figure | None = None,
