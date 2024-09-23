@@ -14,13 +14,18 @@ def get_r_home():
     """Find the folder of R installation on the system."""
 
     import rpy2.situation
+    import os
+
     if rpy2.situation.get_r_home() is not None:
+        # try set the R_HOME variable if it is not set on windows
+        if os.name == 'nt' and 'R_HOME' not in os.environ:
+            # permanetly set the R_HOME variable for windows using setx
+            os.system(f'setx R_HOME "{rpy2.situation.get_r_home()}"')
+            # set the R_HOME variable for the current session
+            os.environ['R_HOME'] = rpy2.situation.get_r_home()
         return rpy2.situation.get_r_home()
     else:
-        raise FileNotFoundError(
-            "R_HOME not found. Please set the R_HOME environment variable."
-        )
-
+        raise FileNotFoundError("R_HOME not found. Please set the R_HOME environment variable.")
 
 def get_mzs_for_limits(
         limits: Iterable[float | int],
