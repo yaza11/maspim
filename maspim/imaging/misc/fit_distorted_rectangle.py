@@ -92,7 +92,7 @@ def animate_optimization(x0s: list, path_file: str, image_classification, seed, 
         plt.close()
 
     # Create a GIF from in-memory images
-    imageio.mimsave(path_file, images, duration=0.5)
+    imageio.mimsave(path_file, images, duration=0.5, loop=0)
 
 
 def find_layer(
