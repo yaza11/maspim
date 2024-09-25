@@ -221,8 +221,9 @@ def find_stretching_function_basin(
         horizon_source: np.ndarray,
         horizon_target: np.ndarray,
         x00: Iterable | None = None,
-        deg: int | None = None
-) -> dict[str, Any]:
+        deg: int | None = None,
+        return_steps: bool = False
+) -> dict[str, Any] | tuple[dict[str, Any], list]:
     """
     Find the stretching function for two horizons by optimizing.
 
@@ -239,12 +240,16 @@ def find_stretching_function_basin(
         Initial values for the parameters of the stretching function.
     deg : int, optional
         The degree of the polynomial. Either x00 or deg must be provided.
+    return_steps: bool, optional
+        If True, will return the parameters seen during optimization.
 
     Returns
     -------
     dict[str, Any]
         Output dict specifying the solution vector, inital and final error
         as well as the method.
+    x0s : list
+        Parameters seen during optimization (only if return_steps is set to True)
 
     """
     def corr_with(vec: np.ndarray) -> np.ndarray:
@@ -254,6 +259,8 @@ def find_stretching_function_basin(
 
     def evaluate_fit_pad(x0: Iterable) -> float:
         """Calculate error (negative correlation) between target and object."""
+        x0s.append(x0)
+
         # a, b, c, d, zeropad_l, zeropad_r = list(x0)
         # zeropad_l = (np.min([np.max([0, zeropad_l]), 1]) * width_pad_max).astype(int)
         # zeropad_r = (np.min([np.max([0, zeropad_r]), 1]) * width_pad_max).astype(int)
@@ -264,6 +271,7 @@ def find_stretching_function_basin(
     def evaluate_fit_area(x0: Iterable) -> float:
         """Loss is the area between curves (L1 norm)"""
         vec_transformed, _ = apply_stretching(horizon_source, *x0)
+        x0s.append(x0)
 
         return np.sum(np.abs(vec_transformed - horizon_target) ** 2)
 
@@ -271,6 +279,8 @@ def find_stretching_function_basin(
         'source and target must have the same length'
     assert (x00 is not None) or (deg is not None), \
         'provide either start values "x00" or the degree of the polynomial "deg"'
+
+    x0s = []
 
     if x00 is None:
         x00: np.ndarray[float] = np.zeros(deg)
@@ -299,7 +309,11 @@ def find_stretching_function_basin(
     x = params.x
     err: float = evaluate_fit_pad(x)
     logger.info(f'finished with correlation of {-err} and params {x=}')
-    return {'x': x, 'err': err, 'err00': err00, 'method': 'basin_hopping'}
+    ret = {'x': x, 'err': err, 'err00': err00, 'method': 'basin_hopping'}
+
+    if not return_steps:
+        return ret
+    return ret, x0s
 
 
 def find_stretching_function_transect(
