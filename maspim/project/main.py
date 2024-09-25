@@ -2037,6 +2037,7 @@ class ProjectBaseClass:
                               else self.image_classified.image_uncorrected)
         # for source we must not use tilt corrected, otherwise there is nothing
         # left to correct in transformer
+        # (image roi image is always uncorrected)
         source: ImageROI = other.image_roi.image
 
         t: Transformation = Transformation(
