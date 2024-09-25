@@ -1146,6 +1146,7 @@ class ImageROI(Image):
             image: np.ndarray[float | int] | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
+            age_span: tuple[float | int, float | int] | None = None
     ) -> None:
         """Initiator.
 
@@ -1165,6 +1166,8 @@ class ImageROI(Image):
            Folder in which the image or saved object is located. If not provided,
            will be inferred from path_image_file.
            If that is also not provided, will be an empty string.
+        age_span: tuple[float | int, float | int], optional
+            The age span covered by the sample.
 
         """
         super().__init__(
@@ -1174,6 +1177,8 @@ class ImageROI(Image):
             path_folder=path_folder,
             obj_color=obj_color
         )
+
+        self.age_span: tuple[float | int, float | int] | None = age_span
 
     @classmethod
     def from_parent(cls, parent: ImageSample) -> Self:
@@ -1775,6 +1780,7 @@ class ImageClassified(Image):
             image_classification: np.ndarray[int] | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
+            age_span: tuple[float | int, float | int] | None = None,
             use_tilt_correction: bool = True,
             **_
     ):
@@ -1797,6 +1803,8 @@ class ImageClassified(Image):
            Folder in which the image or saved object is located. If not provided,
            will be inferred from path_image_file.
            If that is also not provided, will be an empty string.
+        age_span: tuple[float | int, float | int], optional
+            The age span covered by the sample.
         use_tilt_correction: bool, optional
             If this is set to True, the input images will be transformed such
             that laminae are roughly distortion free. This allows to define
@@ -1822,6 +1830,7 @@ class ImageClassified(Image):
             )
             self._image_classification: np.ndarray[int] = image_classification
 
+        self.age_span: tuple[float | int, float | int] | None = age_span
         self.use_tilt_correction: bool = use_tilt_correction
 
     @classmethod
@@ -2232,9 +2241,6 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
 
         Parameters
         ----------
-        peak_prominence: float, optional
-            The peak prominence above which peaks are considered. The default
-            is 0 which uses all peaks and relies on downstream filtering.
         height0_mode: str, optional
             How to determine the initial guess for the thickness of layers.
             The default is 'use_peak_widths'. Another option is to use the
