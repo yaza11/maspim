@@ -857,6 +857,7 @@ class Spectra(Convenience):
             search_range: float = 5e-3,
             calib_snr_threshold: float = 4,
             max_degree: int = 1,
+            method: str = 'polynomial',
             min_height: float | int = 10_000,
             nearest: bool = False,
             **_
@@ -891,6 +892,10 @@ class Spectra(Convenience):
             Maximum degree of the polynomial used to describe the fit. If the
             number of matched peaks is greater than the required number of
             points, the best fit is used.
+        method: str, optional
+            The type of calibration function to use. 'polynomial' will fit a
+            polynomial of max_degree or number of found calibrants to the
+            spectrum.
         min_height: float | int, optional
             Minimum intensity required. The default is 10_000. Only used, if
             calib_snr_threshold is not provided.
@@ -2405,7 +2410,12 @@ class Spectra(Convenience):
         self.filter_line_spectra(**kwargs)
         self.set_feature_table(**kwargs)
 
-    def full_targeted(self, reader: ReadBrukerMCF | hdf5Handler, targets: list[float], **kwargs):
+    def full_targeted(
+            self,
+            reader: ReadBrukerMCF | hdf5Handler,
+            targets: list[float],
+            **kwargs
+    ) -> None:
         """Perform all steps for targeted compounds with the provided parameters."""
         self.add_calibrated_spectra(reader=reader, **kwargs)
         # set target compounds
@@ -2417,7 +2427,7 @@ class Spectra(Convenience):
             self,
             plt_kernels: bool = False,
             plt_lines: bool = False,
-            limits: tuple[float] | None = None,
+            limits: tuple[float | int, float | int] | None = None,
             hold: bool = False,
             fig: plt.Figure | None = None,
             ax: plt.Axes | None = None
