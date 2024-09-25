@@ -992,7 +992,7 @@ class ProjectBaseClass:
         This function can only be called after set_image_sample has been called.
         """
         # create _image_roi using image from image_sample
-        self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
+        self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample, **kwargs)
         if self.age_span is not None:
             self._image_roi.age_span = self.age_span
 

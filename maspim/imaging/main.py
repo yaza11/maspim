@@ -1146,7 +1146,8 @@ class ImageROI(Image):
             image: np.ndarray[float | int] | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
-            age_span: tuple[float | int, float | int] | None = None
+            age_span: tuple[float | int, float | int] | None = None,
+            **_
     ) -> None:
         """Initiator.
 
@@ -1181,7 +1182,7 @@ class ImageROI(Image):
         self.age_span: tuple[float | int, float | int] | None = age_span
 
     @classmethod
-    def from_parent(cls, parent: ImageSample) -> Self:
+    def from_parent(cls, parent: ImageSample, **kwargs) -> Self:
         """
         Alternative constructor for instantiating an object from a parent
         ImageSample instance.
@@ -1190,7 +1191,8 @@ class ImageROI(Image):
             path_folder=parent.path_folder,
             image=parent.image_sample_area.copy(),
             path_image_file=None,
-            obj_color=parent.obj_color
+            obj_color=parent.obj_color,
+            **kwargs
         )
 
         if check_attr(parent, 'age_span'):
