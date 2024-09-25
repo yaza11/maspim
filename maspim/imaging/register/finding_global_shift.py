@@ -275,19 +275,6 @@ def fit_shifts_1D(target: np.ndarray, source: np.ndarray, degree: int, **kwargs)
     return res
 
 
-def test_inverse(target, source, params_in):
-    params_back = -params_in
-
-    target_inv_inv = warp_with_params(source, params_back)
-    
-    plt.imshow(target)
-    plt.show()
-    plt.imshow(source)
-    plt.show()
-    plt.imshow(target_inv_inv)
-    plt.show()
-
-
 def plt_res(res, *, target, source, n_transects, degree, params_in):
     if type(res) is optimize.OptimizeResult:
         print(res.message)
@@ -312,55 +299,6 @@ def plt_res(res, *, target, source, n_transects, degree, params_in):
         ax2.plot(-np.polyval(row_in, x) + i * 10, 'b')
     plt.legend(['estimated', 'true'])
     plt.show()
-
-
-
-def test():
-    # np.random.seed(0)
-    n_transects: int = 3
-    degree: int = 4
-    degree_fit = 4
-    
-    # target = skimage.data.cat().mean(axis=-1)
-    target: np.ndarray = get_target((60, 80))
-    
-    f: float = target.shape[1] / 15
-    # f = 1
-    params_in: np.ndarray = np.array([
-        (np.random.random(degree + 1) - .5) * f for _ in range(n_transects)
-    ])
-    
-    # params_in: np.ndarray = np.array([
-    #     [0, 0, 0],
-    #     [0, 0, 0],
-    #     [0, 0, 0],
-    #     [0, 0, 0]
-    # ])
-    
-    source: np.ndarray = get_source(target, n_transects=n_transects, params_in=params_in, degree=degree)
-    
-    # test_inverse(target, source, params_in)
-    
-    plt.imshow(target)
-    plt.show()
-    plt.imshow(source)
-    plt.show()
-    
-    res = fit_shifts_global(target=target, source=source, n_transects=n_transects, degree=degree_fit)
-    # res = fit_shifts_local(target=target, source=source, n_transects=n_transects, degree=degree_fit)
-    
-    
-    plt_res(res, target=target, source=source, n_transects=n_transects, degree=degree_fit, params_in=params_in)
-    
-    print(-params_in)
-    # print(res)
-    params_fit = res.x.reshape(n_transects, degree_fit + 1)
-    print(params_fit)
-
-
-
-if __name__ == '__main__':
-    test()
 
 
 def stretching_func(*coeffs: float) -> np.poly1d:
@@ -434,3 +372,58 @@ def rescale_x(x: np.ndarray, x_stretched: np.ndarray) -> np.ndarray:
             (x_stretched - x_stretched.min()) / range_x_stretched * range_x + x.min()
     )
     return x_rescaled
+
+
+def test_inverse(target, source, params_in):
+    params_back = -params_in
+
+    target_inv_inv = warp_with_params(source, params_back)
+
+    plt.imshow(target)
+    plt.show()
+    plt.imshow(source)
+    plt.show()
+    plt.imshow(target_inv_inv)
+    plt.show()
+
+
+def test():
+    # np.random.seed(0)
+    n_transects: int = 3
+    degree: int = 4
+    degree_fit = 4
+
+    # target = skimage.data.cat().mean(axis=-1)
+    target: np.ndarray = get_target((60, 80))
+
+    f: float = target.shape[1] / 15
+    # f = 1
+    params_in: np.ndarray = np.array([
+        (np.random.random(degree + 1) - .5) * f for _ in range(n_transects)
+    ])
+
+    # params_in: np.ndarray = np.array([
+    #     [0, 0, 0],
+    #     [0, 0, 0],
+    #     [0, 0, 0],
+    #     [0, 0, 0]
+    # ])
+
+    source: np.ndarray = get_source(target, n_transects=n_transects, params_in=params_in, degree=degree)
+
+    # test_inverse(target, source, params_in)
+
+    plt.imshow(target)
+    plt.show()
+    plt.imshow(source)
+    plt.show()
+
+    res = fit_shifts_global(target=target, source=source, n_transects=n_transects, degree=degree_fit)
+    # res = fit_shifts_local(target=target, source=source, n_transects=n_transects, degree=degree_fit)
+
+    plt_res(res, target=target, source=source, n_transects=n_transects, degree=degree_fit, params_in=params_in)
+
+    print(-params_in)
+    # print(res)
+    params_fit = res.x.reshape(n_transects, degree_fit + 1)
+    print(params_fit)
