@@ -156,9 +156,6 @@ def find_layer(
         *coeffs_, height_ = x0_
         x0s.append(x0_)
 
-        if height_ < 0:
-            return -1
-
         layer_region: np.ndarray[bool] = distorted_rect(
             width, height_, coeffs_, plts=plts_region)
         image_region_: np.ndarray = image_classification[:, seed:seed + width]
