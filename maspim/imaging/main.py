@@ -1195,7 +1195,7 @@ class ImageROI(Image):
             **kwargs
         )
 
-        if check_attr(parent, 'age_span'):
+        if check_attr(parent, 'age_span') and ('age_span' not in kwargs):
             new.age_span = parent.age_span
 
         return new
