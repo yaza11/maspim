@@ -97,6 +97,7 @@ class Convenience:
 
     _save_attrs: set[str] | None = None
     _save_in_d_folder: bool = False
+    _save_file: str | None = None
 
     @property
     def feature_table(self) -> pd.DataFrame | None:
@@ -118,6 +119,8 @@ class Convenience:
 
         if tag is not None:
             file_name: str = f'{class_name}_{tag}.pickle'
+        elif check_attr(self, '_save_file'):
+            file_name: str = self.save_file
         else:
             file_name: str = f'{class_name}.pickle'
 
@@ -141,9 +144,11 @@ class Convenience:
 
     @property
     def save_file(self):
-        return self._get_disc_folder_and_file()[1]
+        return self.get_save_file()
 
     def get_save_file(self, tag: str | None = None):
+        if check_attr(self, '_save_file'):
+            return self._save_file
         return self._get_disc_folder_and_file(tag=tag)[1]
 
     def __repr__(self) -> str:

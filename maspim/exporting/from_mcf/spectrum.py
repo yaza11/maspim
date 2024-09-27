@@ -13,6 +13,7 @@ import os
 import psutil
 import logging
 
+import scipy.signal
 from tqdm import tqdm
 from typing import Iterable, Self, Any, Callable
 from scipy.signal import find_peaks, correlate, correlation_lags, peak_widths
@@ -23,7 +24,7 @@ from maspim.data.combine_feature_tables import combine_feature_tables
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectrum
 from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
 from maspim.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
-from maspim.exporting.from_mcf.helper import get_mzs_for_limits, local_max_2D
+from maspim.exporting.from_mcf.helper import get_mzs_for_limits, local_max_2D, local_max_fast
 from maspim.res.calibrants import get_calibrants
 from maspim.util import Convenience
 from maspim.util.convenience import check_attr
@@ -728,7 +729,7 @@ class Spectra(Convenience):
             self,
             **kwargs
     ) -> None:
-        assert not self._noise_level_subtracted
+        assert not self._noise_level_subtracted, 'Cannot subtract baseline again'
         ys_min = self.require_noise_level(**kwargs)
         self._intensities -= ys_min * self._n_spectra
         self._noise_level_subtracted = True
@@ -1921,10 +1922,22 @@ class Spectra(Convenience):
         def _bin_spectrum_max(_spectrum: np.ndarray[float], _idx_spectrum: int) -> None:
             # 2D matrix with intensities windowed to kernels: each column is the
             # product of a kernel with the spectrum
-            vals = kernels * _spectrum[:, None]
-            maxs = local_max_2D(vals, axis=0)
-            # of the local maxima, take the biggest
-            self._line_spectra[_idx_spectrum, :] = maxs.max(axis=0)
+
+            # vectorized
+            # vals = kernels[1:-1, :] * _spectrum[:, None]
+            # maxs = local_max_fast(vals)
+            # # of the local maxima, take the biggest
+            # self._line_spectra[_idx_spectrum, :] = maxs.max(axis=0)
+
+            # loop
+            # faster than vectorized in this case because we don't have to
+            # modify the big kernels matrix
+            for peak_idx in range(kernels.shape[1]):
+                vals = kernels[:, peak_idx] * _spectrum
+                peaks, _ = scipy.signal.find_peaks(vals)
+                if len(peaks) == 0:
+                    continue
+                self._line_spectra[_idx_spectrum, peak_idx] = vals[peaks].max()
 
         assert len(self._peaks) > 0, 'need at least one peak'
         assert check_attr(self, '_kernel_params'), \
@@ -1984,6 +1997,8 @@ class Spectra(Convenience):
 
             kernels.ravel()[first_raveled] = np.inf
             kernels.ravel()[last_raveled] = np.inf
+            # pad for compatibility with shifting (for vectorized version)
+            # kernels = np.pad(kernels, ((1, 1), (0, 0)), constant_values=np.inf)
         else:
             raise NotImplementedError()
 

@@ -73,13 +73,20 @@ def local_max_2D(array: np.ndarray, axis: int = 0) -> np.ndarray:
     # transpose
     t: bool = axis != 0
 
-    padded = np.pad(array.T if t else array, ((1, 1), (0, 0)),  constant=np.inf)
+    padded = np.pad(array.T if t else array, ((1, 1), (0, 0)),  constant_values=np.inf)
 
     is_local_max = (padded[1:-1, :] > padded[:-2, :]) & (padded[1:-1, :] > padded[2:, :])
 
     if t:
         return is_local_max * array.T
     return is_local_max * array
+
+
+def local_max_fast(padded: np.ndarray) -> np.ndarray:
+    """Same as local_max_2D but boundary conditions are ignored and can't transpose"""
+    is_local_max = (padded[1:-1, :] > padded[:-2, :]) & (padded[1:-1, :] > padded[2:, :])
+
+    return is_local_max * padded[1:-1, :]
 
 
 class Spots:

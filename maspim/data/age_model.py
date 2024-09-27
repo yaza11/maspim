@@ -131,11 +131,11 @@ class AgeModel(Convenience):
             self._read_file(depth_offset, conversion_to_cm, **kwargs_read_file)
 
     def _set_files(self, path_file: str | None) -> None:
-        self._save_file: None | str = None if path_file is None else 'AgeModel.pickle'
+        self._save_file: None | str = None if path_file is None else os.path.basename(path_file)
         if path_file is None:
             return
 
-        # check if file is directory, in that case require a AgeModel.pickle file
+        # check if file is directory, in that case require an AgeModel.pickle file
         if os.path.isdir(path_file):
             assert 'AgeModel.pickle' in os.listdir(path_file), \
                 (f'A folder ({path_file} was provided as input, but no saved '
