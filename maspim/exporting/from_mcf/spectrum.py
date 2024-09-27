@@ -23,7 +23,7 @@ from maspim.data.combine_feature_tables import combine_feature_tables
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectrum
 from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
 from maspim.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
-from maspim.exporting.from_mcf.helper import get_mzs_for_limits
+from maspim.exporting.from_mcf.helper import get_mzs_for_limits, local_max_2D
 from maspim.res.calibrants import get_calibrants
 from maspim.util import Convenience
 from maspim.util.convenience import check_attr
@@ -1922,17 +1922,9 @@ class Spectra(Convenience):
             # 2D matrix with intensities windowed to kernels: each column is the
             # product of a kernel with the spectrum
             vals = kernels * _spectrum[:, None]
-            # the position of the highest value for each kernel
-            idcs_max = np.argmax(vals, axis=0)
-            # only accept value if it is not at the boundary of the kernel window
-            # --> check that idx is not at boundary by checking that the next
-            #     value is not 0 (because only values inside the kernel window
-            #     are nonzero)
-            mask_valid = np.array([
-                (vals[idx_max - 1, i] > 0) & (vals[idx_max + 1, i] > 0)
-                for i, idx_max in enumerate(idcs_max)
-            ])
-            self._line_spectra[_idx_spectrum, :] = vals.max(axis=0) * mask_valid
+            maxs = local_max_2D(vals, axis=0)
+            # of the local maxima, take the biggest
+            self._line_spectra[_idx_spectrum, :] = maxs.max(axis=0)
 
         assert len(self._peaks) > 0, 'need at least one peak'
         assert check_attr(self, '_kernel_params'), \
@@ -1975,6 +1967,23 @@ class Spectra(Convenience):
                     self._get_kernels(norm_mode='height')
                     > np.exp(-1 / 2)
             ).astype(float)
+            # set values next to window boundary to inf to exclude from local max
+            n_rows, n_columns = kernels.shape
+            # stolen from first_nonzero and last_nonzero
+            first_rows = kernels.argmax(axis=0)
+            last_rows = kernels.shape[0] - np.flip(kernels, axis=0).argmax(axis=0) - 1
+            # convert to 1D indices for easier access
+            first_raveled = np.ravel_multi_index(
+                np.array([first_rows - 1, range(n_columns)]),
+                dims=(n_rows, n_columns)
+            )
+            last_raveled = np.ravel_multi_index(
+                np.array([last_rows + 1, range(n_columns)]),
+                dims=(n_rows, n_columns)
+            )
+
+            kernels.ravel()[first_raveled] = np.inf
+            kernels.ravel()[last_raveled] = np.inf
         else:
             raise NotImplementedError()
 
@@ -2289,25 +2298,39 @@ class Spectra(Convenience):
         mask : np.ndarray[bool]
             Mask object where values not meeting the criteria are set to False
         """
+        # check if the baseline has been estimated, otherwise can't filter based
+        # on noise leveles
         if binned_snr_threshold > 0:
-            assert check_attr(self, 'noise_level'), 'Call subtract_baseline first'
-            mask_snr_too_low: np.ndarray[bool] = self._get_SNR_table() < binned_snr_threshold
+            assert check_attr(self, '_noise_level'), \
+                'Call set_noise_level first'
+            mask_snr_too_low: np.ndarray[bool] = (self._get_SNR_table()
+                                                  < binned_snr_threshold)
         else:
-            mask_snr_too_low: np.ndarray[bool] = np.zeros(self._line_spectra.shape, dtype=bool)
+            mask_snr_too_low: np.ndarray[bool] = np.zeros(
+                self._line_spectra.shape, dtype=bool
+            )
         if intensity_min > 0:
-            mask_intensity_too_low: np.ndarray[bool] = self._line_spectra < intensity_min
+            mask_intensity_too_low: np.ndarray[bool] = (self._line_spectra
+                                                        < intensity_min)
         else:
             mask_intensity_too_low: np.ndarray[bool] = np.zeros(
                 self._line_spectra.shape, dtype=bool
             )
-
+        # set pixels falling below thresholds to 0
         mask = mask_snr_too_low | mask_intensity_too_low
         self._line_spectra[mask] = 0
 
+        # check which compounds do not have enough successful spectra after
+        # filtering
         if success_rate_threshold > 0:
-            mask_successes = (self._line_spectra > 0).mean(axis=0) > success_rate_threshold
+            mask_successes = ((self._line_spectra > 0).mean(axis=0)
+                              > success_rate_threshold)
             self._line_spectra = self._line_spectra[:, mask_successes]
             self.filter_peaks(whitelist=self._peaks[mask_successes].copy())
+
+        # update feature table
+        if check_attr(self, '_feature_table'):
+            self.set_feature_table()
 
         return mask
 
