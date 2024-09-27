@@ -191,7 +191,8 @@ def find_holes(
         obj_color: str,
         side: str | None = None,
         depth_section: float = 5,
-        plts=False
+        plts=False,
+        **_
 ) -> tuple[list[np.ndarray[int]], float]:
     """Run find_holes_side for each side and pick the one with a higher score."""
     # run on provided side
