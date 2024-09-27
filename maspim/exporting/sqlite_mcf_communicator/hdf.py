@@ -159,7 +159,7 @@ class hdf5Handler(ReaderBaseClass):
         if mzs is None:
             mzs = get_mzs_for_limits(limits, delta_mz)
 
-        # stored as float8 apparently
+        # stored as float64 (64 bit, so 8 byte per element)
         size_GB: float = N * len(mzs) * 8 / 1024 ** 3
         # warn above 100 GB
         if size_GB > 1024:
@@ -179,7 +179,7 @@ class hdf5Handler(ReaderBaseClass):
             dset = f.create_dataset(
                 'intensities',
                 shape=data_shape,
-                dtype='float',
+                dtype='float64',
                 chunks=(1, len(mzs))
             )
             # read, resample and write all spectra
