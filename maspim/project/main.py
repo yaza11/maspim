@@ -1370,6 +1370,30 @@ class ProjectBaseClass:
 
         self._data_object.tilt_correction_applied = True
 
+    def data_object_apply_transformation(self, mapper: Mapper) -> None:
+        """Apply a mapping from a mapper object to the data."""
+        assert not self.corrected_tilt, 'tilt has already been corrected'
+        assert self._data_object is not None, 'set data_object.'
+        assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
+
+        # get transformed coordinates
+        XT, YT = mapper.get_transformed_coords()
+
+        # insert into feature table
+        self.data_object.add_attribute_from_image(
+            XT, 'x_ROI_T', fill_value=np.nan
+        )
+        self.data_object.add_attribute_from_image(
+            YT, 'y_ROI_T', fill_value=np.nan
+        )
+
+        # fit feature table
+        self.data_object.inject_feature_table_from(
+            transform_feature_table(self.data_object.feature_table),
+            supress_warnings=True
+        )
+        logger.info('successfully applied mapping')
+
     @property
     def corrected_tilt(self) -> bool:
         return self._data_object.tilt_correction_applied
