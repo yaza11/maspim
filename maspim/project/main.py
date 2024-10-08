@@ -2020,6 +2020,7 @@ class ProjectBaseClass:
             other: Self,
             self_tilt_correction: bool,
             other_tilt_correction: bool,
+            overwrite: bool = False,
             plts: bool = False,
             **kwargs
     ) -> Mapper:
@@ -2028,14 +2029,14 @@ class ProjectBaseClass:
         # attempt to load
         mapper = Mapper(path_folder=self.path_folder,
                         tag=f'combine_with_{identifier}')
-        if os.path.exists(mapper.save_file):
+        if os.path.exists(mapper.save_file) and not overwrite:
             mapper.load()
             return mapper
 
         target: np.ndarray = (self.image_classified.image_corrected
                               if self_tilt_correction
-                              else self.image_classified.image_uncorrected)
-        # for source we must not use tilt corrected, otherwise there is nothing
+                              else self.image_roi.image)
+        # for source, we must not use tilt corrected, otherwise there is nothing
         # left to correct in transformer
         # (image roi image is always uncorrected)
         source: ImageROI = other.image_roi.image
@@ -2047,10 +2048,15 @@ class ProjectBaseClass:
             target_obj_color=self.image_roi.obj_color
         )
 
+        logger.info('estimating match of bounding boxes')
         t.estimate('bounding_box', plts=plts, **kwargs)
         if other_tilt_correction:
+            logger.info('estimating tilt correction')
             t.estimate('tilt', plts=plts, **kwargs)
-        if other._is_laminated:
+        if self._is_laminated:
+            if not other._is_laminated:
+                logger.warning('Not using lamination although other is laminated')
+            logger.info('estimating laminae correction')
             t.estimate('laminae', plts=plts, **kwargs)
 
         if plts:
@@ -2085,7 +2091,7 @@ class ProjectBaseClass:
             use_tilt_correction = self._is_laminated
         is_2tuple_bool = (hasattr(use_tilt_correction, '__iter__')
                           and (len(use_tilt_correction) == 2)
-                          and all([isinstance(c) for c in use_tilt_correction]))
+                          and all([isinstance(c, bool) for c in use_tilt_correction]))
         assert isinstance(use_tilt_correction, bool) or is_2tuple_bool, (
             f'correct_tilt must be either a bool or an 2-tuple'
             f' of bools, you provided {use_tilt_correction}'
@@ -2143,7 +2149,7 @@ class ProjectBaseClass:
         ):
             values: np.ndarray[float] = other.data_object.feature_table.loc[
                 :, comp
-            ].to_numpy()
+            ].fillna(0).to_numpy()
 
             # turn ion images into images that cover the image of the XRF photo
             ion_image: np.ndarray = griddata(
