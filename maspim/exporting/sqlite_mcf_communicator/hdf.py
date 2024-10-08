@@ -222,15 +222,20 @@ class hdf5Handler(ReaderBaseClass):
             - intensities: a 2D array with shape (N, M) where N is the number of spectra
               and M is the number of mz values.
         """
-        with h5py.File(self.path_file, 'r') as f:
+        with (h5py.File(self.path_file, 'r') as f):
             indices_hpf5 = f['indices'][:]
 
             if indices is None:
                 mask = np.ones_like(self.indices, dtype=bool)
             elif len(indices) == 1:
                 mask = indices[0]
+                assert mask in indices_hpf5, \
+                    f'{mask} is not a valid index in {indices_hpf5}'
             else:
                 mask = [idx in indices for idx in indices_hpf5]
+                missing = [idx for idx in indices if idx not in indices_hpf5]
+                assert len(missing) == 0, \
+                    f'some indices were not found: {missing}'
 
             dset = f['intensities']
 
@@ -241,6 +246,15 @@ class hdf5Handler(ReaderBaseClass):
                 'mzs': masses,
                 'intensities': intensities
             }
+
+    def get_intensities_for_array_indices(self, expr) -> np.ndarray[np.float64]:
+        """
+        Obtain intensities for the specified intensities.
+
+        Supports every indexing method from numpy arrays.
+        """
+        with (h5py.File(self.path_file, 'r') as f):
+            return f['intensities'][expr]
 
     def get_spectrum(
             self,
