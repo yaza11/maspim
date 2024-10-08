@@ -2050,7 +2050,8 @@ class ProjectBaseClass:
         t.estimate('bounding_box', plts=plts, **kwargs)
         if other_tilt_correction:
             t.estimate('tilt', plts=plts, **kwargs)
-        t.estimate('laminae', plts=plts, **kwargs)
+        if other._is_laminated:
+            t.estimate('laminae', plts=plts, **kwargs)
 
         if plts:
             t.plot_fit(use_classified=False)
