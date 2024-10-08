@@ -218,6 +218,7 @@ def plot_comp(
         ticks_on_longer_axis: bool = True,
         colorbar: bool = True,
         cax_size: str | float = '10%',
+        cax_pad: float = 0.05,
         **kwargs
 ) -> tuple[plt.Figure, plt.Axes] | None:
     """
@@ -250,6 +251,12 @@ def plot_comp(
         assert data_frame is not None, 'if no image is provided, provide a dataframe'
         assert comp in data_frame.columns, \
             f'{comp=} is not in the dataframe with columns {data_frame.columns}'
+    else:
+        data_frame = pd.DataFrame(data=img_mz.ravel(), columns=[comp])
+        y, x = np.indices(img_mz.shape)
+        data_frame.loc[:, 'x'] = x.ravel()
+        data_frame.loc[:, 'y'] = y.ravel()
+
     img_mz, idx_x, idx_y = get_comp_as_img(
         data_frame=data_frame, comp=comp, flip=flip, **kwargs
     )
@@ -373,7 +380,7 @@ def plot_comp(
         # TODO: fix padding, size, depending on image dimensions
         cax = divider.append_axes('right' if portrait_mode else 'bottom',
                                   size=cax_size,
-                                  pad=0.05)
+                                  pad=cax_pad)
         cbar = fig.colorbar(
             im,
             orientation='vertical' if portrait_mode else 'horizontal',
