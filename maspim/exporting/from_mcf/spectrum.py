@@ -1862,7 +1862,7 @@ class Spectra(Convenience):
             spectrum:
             -- 'height' takes the height of spectra at target masses
             -- 'area' calculates the overlap between the kernels
-            -- 'max' takes the highest intensity within the given tolerance.
+            -- 'max' takes the highest local maximum within the given tolerance.
 
         Notes
         -----
@@ -1933,7 +1933,7 @@ class Spectra(Convenience):
             # faster than vectorized in this case because we don't have to
             # modify the big kernels matrix
             for peak_idx in range(kernels.shape[1]):
-                vals = kernels[:, peak_idx] * _spectrum
+                vals = _spectrum[kernels[:, peak_idx]]
                 peaks, _ = scipy.signal.find_peaks(vals)
                 if len(peaks) == 0:
                     continue
@@ -1948,9 +1948,11 @@ class Spectra(Convenience):
             f'method must be either "area" or "height" or "max", not {method}'
 
         indices_spectra: np.ndarray[int] = self.indices
-        n_spectra: int = self._n_spectra  # number of spectra in mcf file
+        # number of spectra in mcf file
+        n_spectra: int = self._n_spectra
         n_peaks: int = self._n_peaks  # number of identified peaks
-        self._line_spectra: np.ndarray[float] = np.zeros((n_spectra, n_peaks))  # result array
+        # result array
+        self._line_spectra: np.ndarray[float] = np.zeros((n_spectra, n_peaks))
 
         self._binning_by: str = method
 
@@ -1976,27 +1978,26 @@ class Spectra(Convenience):
             # H is 1 since g(x = sigma) is required to be 1
             # from g(x = mu +/- sigma) it follows that g must be bigger than
             # exp(-1 / 2) inside the kernel window
-            kernels: np.ndarray[float] = (
-                    self._get_kernels(norm_mode='height')
-                    > np.exp(-1 / 2)
-            ).astype(float)
-            # set values next to window boundary to inf to exclude from local max
-            n_rows, n_columns = kernels.shape
-            # stolen from first_nonzero and last_nonzero
-            first_rows = kernels.argmax(axis=0)
-            last_rows = kernels.shape[0] - np.flip(kernels, axis=0).argmax(axis=0) - 1
-            # convert to 1D indices for easier access
-            first_raveled = np.ravel_multi_index(
-                np.array([first_rows - 1, range(n_columns)]),
-                dims=(n_rows, n_columns)
-            )
-            last_raveled = np.ravel_multi_index(
-                np.array([last_rows + 1, range(n_columns)]),
-                dims=(n_rows, n_columns)
-            )
+            kernels: np.ndarray[float] = (self._get_kernels(norm_mode='height')
+                                          > np.exp(-1 / 2))
 
-            kernels.ravel()[first_raveled] = np.inf
-            kernels.ravel()[last_raveled] = np.inf
+            # # set values next to window boundary to inf to exclude from local max
+            # n_rows, n_columns = kernels.shape
+            # # stolen from first_nonzero and last_nonzero
+            # first_rows = kernels.argmax(axis=0)
+            # last_rows = kernels.shape[0] - np.flip(kernels, axis=0).argmax(axis=0) - 1
+            # # convert to 1D indices for easier access
+            # first_raveled = np.ravel_multi_index(
+            #     np.array([first_rows - 1, range(n_columns)]),
+            #     dims=(n_rows, n_columns)
+            # )
+            # last_raveled = np.ravel_multi_index(
+            #     np.array([last_rows + 1, range(n_columns)]),
+            #     dims=(n_rows, n_columns)
+            # )
+            #
+            # kernels.ravel()[first_raveled] = np.inf
+            # kernels.ravel()[last_raveled] = np.inf
             # pad for compatibility with shifting (for vectorized version)
             # kernels = np.pad(kernels, ((1, 1), (0, 0)), constant_values=np.inf)
         else:
