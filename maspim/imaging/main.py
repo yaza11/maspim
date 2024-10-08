@@ -1886,7 +1886,8 @@ class ImageClassified(Image):
         # divide colwise sum of c by number of foreground pixels
         # empty cols will have a value of 0
         av: np.ndarray[float] = np.zeros(image.shape[1])
-        av[mask_nonempty_col] = col_sum[mask_nonempty_col] / valid_sum[mask_nonempty_col]
+        av[mask_nonempty_col] = (col_sum[mask_nonempty_col]
+                                 / valid_sum[mask_nonempty_col])
         # center
         av -= .5
         av[~mask_nonempty_col] = 0
