@@ -482,7 +482,7 @@ def transform_feature_table(
         *,
         p_ROI_T: pd.DataFrame | None = None,
         x_ROI_T: pd.Series | None = None,
-        y_ROI_T: pd.Series | None = None,
+        y_ROI_T: pd.Series | None = None
 ) -> pd.DataFrame:
     """
     Transform data in feature table according to transformed coordinates.
@@ -543,6 +543,7 @@ def transform_feature_table(
             desc='warping ion images'
     ):
         image: np.ndarray = get_comp_as_arr(comp)
+
         # TODO: blur
         warped: np.ndarray = warp(
             image.astype(float),
