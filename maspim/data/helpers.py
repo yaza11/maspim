@@ -543,12 +543,14 @@ def transform_feature_table(
             desc='warping ion images'
     ):
         image: np.ndarray = get_comp_as_arr(comp)
+        # TODO: blur
         warped: np.ndarray = warp(
             image.astype(float),
             np.array([row_coords + V, col_coords + U]),
             mode='edge',
             preserve_range=True
         )
+        # TODO: sharpen
 
         df_new.loc[:, comp] = warped.ravel()
     df_new.loc[:, 'x_ROI'] = X.ravel()
