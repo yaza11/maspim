@@ -1,15 +1,14 @@
-import os
-from typing import Callable, Self
-
+import logging
+import skimage
 import numpy as np
+
+from typing import Callable, Self
 from matplotlib import pyplot as plt
 from scipy.interpolate import RectBivariateSpline, bisplev
 from skimage.data import checkerboard
 from skimage.transform import warp, resize
-import logging
 
 from maspim.util import Convenience
-from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +79,9 @@ def extrapolate_bispline_top_bottom(f: RectBivariateSpline, yp, xi, yi) -> np.nd
     return Z
 
 
-def interpolate_shifts(shifts: list[np.ndarray] | np.ndarray, image_shape: tuple[int, ...], n_transects) -> np.ndarray:
+def interpolate_shifts(shifts: list[np.ndarray] | np.ndarray,
+                       image_shape: tuple[int, ...],
+                       n_transects: int) -> np.ndarray:
     """
     Interpolate shift vectors inbetween known transects.
 
@@ -111,7 +112,8 @@ def interpolate_shifts(shifts: list[np.ndarray] | np.ndarray, image_shape: tuple
     # evenly spaced grid
     xi = xp.copy()
     yi = np.arange(image_shape[0])
-    f = RectBivariateSpline(xp, yp, ZP, kx=1, ky=3 if n_transects > 3 else n_transects - 1)
+    f = RectBivariateSpline(xp, yp, ZP, kx=1,
+                            ky=3 if n_transects > 3 else n_transects - 1)
 
     Z = extrapolate_bispline_top_bottom(f=f, yp=yp, xi=xi, yi=yi)
 
@@ -137,6 +139,7 @@ def _apply_displacement_single_channel(u, v, image, **kwargs):
 
     return warped
 
+
 def apply_displacement(u: np.ndarray, v: np.ndarray, image: np.ndarray, **kwargs):
     """Apply flow fields to a (possibly multichannel) image."""
     assert image.ndim in (2, 3), 'image must be either 2 or 3 dimensional'
@@ -151,6 +154,73 @@ def apply_displacement(u: np.ndarray, v: np.ndarray, image: np.ndarray, **kwargs
         )
     if kwargs.get('preserve_range'):
         warped = warped.astype(image.dtype)
+
+    return warped
+
+
+def downscale_cells_median(image: np.ndarray, cell_size: int) -> np.ndarray:
+    """Take the median in square-shaped cells of an image."""
+    assert image.ndim == 2, 'must be 2D image'
+    assert image.shape[0] % cell_size == 0, \
+        'image dimensions must be multiple of cell size'
+    assert image.shape[1] % cell_size == 0, \
+        'image dimensions must be multiple of cell size'
+
+    h_new: int = image.shape[0] // cell_size
+    w_new: int = image.shape[1] // cell_size
+    image_downscaled: np.ndarray = np.zeros((h_new, w_new),
+                                            dtype=image.dtype)
+
+    for i in range(h_new):
+        for j in range(w_new):
+            image_downscaled[i, j] = np.median(
+                image[i * cell_size:(i + 1) * cell_size,
+                j * cell_size:(j + 1) * cell_size]
+            )
+    return image_downscaled
+
+
+def keep_deformation_sparse(
+        u,
+        v,
+        image,
+        scale_factor: int,
+        threshold: bool = False,
+        **kwargs):
+    # first, upscale
+    image_upscaled: np.ndarray = skimage.transform.rescale(
+        image,
+        scale_factor,
+        preserve_range=True,
+        order=0  # closest
+    )
+
+    # better precision achievable if deformation and coords are separated
+    vi, ui = np.indices(image.shape[:2])
+    dx: np.ndarray = u - ui
+    dy: np.ndarray = v - vi
+
+    dx_upscaled = skimage.transform.rescale(dx * scale_factor,
+                                            scale_factor,
+                                            preserve_range=True,
+                                            order=1)
+    dy_upscaled = skimage.transform.rescale(dy * scale_factor,
+                                            scale_factor,
+                                            preserve_range=True,
+                                            order=1)
+    V_upscaled, U_upscaled = np.indices(image_upscaled.shape)
+
+    warped_upscaled = apply_displacement(dx_upscaled + U_upscaled,
+                                         dy_upscaled + V_upscaled,
+                                         image_upscaled,
+                                         **kwargs)
+
+    # downscale using local median
+    warped = downscale_cells_median(warped_upscaled, cell_size=scale_factor)
+
+    if threshold:
+        smallest_nonzero = np.unique(image)[1]
+        warped[warped < smallest_nonzero] = 0
 
     return warped
 
@@ -291,7 +361,28 @@ class Mapper(Convenience):
         self._Us = [U]
         self._Vs = [V]
 
-    def fit(self, image: np.ndarray, **kwargs) -> np.ndarray:
+    def fit(
+            self,
+            image: np.ndarray,
+            keep_sparse: bool = False,
+            **kwargs
+    ) -> np.ndarray:
+        """
+        Apply the transformation defined by U and V to an image.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            The image to which to apply the transformation. Must be 2 or 3D and
+            the shape has to match that of the mapper.
+        keep_sparse : bool
+            Whether to keep the distribution of intensities similar. This is the
+            recommended option for sparse/noisy data but will lose the mean
+            intensity whereas disabling this option keeps the mean intensity
+            similar but introduces small, non-zero values for sparse data.
+        kwargs: Any
+            additional keyword arguments for apply_displacement
+        """
         assert image.ndim in (2, 3), 'Image must be 2D or 3D'
         assert image.shape[:2] == self._image_shape[:2], \
             f'Expected image of shape {self._image_shape[:2]}, got {image.shape[:2]}'
@@ -301,7 +392,11 @@ class Mapper(Convenience):
             U, V = self._Us[0], self._Vs[0]
         else:
             U, V = self._get_combined_UV()
-        return apply_displacement(U, V, image, **kwargs)
+
+        if not keep_sparse:
+            return apply_displacement(U, V, image, **kwargs)
+
+        return keep_deformation_sparse(U, V, image, **kwargs)
 
     def get_transformed_coords(self):
         X, Y = self.get_XY()
@@ -309,8 +404,11 @@ class Mapper(Convenience):
         YT = self.fit(Y.astype(float), preserve_range=True)
         return XT, YT
 
-    def plot_overview(self, ny: int = 50):
-        img = resize(checkerboard(), self._image_shape)
+    def plot_overview(self, ny: int = 50, img=None):
+        if img is None:
+            img = resize(checkerboard(), self._image_shape)
+        assert img.shape[:2] == self._image_shape, \
+            f'Image shape does not match {self._image_shape}'
         warped = self.fit(img)
 
         every = round(self._image_shape[0] / ny)
