@@ -5,6 +5,8 @@ import functools
 import json
 import os
 import re
+import warnings
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -948,16 +950,23 @@ class ProjectBaseClass:
         # return existing
         if (self._image_sample is not None) and (not overwrite):
             return self._image_sample
-
+        # load and return
         if (
                 check_attr(self, 'ImageSample_file')
                 or (tag is not None)
         ) and (not overwrite):
             logger.info('loading ImageSample')
-            self._image_sample: ImageSample = ImageSample(path_folder=self.path_folder, image=self.image_handler.image,
-                                                          image_type='pil', obj_color=obj_color)
+            self._image_sample: ImageSample = ImageSample(
+                path_folder=self.path_folder,
+                image=self.image_handler.image,
+                image_type='pil',
+                obj_color=obj_color
+            )
             try:
                 self._image_sample.load(tag)
+                # overwrite obj_color
+                if obj_color is not None:
+                    self._image_sample.obj_color = obj_color
                 if check_attr(self._image_sample, '_xywh_ROI'):
                     return self._image_sample
 
@@ -2039,23 +2048,41 @@ class ProjectBaseClass:
         # add to feature table
         self.data_object.add_attribute_from_image(warped_xray, 'xray')
 
-    def _require_combine_mapper(
+    def set_combine_mapper(
             self,
             other: Self,
             self_tilt_correction: bool,
             other_tilt_correction: bool,
-            overwrite: bool = False,
+            mapping_method: list[str] | None = None,
+            mapping_method_kwargs: list[dict] | None = None,
             plts: bool = False,
             **kwargs
-    ) -> Mapper:
-        identifier: str = os.path.basename(other.path_folder).split('.')[0]
+    ) -> None:
+        """
+        Create a mapper that maps the sample of another project onto this' and
+        saves it to disk.
 
-        # attempt to load
-        mapper = Mapper(path_folder=self.path_folder,
-                        tag=f'combine_with_{identifier}')
-        if os.path.exists(mapper.save_file) and not overwrite:
-            mapper.load()
-            return mapper
+        Parameters
+        ----------
+        other: Self
+            Other project that is supposed to be combined with this one.
+        self_tilt_correction: bool
+            Whether a tilt correction shall be used for this project.
+        other_tilt_correction: bool
+            Whether a tilt correction shall be used for the other project.
+        mapping_method: list[str], optional
+            The steps to be performed to match the samples (see Transformer
+            class for options). If not provided, will use the bounding box for
+            a coarse match and if both samples are laminated the tilt correction
+            as specified by self/other_tilt_correction and finally a laminae shift.
+        mapping_method_kwargs: list[str], optional
+            Specific kwargs for the mapping methods. Will combine with but
+            overwrite kwargs. If mapping_method is not specified, this is ignored.
+        plts: bool, optional
+            Whether to plot inbetween results. The default is False.
+        """
+
+        identifier: str = os.path.basename(other.path_folder).split('.')[0]
 
         target: np.ndarray = (self.image_classified.image_corrected
                               if self_tilt_correction
@@ -2072,16 +2099,27 @@ class ProjectBaseClass:
             target_obj_color=self.image_roi.obj_color
         )
 
-        logger.info('estimating match of bounding boxes')
-        t.estimate('bounding_box', plts=plts, **kwargs)
-        if other_tilt_correction:
-            logger.info('estimating tilt correction')
-            t.estimate('tilt', plts=plts, **kwargs)
-        if self._is_laminated:
-            if not other._is_laminated:
-                logger.warning('Not using lamination although other is laminated')
-            logger.info('estimating laminae correction')
-            t.estimate('laminae', plts=plts, **kwargs)
+        if mapping_method is None:
+            logger.info(
+                'using default strategy of matching bounding boxes and, '
+                'if the sample is laminated, the tilts and laminae'
+            )
+            logger.info('estimating match of bounding boxes')
+            t.estimate('bounding_box', plts=plts, **kwargs)
+            if other_tilt_correction:
+                logger.info('estimating tilt correction')
+                t.estimate('tilt', plts=plts, **kwargs)
+            if self._is_laminated:
+                if not other._is_laminated:
+                    logger.warning('Not using lamination although other is laminated')
+                logger.info('estimating laminae correction')
+                t.estimate('laminae', plts=plts, **kwargs)
+        else:
+            logger.info(f'using custom mapping strategy: {mapping_method}')
+            for meth, meth_kwargs in zip(mapping_method, mapping_method_kwargs):
+                this_kwargs = kwargs | meth_kwargs
+                logger.info(f'estimating {meth} with parameters {this_kwargs}')
+                t.estimate(meth, plts=plts, **this_kwargs)
 
         if plts:
             t.plot_fit(use_classified=False)
@@ -2090,15 +2128,64 @@ class ProjectBaseClass:
                              tag=f'combine_with_{identifier}')
         mapper.save()
 
+    def require_combine_mapper(
+            self,
+            other: Self,
+            *args,
+            overwrite: bool = False,
+            **kwargs
+    ) -> Mapper:
+        """
+        Get a combine mapper.
+
+        If none exists on disk yet, it will be created using set_combine_mapper
+        and the provided args and kwargs.
+        """
+        identifier: str = os.path.basename(other.path_folder).split('.')[0]
+
+        # attempt to load
+        mapper = Mapper(path_folder=self.path_folder,
+                        tag=f'combine_with_{identifier}')
+        if (not os.path.exists(mapper.save_file)) or overwrite:
+            self.set_combine_mapper(*args, **kwargs)
+        mapper.load()
         return mapper
+
+    def _require_combine_mapper(self, *args, **kwargs):
+        warnings.warn('[DEPRECATION] _require_combine_mapper will be replaced '
+                      'with require_combine_mapper in a future version')
+        return self.require_combine_mapper(*args, **kwargs)
 
     def combine_with_project(
             self,
             other: Self,
-            plts: bool = False,
             use_tilt_correction: bool | Iterable = None,
+            keep_sparse: bool | None = None,
+            sparsity_threshold: float = .5,
             **kwargs
     ) -> None:
+        """
+        Combine the data of another project with this one.
+
+        This function makes use of the combine_mapper (see require_combine_mapper).
+
+        Parameters
+        ----------
+        other: Self
+            Other project.
+        use_tilt_correction: bool | Iterable, optional
+            Whether to apply a tilt correction. Can be a bool or 2-tuple-like
+            of bools. A tuple will be interpreted as self_tilt_correction,
+            other_tilt_correction.
+        keep_sparse: bool, optional
+            Whether to keep the intensity distribution sparse. This should be
+            preferred for noisy data. None defaults to estimating this for each
+            compound separately based on the sparsity threshold.
+        sparsity_threshold: float, optional
+            Ratio of non-zero values required for a compound to be not sparse.
+        kwargs: Any
+            Additional keywords for require_combine_mapper.
+        """
         assert check_attr(other, '_image_roi')
         assert check_attr(other, '_data_object')
         assert 'x_ROI' in other.data_object.columns
@@ -2141,6 +2228,10 @@ class ProjectBaseClass:
                            'project even though '
                            'use_tilt_correction is set to False')
 
+        keep_sparse_auto: bool = keep_sparse is None
+        assert (sparsity_threshold >= 0) and (sparsity_threshold <= 1), \
+            'sparsity threshold must be between 0 and 1'
+
         # apply tilt corrections
         if self_correct_tilt:
             assert check_attr(self, '_image_classified'), \
@@ -2151,9 +2242,8 @@ class ProjectBaseClass:
 
         # setting the warp mapper
         # perform tilt correction after matching bounding rectangles
-        mapper_warp = self._require_combine_mapper(
+        mapper_warp = self.require_combine_mapper(
             other,
-            plts=plts,
             self_tilt_correction=self_correct_tilt,
             other_tilt_correction=other_correct_tilt,
             **kwargs
@@ -2167,6 +2257,8 @@ class ProjectBaseClass:
             np.arange(w_ROI),
             np.arange(h_ROI)
         )
+
+        is_sparse = keep_sparse
         for comp in tqdm(
                 other.data_object.data_columns,
                 desc='adding XRF ion images'
@@ -2184,6 +2276,9 @@ class ProjectBaseClass:
                 fill_value=0
             )
 
+            if keep_sparse_auto:
+                is_sparse: bool = (values > 0).mean() < sparsity_threshold
+
             # use transformer to handle rescaling
             t: Transformation = Transformation(
                 source=ion_image,
@@ -2193,7 +2288,7 @@ class ProjectBaseClass:
             )
 
             warped_xray: np.ndarray[float] = mapper_warp.fit(
-                t.source.image, preserve_range=True
+                t.source.image, preserve_range=True, keep_sparse=is_sparse
             )
             # add to feature table
             self.data_object.add_attribute_from_image(
@@ -2421,7 +2516,8 @@ class ProjectXRF(ProjectBaseClass):
         result = match.group() if match else None
         if result is None:
             raise OSError(
-                f'Folder {folder} does not contain measurement name at beginning, please rename folder',
+                f'Folder {folder} does not contain measurement name at beginning, '
+                f'please rename folder or provide measurement name upon initialization',
             )
         else:
             self.measurement_name: str = result
