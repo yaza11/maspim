@@ -1,4 +1,6 @@
 """Module associated with finding the sample region."""
+from typing import Self
+
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -6,6 +8,106 @@ import scipy
 
 from maspim.imaging.util.coordinate_transformations import (
     kartesian_to_polar, polar_to_kartesian)
+
+
+class ROI:
+    def __init__(self, tup: int | tuple, *iters):
+        msg = 'provide either a 4-tuple or exactly 4 arguments (x, y, w, h)'
+        # input provided as separate variables
+        if len(iters) > 0:
+            assert len(iters) == 3, msg
+
+            tup = (tup,) + iters
+        assert len(tup) == 4, msg
+
+        self._xwyh = np.array(tup, dtype=int)
+
+    @property
+    def x(self) -> int:
+        return self._xwyh[0]
+
+    @property
+    def y(self) -> int:
+        return self._xwyh[1]
+
+    @property
+    def w(self) -> int:
+        return self._xwyh[2]
+
+    @property
+    def h(self) -> int:
+        return self._xwyh[3]
+
+    @property
+    def xywh(self) -> np.ndarray[int]:
+        return self._xwyh
+
+    def __add__(self, other) -> Self:
+        if isinstance(other, ROI):
+            return self.__class__(self.xywh + other.xywh)
+        # let numpy take care of that
+        return self.__class__(self.xywh + other)
+
+    def __sub__(self, other):
+        return self.__add__(-other)
+
+    def __mul__(self, other) -> Self:
+        if isinstance(other, ROI):
+            return self.__class__(self.xywh * other.xywh)
+        # let numpy take care of that
+        return self.__class__(self.xywh * other)
+
+    def __truediv__(self, other):
+        return self.__mul__(1 / other)
+
+    def __repr__(self) -> str:
+        return str(dict(x=self.x, y=self.y, w=self.w, h=self.h))
+
+    def resize(self, input_shape, output_shape) -> Self:
+        """
+        Given the dimensions of input (same reference frame as used for
+        parameters at initialization of ROI) and output (desired new reference
+        frame for which to calculate ROI parameters), rescale x, y, w and h
+        such that they are stretched uniformly to match the output shape.
+
+        This method also ensures that the ROI parameters are within bounds of
+        the output shape, if they were to begin with.
+
+        This method returns a new instance of a ROI object and does not modify
+        the original.
+        """
+        rescale_x: float = output_shape[1] / input_shape[1]
+        rescale_y: float = output_shape[0] / input_shape[0]
+
+        x_new: int = round(self.x * rescale_x)
+        y_new: int = round(self.y * rescale_y)
+        w_new: float = self.w * rescale_x
+        h_new: float = self.h * rescale_y
+        if (w_new > output_shape[1]) and (self.w <= input_shape[1]):
+            w_new = output_shape[1]
+        else:
+            w_new = round(w_new)
+        if (h_new > output_shape[0]) and (self.h <= input_shape[0]):
+            h_new = output_shape[0]
+        else:
+            h_new = round(h_new)
+
+        roi_new: Self = self.__class__(x_new, y_new, w_new, h_new)
+
+        return roi_new
+
+    def reset_offset(self) -> Self:
+        """Return instance where x and y are 0."""
+        return self.__class__(0, 0, self.w, self.h)
+
+    def get_mask_for_image(self, image_shape: tuple) -> np.ndarray[bool]:
+        mask = np.zeros(image_shape, dtype=bool)
+        mask[self.index_exp] = True
+        return mask
+
+    @property
+    def index_exp(self):
+        return np.index_exp[self.y:self.y + self.h, self.x:self.x + self.w]
 
 
 def calculate_directionality_PCA(contours):
