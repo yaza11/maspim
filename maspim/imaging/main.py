@@ -81,6 +81,7 @@ class Image(Convenience):
             obj_color: str,
             path_image_file: str | None = None,
             image: np.ndarray[float | int] | None = None,
+            mask_foreground: np.ndarray | None = None,
             image_type: str = 'cv',
             path_folder: str | None = None
     ) -> None:
@@ -96,6 +97,9 @@ class Image(Convenience):
             The file path to an image file to be read.
         image : np.ndarray[float | int], optional
             Alternatively, an image can be provided directly.
+        mask_foreground: np.ndarray, optional
+            Mask specifying foreground pixels. Will be determined automatically
+            using the obj_color if not provided.
         image_type: str, optional
             If the input image is not a cv image, provide this keyword argument.
             Options are 'cv', 'np', 'pil' for images read or processed with
@@ -122,6 +126,18 @@ class Image(Convenience):
             self.image_file: str = os.path.basename(path_image_file)
             if path_folder is None:
                 path_folder: str = os.path.dirname(path_image_file)
+
+        if mask_foreground is not None:
+            assert mask_foreground.ndim == 2, f'mask must be 2D'
+            assert len(np.unique(mask_foreground)) <= 2, \
+                f'mask should contain at most 2 unique values'
+            assert mask_foreground.shape == image.shape[:2], \
+                (f'mask and image dimensions must match but found mask: '
+                 f'{mask_foreground.shape} and image: {image.shape[:2]}')
+            self._mask_foreground: np.ndarray[np.uint8] = (
+                mask_foreground > 0
+            ).astype(np.uint8) * 255
+            self._thr_background: int = -1
 
         # set _image_original
         self._from_image(image, image_type)
@@ -198,7 +214,7 @@ class Image(Convenience):
         return self._require_image_grayscale().copy()
 
     def set_foreground_thr_and_pixels(
-            self, thr_method: str = 'otsu', plts: bool = False, **_
+            self, thr_method: str = 'otsu', plts: bool = False, **kwargs
     ) -> None:
         """
         Set threshold for foreground pixels and thresholded binary image.
@@ -219,7 +235,9 @@ class Image(Convenience):
         mask, thr = get_foreground_pixels_and_threshold(
             image=self._image,
             obj_color=self.obj_color,
-            method=thr_method
+            method=thr_method,
+            plts=plts,
+            **kwargs
         )
         self._thr_background: int | float = thr
         self._mask_foreground: np.ndarray[int] = mask
@@ -556,6 +574,7 @@ class ImageSample(Image):
             *,
             path_folder: str | None = None,
             image: np.ndarray[float | int] | None = None,
+            mask_foreground: np.ndarray | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
             obj_color: str | None = None
@@ -571,6 +590,9 @@ class ImageSample(Image):
            The file path to an image file to be read.
         image : np.ndarray[float | int], optional
            Alternatively, an image can be provided directly.
+        mask_foreground: np.ndarray, optional
+            Mask specifying foreground pixels. Will be determined automatically
+            using the obj_color if not provided.
         image_type: str, optional
            If the input image is not a cv image, provide this keyword argument.
            Options are 'cv', 'np', 'pil' for images read or processed with
@@ -586,6 +608,7 @@ class ImageSample(Image):
             path_folder=path_folder,
             path_image_file=path_image_file,
             image=image,
+            mask_foreground=mask_foreground,
             image_type=image_type,
             obj_color='light'  # give a dummy, will be overwritten
         )
@@ -843,7 +866,7 @@ class ImageSample(Image):
     def get_sample_area_from_contour(
             self,
             plts: bool = False,
-            **kwargs
+            **kwargs: Any
     ) -> tuple[np.ndarray, tuple[int, ...]]:
         """
         Get the roi spanned by the main contour.
@@ -858,7 +881,7 @@ class ImageSample(Image):
         plts: bool, optional
             If True, will plot the identified bounding box on top of the image.
             The default is False.
-        kwargs: dict, optional
+        kwargs: Any, optional
             Keyword arguments for _require_main_contour.
 
         Returns
@@ -922,11 +945,17 @@ class ImageSample(Image):
             plts=plts
         )
         # set as new image
-        image_sub: ImageSample = ImageSample(image=image_box, obj_color=self.obj_color)
+        image_sub: ImageSample = ImageSample(
+            image=image_box,
+            obj_color=self.obj_color,
+            mask_foreground=self.mask_foreground[yb:yb+hb, xb:xb+wb]
+        )
         # set image simplified for contour to use
         image_sub._mask_foreground = image_sub.image_simplified
         # find the refined area as the _extent of the simplified binary image
-        _, (xc, yc, wc, hc) = image_sub.get_sample_area_from_contour(method='filter_by_size', plts=plts)
+        _, (xc, yc, wc, hc) = image_sub.get_sample_area_from_contour(
+            method='filter_by_size', plts=plts
+        )
 
         # stack the offsets of the two defined ROI's since the second ROI is
         # placed in the first one
@@ -1144,6 +1173,7 @@ class ImageROI(Image):
             obj_color: str,
             path_folder: str | None = None,
             image: np.ndarray[float | int] | None = None,
+            mask_foreground: np.ndarray | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
             age_span: tuple[float | int, float | int] | None = None,
@@ -1154,26 +1184,30 @@ class ImageROI(Image):
         Parameters
         ----------
         obj_color : str
-           The foreground color of the object in the image. Either 'light' or 'dark'.
-           This is required for working with thresholded images is desired.
+        The foreground color of the object in the image. Either 'light' or 'dark'.
+        This is required for working with thresholded images is desired.
         path_image_file : str, optional
-           The file path to an image file to be read.
+        The file path to an image file to be read.
         image : np.ndarray[float | int], optional
-           Alternatively, an image can be provided directly.
+        Alternatively, an image can be provided directly.
+        mask_foreground: np.ndarray, optional
+        Mask specifying foreground pixels. Will be determined automatically
+        using the obj_color if not provided.
         image_type: str, optional
-           If the input image is not a cv image, provide this keyword argument. Options are 'cv', 'np', 'pil'
-           for images read or processed with OpenCV, numpy or PILLOW respectively.
+        If the input image is not a cv image, provide this keyword argument. Options are 'cv', 'np', 'pil'
+        for images read or processed with OpenCV, numpy or PILLOW respectively.
         path_folder : str, optional
-           Folder in which the image or saved object is located. If not provided,
-           will be inferred from path_image_file.
-           If that is also not provided, will be an empty string.
+        Folder in which the image or saved object is located. If not provided,
+        will be inferred from path_image_file.
+        If that is also not provided, will be an empty string.
         age_span: tuple[float | int, float | int], optional
-            The age span covered by the sample.
+        The age span covered by the sample.
 
         """
         super().__init__(
             image=image,
             image_type=image_type,
+            mask_foreground=mask_foreground,
             path_image_file=path_image_file,
             path_folder=path_folder,
             obj_color=obj_color
@@ -1187,9 +1221,13 @@ class ImageROI(Image):
         Alternative constructor for instantiating an object from a parent
         ImageSample instance.
         """
+        image = parent.image_sample_area.copy()
+        x, y, w, h = parent.xywh_ROI
+        mask_foreground = parent.mask_foreground[y: y + h, x: x + w]
         new: Self = cls(
             path_folder=parent.path_folder,
-            image=parent.image_sample_area.copy(),
+            image=image,
+            mask_foreground=mask_foreground,
             path_image_file=None,
             obj_color=parent.obj_color,
             **kwargs
@@ -1779,6 +1817,7 @@ class ImageClassified(Image):
             obj_color: str,
             path_folder: str | None = None,
             image: np.ndarray[float | int] | None = None,
+            mask_foreground: np.ndarray | None = None,
             image_classification: np.ndarray[int] | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
@@ -1797,6 +1836,9 @@ class ImageClassified(Image):
            The file path to an image file to be read.
         image : np.ndarray[float | int], optional
            Alternatively, an image can be provided directly.
+        mask_foreground: np.ndarray, optional
+            Mask specifying foreground pixels. Will be determined automatically
+            using the obj_color if not provided.
         image_type: str, optional
            If the input image is not a cv image, provide this keyword argument.
            Options are 'cv', 'np', 'pil' for images read or processed with
@@ -1819,6 +1861,7 @@ class ImageClassified(Image):
             path_folder=path_folder,
             path_image_file=path_image_file,
             image=image,
+            mask_foreground=mask_foreground,
             image_type=image_type,
             obj_color=obj_color
         )
@@ -1844,6 +1887,7 @@ class ImageClassified(Image):
         new: Self = cls(
             path_folder=parent.path_folder,
             image=parent.image,
+            mask_foreground=parent.mask_foreground,
             image_classification=parent.image_classification,
             path_image_file=None,
             obj_color=parent.obj_color,
