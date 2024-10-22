@@ -356,7 +356,7 @@ class Data(DataBaseClass, Convenience):
         """
         Add x_ROI, y_ROI columns.
         """
-        # pixel coords of data, set by set_photo_ROI
+        # pixel coords of data, set by set_photo_roi
         (xd, yd, wd, hd) = data_ROI_xywh  # data units
         # corner and dimensions of data ROI in original image
         (xp, yp, wp, hp) = photo_ROI_xywh  # photo units
