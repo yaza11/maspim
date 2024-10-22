@@ -1594,7 +1594,7 @@ class ImageROI(Image):
         interactive: bool, optional
             If this is set to True, will open a window for the user to click
             on the punch-holes.
-        kwargs: dict, optional
+        kwargs: Any, optional
             Extra keywords to be passed on to find_holes.
         """
         if interactive:
