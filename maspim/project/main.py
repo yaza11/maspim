@@ -23,6 +23,7 @@ from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
 from maspim.exporting.legacy.ion_image import (get_da_export_ion_image,
                                                get_da_export_data)
 from maspim.imaging.util.image_boxes import region_in_box
+from maspim.imaging.util.image_geometry import ROI
 from maspim.imaging.util.image_plotting import plt_rect_on_image, plt_cv2_image
 from maspim.time_series.helpers import get_averaged_tables
 
@@ -74,10 +75,10 @@ class SampleImageHandlerMSI(Convenience):
     i_handler.set_extent_data()
     # set the photo specified in the mis file (PIL Image)
     i_handler.set_photo()
-    # only after photo and data extent have been set, the set_photo_ROI function becomes available
+    # only after photo and data extent have been set, the set_photo_roi function becomes available
     # with match_pixels set to True, this will return the photo in the data ROI where each pixel
     # in the image corresponds to a data point
-    roi = i_handler.set_photo_ROI()
+    roi = i_handler.set_photo_roi()
     # save the handler inside the d folder for faster future usage
     i_handler.save()
 
@@ -224,7 +225,7 @@ class SampleImageHandlerMSI(Convenience):
         return self._extent_spots
 
     def _draw_measurement_area(self, canvas: PIL_Image.Image) -> PIL_Image.Image:
-        assert check_attr(self, 'points'), 'call set_photo_ROI'
+        assert check_attr(self, 'points'), 'call set_photo_roi'
         canvas = canvas.copy()
         draw = PIL_ImageDraw.Draw(canvas)
 
@@ -249,7 +250,7 @@ class SampleImageHandlerMSI(Convenience):
             draw.polygon(self.points, outline=(255, 0, 0), width=linewidth)
         return canvas
 
-    def set_photo_ROI(
+    def set_photo_roi(
             self,
             match_roi_data: bool = True,
             plts: bool = False,
@@ -333,24 +334,24 @@ class SampleImageHandlerMSI(Convenience):
         self._image_roi: np.ndarray[int] = img_resized
 
     @property
-    def photo_ROI_xywh(self) -> tuple[int, ...]:
+    def photo_roi_xywh(self) -> tuple[int, ...]:
         if not check_attr(self, '_photo_roi_xywh'):
-            self.set_photo_ROI()
+            self.set_photo_roi()
         return self._photo_roi_xywh
 
     @property
-    def data_ROI_xywh(self) -> tuple[int, ...]:
+    def data_roi_xywh(self) -> tuple[int, ...]:
         if not check_attr(self, '_data_roi_xywh'):
-            self.set_photo_ROI()
+            self.set_photo_roi()
         return self._data_roi_xywh
 
     @property
-    def image_ROI(self):
+    def image_roi(self):
         """Uses grayscale values resampled at data points."""
         if check_attr(self, '_image_roi'):
             return self._image_roi
         x_min_FT, x_max_FT, y_min_FT, y_max_FT = self.extent_spots
-        x_min_area, y_min_area, wp, hp = self.photo_ROI_xywh
+        x_min_area, y_min_area, wp, hp = self.photo_roi_xywh
         x_max_area, y_max_area = x_min_area + wp, y_min_area + hp
 
         self._image_roi = self.image.resize(
@@ -363,7 +364,7 @@ class SampleImageHandlerMSI(Convenience):
         """Plot positions of measurement points on the sample area."""
         # first, draw bounds of measurement area
         if not check_attr(self, 'points'):
-            self.set_photo_ROI()
+            self.set_photo_roi()
         draw = self._draw_measurement_area(self.image)
         img = PIL_to_np(draw)
 
@@ -386,11 +387,11 @@ class SampleImageHandlerMSI(Convenience):
     ) -> None | tuple[plt.Figure, plt.Axes]:
         """Plot the image with identified region of measurement."""
         if not check_attr(self, 'points'):
-            self.set_photo_ROI()
+            self.set_photo_roi()
         draw = self._draw_measurement_area(self.image)
         img = PIL_to_np(draw)
 
-        x, y, w, h = self.photo_ROI_xywh
+        x, y, w, h = self.photo_roi_xywh
         rect_photo = patches.Rectangle((x, y), w, h, fill=False, edgecolor='g')
 
         if fig is None:
@@ -435,10 +436,10 @@ class SampleImageHandlerXRF(Convenience):
     # read the extent of the data
     i_handler.set_extent_data()
 
-    # only after photo and data extent have been set, the set_photo_ROI function
+    # only after photo and data extent have been set, the set_photo_roi function
     # becomes available with match_pixels set to True, this will return the
     # photo in the data ROI where each pixel in the image corresponds to a data point
-    roi = i_handler.set_photo_ROI()
+    roi = i_handler.set_photo_roi()
     # save the handler inside the d folder for faster future usage
     i_handler.save()
 
@@ -576,7 +577,7 @@ class SampleImageHandlerXRF(Convenience):
                 **kwargs
             )
 
-            # convert image_ROI resolution to image resolution
+            # convert image_roi resolution to image resolution
             self._scale_conversion: float = scale
             # xmin, xmax, ymin, ymax
             self._extent = (
@@ -609,7 +610,7 @@ class SampleImageHandlerXRF(Convenience):
             scale=scale
         )
 
-    def set_photo_ROI(self, match_pxls: bool = True) -> None:
+    def set_photo_roi(self, match_pxls: bool = True) -> None:
         """
         Get the image ROI corresponding to the measurement area.
 
@@ -621,7 +622,7 @@ class SampleImageHandlerXRF(Convenience):
 
         Returns
         -------
-        image_ROI : PIL_Image
+        image_roi : PIL_Image
             The image ROI corresponding to the measurement area.
         """
         assert check_attr(self, '_extent_spots'), 'call set_extent_data first'
@@ -650,6 +651,18 @@ class SampleImageHandlerXRF(Convenience):
             abs(y_max_meas - y_min_meas)
         )
         self._image_roi = img_resized
+
+    @property
+    def photo_roi_xywh(self) -> tuple[int, ...]:
+        if not check_attr(self, '_photo_roi_xywh'):
+            self.set_photo_roi()
+        return self._photo_roi_xywh
+
+    @property
+    def data_roi_xywh(self) -> tuple[int, ...]:
+        if not check_attr(self, '_data_roi_xywh'):
+            self.set_photo_roi()
+        return self._data_roi_xywh
 
     def plot_overview(
             self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False
@@ -875,7 +888,8 @@ class ProjectBaseClass:
     def set_image_sample(
             self,
             obj_color: str | None = None,
-            use_extent_from_mis: bool = True,
+            use_extent_from_handler: bool = True,
+            use_extent_from_mis: bool = None,
             **kwargs: Any
     ) -> None:
         """
@@ -892,7 +906,7 @@ class ProjectBaseClass:
         use_extent_from_mis: bool, optional
             If True, will determine the image extent from the measurement area
             defined in the mis file and the optimizer otherwise.
-        kwargs: dict, optional
+        kwargs: Any, optional
             keyword arguments passed on to ImageSample.sget_sample_area and save
 
         Returns
@@ -903,6 +917,13 @@ class ProjectBaseClass:
         # pass image file from handler if it has it else the image
         # that way we can save disk space as ImageSample only saves the Image
         # if it does not know the image file
+        if use_extent_from_mis is True:
+            logger.warning('"use_extent_from_mis" option has been renamed to '
+                           '"use_extent_from_handler" and will be removed in '
+                           'the future')
+            use_extent_from_handler = use_extent_from_mis
+
+        # fetch image from path in handler
         if check_attr(self.image_handler, 'image_file'):
             image_file: str = self.image_handler.image_file
             path_image_file: str = os.path.join(self.path_folder, image_file)
@@ -912,29 +933,45 @@ class ProjectBaseClass:
                                       image_type='pil')
             logger.warning('Handler does not have an image file, this should '
                            'not happen and will increase the disk space needed')
+
+        # if obj color is not provided, attempt to estimate it from region in
+        # image handler
+        if check_attr(self, '_image_handler'):
+            logger.info('attempting to estimate obj_color using measurement area in ')
+
         self._image_sample: ImageSample = ImageSample(path_folder=self.path_folder,
                                                       obj_color=obj_color,
                                                       **image_kwargs)
+        # attempt to set photo ROI on image handler
         if (
-                use_extent_from_mis and
+                use_extent_from_handler and
                 (not check_attr(self._image_sample, '_xywh_ROI'))
         ):
             try:
-                self.image_handler.set_photo_ROI()
+                self.image_handler.set_photo_roi()
                 assert check_attr(self.image_handler, '_photo_roi_xywh'), \
                     'Need an image handler with photo ROI'
             except Exception as e:
                 logger.error(e)
-                logger.error('Could not set photo ROI, continuing with fitting box')
-                use_extent_from_mis = False
+                logger.error(
+                    'Could not set photo ROI, continuing with fitting box'
+                )
+                use_extent_from_handler = False
 
-        if use_extent_from_mis:
-            x_start: int = self.image_handler._photo_roi_xywh[0]
-            x_end: int = x_start + self.image_handler._photo_roi_xywh[2]
+        if use_extent_from_handler:
+            x_start: int = self.image_handler.photo_roi_xywh[0]
+            x_end: int = x_start + self.image_handler.photo_roi_xywh[2]
             extent_x: tuple[int, int] = (x_start, x_end)
         else:
             extent_x: None = None
 
+        thr_method = kwargs.pop('thr_method',
+                                'otsu' if self._is_laminated else 'slic')
+        self._image_sample.set_foreground_thr_and_pixels(
+            measurement_area_xywh=self.image_handler.photo_roi_xywh,
+            thr_method=thr_method,
+            **kwargs
+        )
         self._image_sample.set_sample_area(extent_x=extent_x, **kwargs)
         self._image_sample.save(kwargs.get('tag'))
 
@@ -945,10 +982,10 @@ class ProjectBaseClass:
             obj_color: str | None = None,
             overwrite: bool = False,
             tag: str | None = None,
-            **kwargs: dict
+            **kwargs: Any
     ) -> ImageSample:
         # return existing
-        if (self._image_sample is not None) and (not overwrite):
+        if check_attr(self, '_image_sample') and (not overwrite):
             return self._image_sample
         # load and return
         if (
@@ -962,28 +999,29 @@ class ProjectBaseClass:
                 image_type='pil',
                 obj_color=obj_color
             )
-            try:
-                self._image_sample.load(tag)
-                # overwrite obj_color
-                if obj_color is not None:
-                    self._image_sample.obj_color = obj_color
-                if check_attr(self._image_sample, '_xywh_ROI'):
-                    return self._image_sample
 
-                logger.warning(
-                    'loaded partially initialized ImageSample, overwriting '
-                    'loaded ImageSample with fully initialized object'
-                )
-            except FileNotFoundError:
+            if not os.path.exists(self._image_sample.save_file):
                 logger.warning(f'Could not find ImageSample with {tag=}')
+
+            self._image_sample.load(tag)
+            # overwrite obj_color
+            if obj_color is not None:
+                self._image_sample.obj_color = obj_color
+            if check_attr(self._image_sample, '_xywh_ROI'):
+                return self._image_sample
+
+            logger.warning(
+                'loaded partially initialized ImageSample, overwriting '
+                'loaded ImageSample with fully initialized object'
+            )
 
         logger.info("Initializing new ImageSample instance")
         # either overwrite or loaded partially processed obj
         self.set_image_sample(
             obj_color=(
                 self._image_sample.obj_color
-                if self._image_sample is not None
-                else obj_color),  # use eventually stored obj_color
+                if check_attr(self, '_image_sample') and not overwrite
+                else obj_color),  # try to use stored obj_color
             tag=tag,
             **kwargs
         )
@@ -1250,7 +1288,7 @@ class ProjectBaseClass:
 
         attrs: tuple[str, ...] = ('_image_roi', '_photo_roi_xywh', '_data_roi_xywh')
         if not all([check_attr(self.image_handler, attr) for attr in attrs]):
-            self.image_handler.set_photo_ROI()
+            self.image_handler.set_photo_roi()
         image_ROI_xywh: tuple[int, ...] = self.image_sample.xywh_ROI
         data_ROI_xywh: tuple[int, ...] = self.image_handler._data_roi_xywh
         photo_ROI_xywh: tuple[int, ...] = self.image_handler._photo_roi_xywh
@@ -1379,7 +1417,7 @@ class ProjectBaseClass:
 
         self._data_object.tilt_correction_applied = True
 
-    def data_object_apply_transformation(self, mapper: Mapper) -> None:
+    def data_object_apply_transformation_old(self, mapper: Mapper) -> None:
         """Apply a mapping from a mapper object to the data."""
         assert not self.corrected_tilt, 'tilt has already been corrected'
         assert self._data_object is not None, 'set data_object.'
@@ -1402,6 +1440,180 @@ class ProjectBaseClass:
             supress_warnings=True
         )
         logger.info('successfully applied mapping')
+
+    def data_object_apply_transformation(
+            self,
+            mapper: Mapper,
+            keep_sparse: bool | None = None,
+            sparsity_threshold: float = .5,
+            plts: bool = False,
+            **kwargs
+    ) -> None:
+        """
+        Apply a mapping from a mapper object to the data.
+
+        Parameters
+        ----------
+        mapper: Mapper
+            Mapper object that has information of the x and y shifts. Must have
+            the image from the sample area as input (or one with the same shape).
+            The Transformation class rescales and stretches the source image to
+            match it to the target's image shape by default.
+        keep_sparse: bool, optional
+            Whether to keep the intensity distribution sparse. This should be
+            preferred for noisy data. None defaults to estimating this for each
+            compound separately based on the sparsity threshold.
+        sparsity_threshold: float, optional
+            Ratio of non-zero values required for a compound to be not sparse.
+        """
+        def reformat_ion_image_to_mapper_input(values_) -> np.ndarray[float]:
+            """
+            Take the raveled intensities of an ion image and format them to
+            match the shape of the target image.
+
+            """
+            # ion image has to match extent from the image inputted into the
+            # mapper
+            # first step: scale to photo resolution
+            ion_image: np.ndarray = griddata(
+                points,
+                values_,
+                (grid_x, grid_y),
+                method='nearest',
+                fill_value=0
+            )
+
+            # second step: zeropad/crop to match
+            target_image[mask_ion_image] = ion_image
+
+            return target_image
+
+        assert self._data_object is not None, 'set data_object.'
+        assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
+        assert check_attr(self, '_image_handler'), \
+            'need image handler to determine image region'
+
+        keep_sparse_auto: bool = keep_sparse is None
+        assert (sparsity_threshold >= 0) and (sparsity_threshold <= 1), \
+            'sparsity threshold must be between 0 and 1'
+
+        # container in which to place ion images for fitting
+        # can use the same container for each ion image since the extent
+        # of ion images remains the same
+        source_sample_roi: ROI = ROI(self.image_sample.xywh_ROI)
+        source_shape = (source_sample_roi.h, source_sample_roi.w)
+        target_shape = mapper.image_shape
+
+        logger.debug('source_shape', source_shape)
+        logger.debug('target_shape', target_shape)
+
+        # must be the same as with which the mapper was created
+        # in Transformer, source image is rescaled to match it to target image
+        # determine rescaling factors to match shape of target and source
+        # source * factor = target <==> factor = target / source
+        rescale_x: float = target_shape[1] / source_shape[1]
+        rescale_y: float = target_shape[0] / source_shape[0]
+
+        # rescale points
+        x_roi_ft: pd.Series = self.data_object.feature_table.x_ROI * rescale_x
+        y_roi_ft: pd.Series = self.data_object.feature_table.y_ROI * rescale_y
+        points: np.ndarray[float] = np.c_[x_roi_ft, y_roi_ft]
+
+        # roi area in terms of target image coordinates
+        # (this is not the same as the measurement roi of the target because
+        # measurement areas may cover different areas in source and target)
+        source_meas_roi: ROI = ROI(self.image_handler.photo_roi_xywh)
+        source_meas_roi_rescaled: ROI = source_meas_roi.resize(
+            source_shape, target_shape
+        )
+
+        # sample roi of source in target pixel coordinates
+        source_sample_roi_rescaled: ROI = source_sample_roi.resize(
+            source_shape, target_shape
+        )
+
+        logger.debug(f'{source_sample_roi=}')
+        logger.debug(f'{source_meas_roi=}')
+
+        logger.debug('after rescaling to match target')
+        logger.debug(f'{source_sample_roi_rescaled=}')
+        logger.debug(f'{source_meas_roi_rescaled=}')
+
+        # container for ion image intensities
+        target_image: np.ndarray[float] = np.zeros(target_shape, dtype=float)
+
+        # measurement relative to sample
+        # find indices of overlap between data and sample roi's in target coordinates
+        y_ion_roi: int = source_meas_roi_rescaled.y - source_sample_roi_rescaled.y
+        if y_ion_roi < 0:  # measurement area starts above of sample area
+            y_ion_roi = 0
+
+        x_ion_roi: int = source_meas_roi_rescaled.x - source_sample_roi_rescaled.x
+        if x_ion_roi < 0:  # measurement area starts above of sample area
+            x_ion_roi = 0
+
+        h_ion_roi: int = source_meas_roi_rescaled.h
+        if (y_ion_roi + h_ion_roi) > source_sample_roi_rescaled.h:
+            h_ion_roi: int = source_sample_roi_rescaled.h - y_ion_roi
+
+        w_ion_roi: int = source_meas_roi_rescaled.w
+        if (x_ion_roi + w_ion_roi) > source_sample_roi_rescaled.w:
+            w_ion_roi: int = source_sample_roi_rescaled.w - x_ion_roi
+
+        roi_ion: ROI = ROI(x_ion_roi, y_ion_roi, w_ion_roi, h_ion_roi)
+        mask_ion_image = roi_ion.index_exp
+
+        # regular grid spanning the overlap area of sample and measurement region
+        grid_x, grid_y = np.meshgrid(
+            np.arange(roi_ion.x, roi_ion.x + roi_ion.w),
+            np.arange(roi_ion.y, roi_ion.y + roi_ion.h)
+        )
+
+        if plts:
+            plt.figure()
+            source_photo_shape = self.image_sample.image.shape[:2]
+            area = np.zeros(source_photo_shape)
+            area[source_sample_roi.get_mask_for_image(source_photo_shape)] = 1
+            area[source_meas_roi.get_mask_for_image(source_photo_shape)] = 2
+            plt.imshow(area)
+            plt.title('Area of ion images overlapping sample area in photo')
+            plt.show()
+
+            plt.figure()
+            area = np.zeros(target_shape)
+            area[source_sample_roi_rescaled.reset_offset().index_exp] = 1
+            area[source_meas_roi_rescaled.reset_offset().index_exp] = 2
+            area[mask_ion_image] = 3
+            plt.imshow(area)
+            plt.title('Area of ion images overlapping sample area in roi after rescaling')
+            plt.show()
+
+        is_sparse: bool = keep_sparse  # will only be updated if keep_sparse_auto
+        for comp in tqdm(
+                self.data_object.data_columns,
+                desc='adding ion images'
+        ):
+            values: np.ndarray[float] = self.data_object.feature_table.loc[
+                :, comp
+            ].fillna(0).to_numpy()
+
+            ion_image = reformat_ion_image_to_mapper_input(values)
+
+            if keep_sparse_auto:
+                is_sparse: bool = (values > 0).mean() < sparsity_threshold
+                if is_sparse:
+                    logger.info(f'found sparse compound: {comp}')
+
+            warped_image: np.ndarray[float] = mapper.fit(
+                ion_image,
+                preserve_range=True,
+                keep_sparse=is_sparse,
+                **kwargs
+            )
+            # add to feature table
+            self.data_object.add_attribute_from_image(
+                image=warped_image, column_name=comp
+            )
 
     @property
     def corrected_tilt(self) -> bool:
@@ -2071,7 +2283,7 @@ class ProjectBaseClass:
         other_tilt_correction: bool
             Whether a tilt correction shall be used for the other project.
         mapping_method: list[str], optional
-            The steps to be performed to match the samples (see Transformer
+            The steps to be performed to match the samples (see Transformation
             class for options). If not provided, will use the bounding box for
             a coarse match and if both samples are laminated the tilt correction
             as specified by self/other_tilt_correction and finally a laminae shift.
@@ -2081,12 +2293,24 @@ class ProjectBaseClass:
         plts: bool, optional
             Whether to plot inbetween results. The default is False.
         """
+        if self_tilt_correction:
+            assert check_attr(self, '_image_classified'), \
+                'need image_classified object when tilt correction is desired.'
+            if not os.path.exists(os.path.join(self.path_folder, 'tilt_correction')):
+                logger.warning(
+                    'did not find tilt correction for self in '
+                    'set_combine_mapper, using default parameters to set Mapper.'
+                )
+            target = self.image_classified.image_corrected
+        else:
+            assert check_attr(self, '_image_roi'), \
+                ('need image_roi object when no tilt correction is used in '
+                 'set_combine_mapper.')
+            target = self.image_roi.image
 
+        # append name of other project as tag to mapper name
         identifier: str = os.path.basename(other.path_folder).split('.')[0]
 
-        target: np.ndarray = (self.image_classified.image_corrected
-                              if self_tilt_correction
-                              else self.image_roi.image)
         # for source, we must not use tilt corrected, otherwise there is nothing
         # left to correct in transformer
         # (image roi image is always uncorrected)
@@ -2115,6 +2339,9 @@ class ProjectBaseClass:
                 logger.info('estimating laminae correction')
                 t.estimate('laminae', plts=plts, **kwargs)
         else:
+            if mapping_method_kwargs is None:
+                mapping_method_kwargs = [{}] * len(mapping_method)
+
             logger.info(f'using custom mapping strategy: {mapping_method}')
             for meth, meth_kwargs in zip(mapping_method, mapping_method_kwargs):
                 this_kwargs = kwargs | meth_kwargs
@@ -2152,22 +2379,22 @@ class ProjectBaseClass:
         return mapper
 
     def _require_combine_mapper(self, *args, **kwargs):
-        warnings.warn('[DEPRECATION] _require_combine_mapper will be replaced '
-                      'with require_combine_mapper in a future version')
+        warnings.warn('[DEPRECATION] _require_combine_mapper will be removed '
+                      'in favor of the '
+                      'require_combine_mapper in a future version')
         return self.require_combine_mapper(*args, **kwargs)
 
     def combine_with_project(
             self,
             other: Self,
             use_tilt_correction: bool | Iterable = None,
-            keep_sparse: bool | None = None,
-            sparsity_threshold: float = .5,
             **kwargs
     ) -> None:
         """
         Combine the data of another project with this one.
 
-        This function makes use of the combine_mapper (see require_combine_mapper).
+        This function makes use of the combine_mapper
+        (see require_combine_mapper).
 
         Parameters
         ----------
@@ -2177,15 +2404,13 @@ class ProjectBaseClass:
             Whether to apply a tilt correction. Can be a bool or 2-tuple-like
             of bools. A tuple will be interpreted as self_tilt_correction,
             other_tilt_correction.
-        keep_sparse: bool, optional
-            Whether to keep the intensity distribution sparse. This should be
-            preferred for noisy data. None defaults to estimating this for each
-            compound separately based on the sparsity threshold.
-        sparsity_threshold: float, optional
-            Ratio of non-zero values required for a compound to be not sparse.
         kwargs: Any
             Additional keywords for require_combine_mapper.
         """
+        warnings.warn('Behavior of this function changed in version 1.2.2, '
+                      'using the old function is discouraged as it may lead to '
+                      'unexpected results.')
+
         assert check_attr(other, '_image_roi')
         assert check_attr(other, '_data_object')
         assert 'x_ROI' in other.data_object.columns
@@ -2228,10 +2453,6 @@ class ProjectBaseClass:
                            'project even though '
                            'use_tilt_correction is set to False')
 
-        keep_sparse_auto: bool = keep_sparse is None
-        assert (sparsity_threshold >= 0) and (sparsity_threshold <= 1), \
-            'sparsity threshold must be between 0 and 1'
-
         # apply tilt corrections
         if self_correct_tilt:
             assert check_attr(self, '_image_classified'), \
@@ -2249,51 +2470,8 @@ class ProjectBaseClass:
             **kwargs
         )
 
-        x_ROI = other.data_object.feature_table.x_ROI
-        y_ROI = other.data_object.feature_table.y_ROI
-        points = np.c_[x_ROI, y_ROI]
-        _, _, w_ROI, h_ROI = other.image_handler._photo_roi_xywh
-        grid_x, grid_y = np.meshgrid(
-            np.arange(w_ROI),
-            np.arange(h_ROI)
-        )
-
-        is_sparse = keep_sparse
-        for comp in tqdm(
-                other.data_object.data_columns,
-                desc='adding XRF ion images'
-        ):
-            values: np.ndarray[float] = other.data_object.feature_table.loc[
-                :, comp
-            ].fillna(0).to_numpy()
-
-            # turn ion images into images that cover the image of the XRF photo
-            ion_image: np.ndarray = griddata(
-                points,
-                values,
-                (grid_x, grid_y),
-                method='nearest',
-                fill_value=0
-            )
-
-            if keep_sparse_auto:
-                is_sparse: bool = (values > 0).mean() < sparsity_threshold
-
-            # use transformer to handle rescaling
-            t: Transformation = Transformation(
-                source=ion_image,
-                target=self.image_roi.image,
-                source_obj_color=other.image_roi.obj_color,
-                target_obj_color=self.image_roi.obj_color
-            )
-
-            warped_xray: np.ndarray[float] = mapper_warp.fit(
-                t.source.image, preserve_range=True, keep_sparse=is_sparse
-            )
-            # add to feature table
-            self.data_object.add_attribute_from_image(
-                image=warped_xray, column_name=comp
-            )
+        # apply mapping to other
+        other.data_object_apply_transformation(mapper_warp, **kwargs)
 
     def set_time_series(
             self,
@@ -2303,7 +2481,8 @@ class ProjectBaseClass:
         assert self._data_object is not None, 'call require_data_object'
 
         if not is_continuous:
-            assert self._image_classified is not None, 'call require_image_classified'
+            assert self._image_classified is not None, \
+                'call require_image_classified'
             assert check_attr(self.image_classified,
                               'params_laminae_simplified',
                               True), \
@@ -2515,10 +2694,11 @@ class ProjectXRF(ProjectBaseClass):
         match = re.match(pattern, folder)
         result = match.group() if match else None
         if result is None:
-            raise OSError(
+            logger.warning(
                 f'Folder {folder} does not contain measurement name at beginning, '
                 f'please rename folder or provide measurement name upon initialization',
             )
+            self.measurement_name = None
         else:
             self.measurement_name: str = result
 
@@ -2639,7 +2819,7 @@ class ProjectXRF(ProjectBaseClass):
                 (not check_attr(self._image_handler, '_image_roi'))
                 or (not check_attr(self._image_handler, '_data_roi_xywh'))
         ):
-            self._image_handler.set_photo_ROI()
+            self._image_handler.set_photo_roi()
             self._image_handler.save()
 
         self._update_files()
@@ -2877,7 +3057,7 @@ class ProjectMSI(ProjectBaseClass):
             reader=kwargs.get('reader'),
             spot_info=kwargs.get('spot_info')
         )
-        self._image_handler.set_photo_ROI(**kwargs)
+        self._image_handler.set_photo_roi(**kwargs)
         self._image_handler.save()
         self._update_files()
 
