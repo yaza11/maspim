@@ -1514,9 +1514,17 @@ class ProjectBaseClass:
         rescale_x: float = target_shape[1] / source_shape[1]
         rescale_y: float = target_shape[0] / source_shape[0]
 
+        # scale x_ROI, y_ROI in feature table in order for
+        # add_attribute_from_image to work correctly. Columns will be scaled
+        # back in the end
+        # avoid pandas complaining about dtypes
+        ft = self.data_object.feature_table
+        ft.loc[:, 'x_ROI'] = ft.loc[:, 'x_ROI'].astype(float) * rescale_x
+        ft.loc[:, 'y_ROI'] = ft.loc[:, 'y_ROI'].astype(float) * rescale_y
+
         # rescale points
-        x_roi_ft: pd.Series = self.data_object.feature_table.x_ROI * rescale_x
-        y_roi_ft: pd.Series = self.data_object.feature_table.y_ROI * rescale_y
+        x_roi_ft: pd.Series = self.data_object.feature_table.x_ROI
+        y_roi_ft: pd.Series = self.data_object.feature_table.y_ROI
         points: np.ndarray[float] = np.c_[x_roi_ft, y_roi_ft]
 
         # roi area in terms of target image coordinates
@@ -1610,10 +1618,18 @@ class ProjectBaseClass:
                 keep_sparse=is_sparse,
                 **kwargs
             )
+
             # add to feature table
             self.data_object.add_attribute_from_image(
                 image=warped_image, column_name=comp
             )
+        # scale ROI coordinates back
+        self.data_object.feature_table.loc[:, 'x_ROI'] = np.around(
+            self.data_object.feature_table.loc[:, 'x_ROI'] / rescale_x
+        ).astype(int)
+        self.data_object.feature_table.loc[:, 'y_ROI'] = np.around(
+            self.data_object.feature_table.loc[:, 'y_ROI'] / rescale_y
+        ).astype(int)
 
     @property
     def corrected_tilt(self) -> bool:
@@ -1933,18 +1949,23 @@ class ProjectBaseClass:
         **kwargs : dict
             Additional kwargs passed on to the find_holes function.
         """
-        assert self._xray is not None, 'call set_xray first'
         assert self._image_roi is not None, 'call set_image_roi first'
+
+        if not (set_xray := check_attr(self, '_xray')):
+            logger.warning(
+                'No xray object set, can only set punch holes for MSI/XRF.'
+            )
 
         if 'side' in kwargs:
             raise ValueError(
                 'please provide "side_xray" and "side_data" seperately'
             )
 
-        self.xray.set_punchholes(
-            remove_gelatine=False, side=side_xray, plts=plts, **kwargs
-        )
-        self.xray.save(kwargs.get('tag'))
+        if set_xray:
+            self.xray.set_punchholes(
+                remove_gelatine=False, side=side_xray, plts=plts, **kwargs
+            )
+            self.xray.save(kwargs.get('tag'))
 
         if (not check_attr(self.image_roi, 'punchholes')) or overwrite_data:
             self.image_roi.set_punchholes(
@@ -1953,7 +1974,8 @@ class ProjectBaseClass:
             self.image_roi.save(kwargs.get('tag'))
 
         # copy over to object attributes
-        self.holes_xray: list[np.ndarray[int], np.ndarray[int]] = self.xray.punchholes
+        if set_xray:
+            self.holes_xray: list[np.ndarray[int], np.ndarray[int]] = self.xray.punchholes
         self.holes_data: list[np.ndarray[int], np.ndarray[int]] = self.image_roi.punchholes
 
     def add_depth_correction_with_xray(self, method: str = 'linear') -> None:
@@ -2374,7 +2396,7 @@ class ProjectBaseClass:
         mapper = Mapper(path_folder=self.path_folder,
                         tag=f'combine_with_{identifier}')
         if (not os.path.exists(mapper.save_file)) or overwrite:
-            self.set_combine_mapper(*args, **kwargs)
+            self.set_combine_mapper(other, *args, **kwargs)
         mapper.load()
         return mapper
 
