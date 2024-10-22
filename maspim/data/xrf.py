@@ -125,11 +125,14 @@ class XRF(Data):
         match = re.match(pattern, folder)
         result = match.group() if match else None
         if result is None:
-            raise OSError(
+            logger.warning(
                 f'Folder {folder} does not contain measurement name at ' +
                 f'beginning, please rename folder ' +
-                'or provide the measurement name upon initialization.',
+                'or provide the measurement name upon initialization. '
+                'Otherwise selecting the selection of the correct txt files may'
+                ' be impeded.',
             )
+            self.measurement_name = ''
         else:
             self.measurement_name = result
 
@@ -201,6 +204,9 @@ class XRF(Data):
         # find all relevant files
         # tuple[str, dict[str, str]]
         self.prefix_files, files = self._get_element_txts(**kwargs)
+
+        logging.info(f'using {[os.path.basename(f) for f in files]} '
+                     f'to create feature table.')
 
         vecs: list[np.ndarray[float]] = []
         keys: list[str] = []
