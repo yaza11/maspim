@@ -1,10 +1,15 @@
 """Helper functions."""
+import math
+
 import numpy as np
 import pandas as pd
 import cv2
 import logging
 
 from typing import Iterable
+
+import skimage
+from matplotlib import pyplot as plt
 from scipy.spatial import KDTree
 from tqdm import tqdm
 
@@ -233,10 +238,122 @@ def exclude_missing_pixels_in_feature_table(ft: pd.DataFrame) -> np.ndarray[bool
     mask_in_ft: np.ndarray[bool] = (distances == 0).reshape(X_ft.shape)
     return mask_in_ft
 
+
+def get_foreground_from_slic(
+        image,
+        obj_color: str | tuple[int, int, int] | None = None,
+        measurement_area_xywh: tuple[int, int, int, int] | None = None,
+        n_segments: int = 5,
+        compactness: float = 1e-32,
+        enforce_connectivity: bool = False,
+        channel_axis: int | None = None,
+        plts: bool = False,
+        **kwargs
+) -> tuple[np.ndarray, int | float]:
+    """
+    This functions segments the (color) image into n segments and then assigns
+    one label to foreground sample pixels based on the assumption that
+    - The average value of the group is close to obj_color (if it is provided
+      as a tuple).
+    - The class that is most centered or in extent closest to the measurement area.
+    """
+    def evaluate_label(av_col_, mask_label_) -> float:
+        """lower scores are better"""
+        if col_is_tup:
+            score_color = np.sqrt(np.sum(av_col_ - obj_color) ** 2)
+        else:
+            # convert color to grayscale
+            if av_col_.ndim > 0:
+                R, G, B = av_col_
+                av_col_ = 0.2125 * R + 0.7154 * G + 0.0721 * B
+            score_color = np.abs(av_col_ - obj_color)
+        # label mask should cover sample area
+        # so here we are counting the number of pixels in the sample area that
+        # are missed by the segment (should be as low as possible)
+        score_area = (mask_label_ < mask_sample).mean()
+
+        if plts:
+            plt.figure()
+            plt.imshow(mask_label_ < mask_sample)
+            plt.title(f'differences for label {label} with score {score_area=} '
+                      f'and {score_color=}')
+
+        return score_area * score_color
+
+    if (is_color := (image.ndim == 3)) and (channel_axis is None):
+        channel_axis = -1
+    # define axes to average over
+    axes = (0, 1) if is_color else None
+
+    # check if iterable was provided
+    if not isinstance(obj_color, str):
+        assert hasattr(obj_color, '__iter__') and len(obj_color) == image.ndim, \
+            ('if the object color is specified as an iterable, it should match '
+             'the images ndim.')
+    else:  # convert to numeric value
+        obj_color = image.min(axis=axes) if obj_color == 'dark' else image.max(axis=axes)
+    # check again after potentially redefining obj_color
+    col_is_tup = not isinstance(obj_color, str)
+
+    # create mask for measurement area to evaluate goodness of label masks
+    mask_sample = np.zeros(image.shape[:2], dtype=bool)
+    if measurement_area_xywh is not None:
+        _x, _y, _w, _h = measurement_area_xywh
+    else:  # use heuristic: sample is expected to cover middle quarter of image
+        h, w = image.shape[:2]  # center
+        _w = w // 2
+        _h = h // 2
+        _x = w - _w // 2
+        _y = h - _h // 2
+    mask_sample[_y: _y + _h, _x: _x + _w] = True
+
+    # filter kwargs before passing to slic
+    allowed_keys = {'max_num_iter', 'sigma', 'spacing', 'convert2lab',
+                    'min_size_factor', 'max_size_factor', 'slic_zero',
+                    'start_label', 'mask'}
+    remove_keys = set(kwargs.keys()) - allowed_keys
+    logger.info(f'ignoring keywords {remove_keys}')
+
+    kwargs_filtered = {k: v for k, v in kwargs.items() if k in allowed_keys}
+
+    seg = skimage.segmentation.slic(image,
+                                    n_segments=n_segments,
+                                    compactness=compactness,
+                                    enforce_connectivity=enforce_connectivity,
+                                    channel_axis=channel_axis,
+                                    **kwargs_filtered)
+
+    # calculate stats for segments
+    labels = np.unique(seg)
+    n_segments = len(labels)  # actual number can be lower
+    av_colors = np.empty((3, n_segments))
+    # assign score to each segment based on how well it matches obj_color and
+    # extent
+    scores = np.empty(n_segments)
+    for i, label in enumerate(labels):
+        mask_label = seg == label
+        av_color = image[mask_label, :].mean(axes)
+        # xc, yc, major semi-axis, minor semi-axis, theta
+        av_colors[:, i] = av_color
+        score = evaluate_label(av_color, mask_label)
+        scores[i] = score
+
+    label_foreground = labels[np.argmin(scores)]
+    mask_foreground = seg == label_foreground
+
+    if plts:
+        plt.figure()
+        plt.imshow(mask_foreground)
+        plt.show()
+
+    return mask_foreground.astype(np.uint8) * 255, -1
+
+
 def get_foreground_pixels_and_threshold(
         image: np.ndarray,
         obj_color: str,
-        method: str = 'otsu'
+        method: str = 'otsu',
+        **kwargs
 ) -> tuple[np.ndarray, float | int]:
     """
     Binarize an image into fore- and background pixels.
@@ -245,7 +362,7 @@ def get_foreground_pixels_and_threshold(
     ----------
     image:  np.ndarray
         image to be binarized, will be converted to grayscale automatically
-    obj_color: str
+    obj_color: str | tuple[int | int | int]
         'light' if region of interest is lighter than rest, 'dark' otherwise
     method: str, optional.
         method to be used. Options are 'local-min' and 'otsu'. Default is otsu.
@@ -254,7 +371,7 @@ def get_foreground_pixels_and_threshold(
     -------
     mask, threshold
     """
-    methods: tuple[str, ...] = ('otsu', 'local-min')
+    methods: tuple[str, ...] = ('otsu', 'local-min', 'slic')
     obj_colors: tuple[str, str] = ('light', 'dark')
     assert method in methods, f'Method {method} not {methods}'
     assert obj_color in obj_colors, f'Color {obj_color} not {obj_colors}'
@@ -280,6 +397,12 @@ def get_foreground_pixels_and_threshold(
         thr_background = threshold_background_as_min(image_grayscale)
         _, mask_foreground = cv2.threshold(
             image_grayscale, thr_background, 1, thr)
+    elif method == 'slic':
+        mask_foreground, thr_background = get_foreground_from_slic(
+            image,
+            obj_color,
+            **kwargs
+        )
     else:
         raise KeyError(f'{method=} is not a valid option. Choose one of\
     "otsu", "local_min".')
