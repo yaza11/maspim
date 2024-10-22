@@ -505,7 +505,8 @@ class Transformation:
                 interpolation=cv2.INTER_AREA
             )
 
-        image_roi_new: ImageROI = ImageROI(image=img_rescaled, obj_color=image_roi.obj_color)
+        image_roi_new: ImageROI = ImageROI(image=img_rescaled,
+                                           obj_color=image_roi.obj_color)
         if hasattr(image_roi, "age_span"):
             image_roi_new.age_span = image_roi.age_span
 
@@ -521,6 +522,7 @@ class Transformation:
             rescale: bool
     ) -> ImageROI:
         """Make sure inputs have an object color and initialize ImageROI."""
+        # first, convert input to ImageROI object
         if isinstance(obj, ImageROI):  # nothing to do
             pass
         elif isinstance(obj, str):  # file of image passed, create new obj
@@ -813,7 +815,7 @@ class Transformation:
         use_classified: bool, optional
             Whether to use the classified or grayscale images to estimate the
             flow. The default is to use grayscale.
-        kwargs: dict
+        kwargs: Any
             Optional keyword arguments for skimage.registration.optical_flow_tvl1
         """
         if use_classified:
