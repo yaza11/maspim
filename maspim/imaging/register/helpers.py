@@ -184,7 +184,7 @@ def keep_deformation_sparse(
         u,
         v,
         image,
-        scale_factor: int,
+        scale_factor: int = 9,
         threshold: bool = False,
         **kwargs):
     # first, upscale
@@ -284,6 +284,10 @@ class Mapper(Convenience):
         """
         self._stack_UV()
 
+    @property
+    def image_shape(self) -> tuple[int, int]:
+        return self._image_shape
+
     def get_XY(self) -> tuple[np.ndarray[int], np.ndarray[int]]:
         """Get coordinate matrices of right shape."""
         Y, X = np.indices(self._image_shape)
@@ -334,8 +338,8 @@ class Mapper(Convenience):
             XT = XTm * m + XTr
             YT = YTm * m + YTr
         else:
-            XT = trafo(X.astype(np.float32), *kwargs)
-            YT = trafo(Y.astype(np.float32), *kwargs)
+            XT = trafo(X.astype(np.float32), *args, **kwargs)
+            YT = trafo(Y.astype(np.float32), *args, **kwargs)
 
         U = XT - X
         V = YT - Y
