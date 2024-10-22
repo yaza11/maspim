@@ -30,6 +30,10 @@ mass_pyropheophorbide_a_Na_p = mPyro = 534.263091 + mNa_p
 
 ##### GDGT window #############################################################
 # https://en.wikipedia.org/wiki/TEX86#/media/File:Molecular_structures_and_HPLC_detection_of_GDGTs.jpg
+# https://pubchem.ncbi.nlm.nih.gov/compound/Gdgt0
+# GDGT0:
+# O6C(3 * 2 + 5 * 8 * 2)H(6 * 2 + 10 * 8 * 2)
+# = C86H120O6
 mGDGT0 = mass_GDGT_0_Na_p = 1301.315390 + mNa_p
 mGDGT1 = mass_GDGT_1_Na_p = 1299.299740 + mNa_p
 mGDGT2 = mass_GDGT_2_Na_p = 1297.284090 + mNa_p
