@@ -44,7 +44,7 @@ def get_long_time_series(
 
         p.set_image_handler()
         p.set_image_sample()
-        p.set_image_roi()
+        p.set_image_roi_from_parent()
         p.set_image_classified()
 
         ps.append(p)
