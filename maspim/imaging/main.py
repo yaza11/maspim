@@ -73,7 +73,8 @@ class Image(Convenience):
         '_average_width_yearly_cycle',
         'image_file',
         '_image',
-        'obj_color'
+        'obj_color',
+        '_mask_foreground'  # TODO: could alternatively save parameters with which to create mask
     }
 
     def __init__(
@@ -180,7 +181,9 @@ class Image(Convenience):
     def from_disk(cls, path_folder: str, tag: str | None = None) -> Self:
         """Load an image object from disk."""
         # initiate dummy object that provides all, albeit nonsensical, parameters
-        dummy: Self = cls(path_folder=path_folder, image=np.ones((3, 3)), obj_color='light')
+        dummy: Self = cls(path_folder=path_folder,
+                          image=np.ones((3, 3)),
+                          obj_color='light')
         dummy.load(tag)
         # load messes with _image, _image_original, the constructor can take care of that
         new: Self = cls(
@@ -232,6 +235,8 @@ class Image(Convenience):
         None
 
         """
+        logger.debug(f'determining foreground pixels with {thr_method=}.')
+
         mask, thr = get_foreground_pixels_and_threshold(
             image=self._image,
             obj_color=self.obj_color,
@@ -566,7 +571,8 @@ class ImageSample(Image):
         '_image',
         'obj_color',
         '_xywh_ROI',
-        '_hw'
+        '_hw',
+        '_mask_foreground'
     }
 
     def __init__(
@@ -1166,6 +1172,7 @@ class ImageROI(Image):
         '_params',
         '_punchholes',
         '_punchhole_size',
+        '_mask_foreground'
     }
 
     def __init__(
@@ -1224,6 +1231,7 @@ class ImageROI(Image):
         image = parent.image_sample_area.copy()
         x, y, w, h = parent.xywh_ROI
         mask_foreground = parent.mask_foreground[y: y + h, x: x + w]
+
         new: Self = cls(
             path_folder=parent.path_folder,
             image=image,
@@ -1563,7 +1571,9 @@ class ImageROI(Image):
         """Create and return the image classification with parameters."""
         if not check_attr(self, '_image_classification') or overwrite:
             if not check_attr(self, 'age_span'):
-                logger.warning('No age span specified, falling back to more general method')
+                logger.warning(
+                    'No age span specified, falling back to more general method'
+                )
                 self.set_classification_varying_kernel_size(**kwargs)
             else:
                 self.set_classification_adaptive_mean(**kwargs)
@@ -1601,7 +1611,8 @@ class ImageROI(Image):
             self._user_punchholes()
             return
 
-        img: np.ndarray[np.uint8] = self.image_binary
+        # need copy, otherwise mask in ImageROI will be modified
+        img: np.ndarray[np.uint8] = self.image_binary.copy()
         if remove_gelatine:
             img *= self.image_simplified
 
@@ -1809,7 +1820,8 @@ class ImageClassified(Image):
         '_hw',
         'params_laminae_simplified',
         'image_seeds',
-        '_image_classification'
+        '_image_classification',
+        '_mask_foreground'
     }
 
     def __init__(
