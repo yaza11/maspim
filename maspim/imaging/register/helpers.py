@@ -184,7 +184,7 @@ def keep_deformation_sparse(
         u,
         v,
         image,
-        scale_factor: int = 9,
+        scale_factor: int = 1,
         threshold: bool = False,
         **kwargs):
     # first, upscale
@@ -200,6 +200,10 @@ def keep_deformation_sparse(
     dx: np.ndarray = u - ui
     dy: np.ndarray = v - vi
 
+    if scale_factor == 1:
+        logger.warning('keep_deformation_sparse called without scale_factor '
+                       'will perform no upscaling')
+        return apply_displacement(u, v, image, **kwargs)
     dx_upscaled = skimage.transform.rescale(dx * scale_factor,
                                             scale_factor,
                                             preserve_range=True,
