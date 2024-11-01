@@ -267,16 +267,23 @@ def get_foreground_from_slic(
                 R, G, B = av_col_
                 av_col_ = 0.2125 * R + 0.7154 * G + 0.0721 * B
             score_color = np.abs(av_col_ - obj_color)
+        if score_color > 1:
+            score_color /= 255
         # label mask should cover sample area
         # so here we are counting the number of pixels in the sample area that
         # are missed by the segment (should be as low as possible)
-        score_area = (mask_label_ < mask_sample).mean()
+        # false_out = (mask_sample & ~mask_label_).sum()  # pixels that are inside the sample area but not in the label
+        # false_in = (~mask_sample & mask_label_).sum()  # pixels that are outside the sample area but inside the label
+        score_area = (mask_sample != mask_label_).sum() / (h * w)
+        print((mask_sample != mask_label_).sum(), av_col_, obj_color)
 
         if plts:
             plt.figure()
-            plt.imshow(mask_label_ < mask_sample)
-            plt.title(f'differences for label {label} with score {score_area=} '
-                      f'and {score_color=}')
+            plt.imshow(np.dstack((mask_label_.astype(float),
+                                  mask_label_.astype(float),
+                                  mask_sample.astype(float))))
+            plt.title(f'differences for label {label} with score {score_area=:.2f} '
+                      f'and {score_color=:.0f} (total score: {score_color * score_area:.0f})')
 
         return score_area * score_color
 
@@ -296,11 +303,12 @@ def get_foreground_from_slic(
     col_is_tup = not isinstance(obj_color, str)
 
     # create mask for measurement area to evaluate goodness of label masks
-    mask_sample = np.zeros(image.shape[:2], dtype=bool)
+    h, w = image.shape[:2]
+    mask_sample = np.zeros((h, w), dtype=bool)
     if measurement_area_xywh is not None:
         _x, _y, _w, _h = measurement_area_xywh
     else:  # use heuristic: sample is expected to cover middle quarter of image
-        h, w = image.shape[:2]  # center
+        # center
         _w = w // 2
         _h = h // 2
         _x = w - _w // 2
@@ -332,7 +340,9 @@ def get_foreground_from_slic(
     scores = np.empty(n_segments)
     for i, label in enumerate(labels):
         mask_label = seg == label
-        av_color = image[mask_label, :].mean(axes)
+        # image[mask_label, ...] is array with shape (n_true_values in mask, n_color_channels
+        # need ellipses bc image can be 2 or 3D
+        av_color = image[mask_label & mask_sample, ...].mean(axis=0)
         # xc, yc, major semi-axis, minor semi-axis, theta
         av_colors[:, i] = av_color
         score = evaluate_label(av_color, mask_label)
