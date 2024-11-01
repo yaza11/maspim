@@ -18,7 +18,7 @@ from tqdm import tqdm
 from typing import Iterable, Self, Any
 from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 
-from maspim.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image
+from maspim.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image, get_comp_as_img
 from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
 from maspim.exporting.legacy.ion_image import (get_da_export_ion_image,
                                                get_da_export_data)
@@ -257,7 +257,8 @@ class SampleImageHandlerMSI(Convenience):
             **_
     ) -> None:
         """
-        Match image and data pixels and set extent in data and photo pixels.
+        Match image and data pixels and set extent of the measurement area in
+        data and photo pixels.
 
         Parameters
         ----------
@@ -967,6 +968,7 @@ class ProjectBaseClass:
 
         thr_method = kwargs.pop('thr_method',
                                 'otsu' if self._is_laminated else 'slic')
+        logging.info(f'estimating foreground pixels with method {thr_method}')
         self._image_sample.set_foreground_thr_and_pixels(
             measurement_area_xywh=self.image_handler.photo_roi_xywh,
             thr_method=thr_method,
@@ -1032,7 +1034,81 @@ class ProjectBaseClass:
     def image_sample(self):
         return self.require_image_sample()
 
-    def set_image_roi(self, **kwargs) -> None:
+    def set_image_roi_from_ion_image(self, comp: str | int | float, **kwargs) -> None:
+        """
+        Initialize an ImageROI instance from an ion image in the feature table.
+
+        This may be especially useful for XRF data. The ion image will be taken
+        from the data_object and values scaled to be compatible with uint8.
+        This is achieved by rescaling values between 0 and the 95th percentile
+        to 0 and 255.
+
+        Parameters
+        ----------
+        comp: str | int | float
+            Compound to be used for the input image
+        kwargs: Any
+            Additional parameters.
+
+        Returns
+        -------
+        None
+        """
+        assert check_attr(self, '_data_object'), \
+            'initialize data object first'
+        assert comp in self._data_object.feature_table.columns, \
+            f'{comp=} not found in data_object'
+
+        image, *_ = get_comp_as_img(data_frame=self.data_object.feature_table,
+                                    comp=comp,
+                                    exclude_holes=False)
+        # some functions require the image to be of type uint8
+        image: np.ndarray[np.uint8] = np.around(rescale_values(
+            image,
+            0,
+            255,
+            0,
+            np.nanquantile(image, .95)
+        )).astype(np.uint8)
+
+        image_roi: ImageROI = ImageROI(
+            image=image,
+            obj_color='light',
+            age_span=self.age_span
+        )
+
+        # if image roi is set from an ion image, image_sample and image_handler
+        # have to be modified by setting the sample area to the measurement area
+        if (
+                check_attr(self, '_image_sample')
+                and check_attr(self, '_image_sample')
+        ):
+            self.image_sample._xywh_ROI = self.image_handler.photo_roi_xywh
+            x, y, w, h = self.image_sample.xywh_ROI
+            # now we can be sure data roi is same as sample roi
+            self.image_handler._data_roi_xywh = (0, 0, w, h)
+            self.image_sample._image_roi = self.image_sample.image[
+                                           y: y + h, x: x + w
+                                           ].copy()
+
+        else:
+            logger.warning(
+                'Was not able to set sample area to measurement area because '
+                'either sample or handler is not set'
+            )
+
+        self._image_roi: ImageROI = image_roi
+        if self.age_span is not None:
+            self._image_roi.age_span = self.age_span
+
+        self._image_roi.require_classification(**kwargs)
+        self._image_roi.set_punchholes(**kwargs)
+
+        self._image_roi.save(kwargs.get('tag'))
+
+        self._update_files()
+
+    def set_image_roi_from_parent(self, **kwargs) -> None:
         """
         Set an ImageROI instance.
 
@@ -1050,32 +1126,51 @@ class ProjectBaseClass:
 
         self._update_files()
 
+    def set_image_roi(self, **kwargs):
+        warnings.warn('the set_image_roi function will be replaced by '
+                      'set_image_roi_from_parent in the future.')
+        self.set_image_roi_from_parent(**kwargs)
+
     def require_image_roi(
             self,
             overwrite: bool = False,
             tag: str | None = None,
+            source: str = 'parent',
             **kwargs
     ) -> ImageROI:
-        if (self._image_roi is not None) and (not overwrite):
+        def add_age_span() -> ImageROI:
+            if check_attr(self, 'age_span'):
+                self._image_roi.age_span = self.age_span
             return self._image_roi
 
-        if (
-                check_attr(self, 'ImageROI_file')
-                or (tag is not None)
-        ) and (not overwrite):
+        # return existing
+        if (self._image_roi is not None) and (not overwrite):
+            return add_age_span()
+        # load from disk
+        if check_attr(self, 'ImageROI_file') and (not overwrite):
             logger.info('loading ImageROI')
-            self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample)
-            try:
-                self._image_roi.load(tag)
-                if check_attr(self, 'age_span'):
-                    self._image_roi.age_span = self.age_span
-                return self._image_roi
-            except FileNotFoundError:
-                logger.warning(f'Did not find file with {tag=}')
+            self._image_roi: ImageROI = ImageROI.from_disk(
+                path_folder=os.path.join(self.path_folder, self.ImageROI_file),
+                tag=tag
+            )
+            return add_age_span()
 
-        logger.info('Creating new ImageROI instance')
-        self.set_image_roi(**kwargs)
-        return self._image_roi
+        assert source in (source_options := ['parent', 'comp']), \
+            f'source must be one of {source_options}, not {source}'
+        # from parent
+        if source == 'parent':
+            logger.info('Creating new ImageROI instance from parent')
+            assert check_attr(self, '_image_sample'), \
+                'set image_sample first or specify a different source'
+            self.set_image_roi_from_parent(**kwargs)
+            return self.image_roi
+        # from ion image
+        if source == 'comp':
+            logger.info('Creating new ImageROI instance from ion image')
+            assert check_attr(self, '_data_object'), \
+                'set data_object first or specify a different source'
+            self.set_image_roi_from_ion_image(**kwargs)
+            return self.image_roi
 
     @property
     def image_roi(self) -> ImageROI:
@@ -1325,19 +1420,21 @@ class ProjectBaseClass:
 
     def add_holes(self, **kwargs) -> None:
         """
-        Add classification for holes and sample to the feature table of the data_object.
+        Add classification for holes and sample to the feature table of the
+        data_object.
 
-        This function has to be called after the ImageROI and data object have been set.
-        Uses the closest pixel value.
-        The new column is called 'valid' where holes are associated with a value of 0.
+        This function has to be called after the ImageROI and data object have
+        been set. Uses the closest pixel value.
+        The new column is called 'valid' where holes are associated with a
+        value of 0.
 
         Returns
         -------
         None
         """
         kwargs_ = kwargs.copy()
-        kwargs['median'] = False
-        assert self._image_roi is not None, 'set _image_roi first'
+        kwargs_['median'] = False
+        assert self._image_roi is not None, 'set image_roi first'
         assert self._data_object is not None, 'set data_object first'
         assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
 
@@ -1359,7 +1456,7 @@ class ProjectBaseClass:
         -------
         None
         """
-        assert self._image_roi is not None, 'call set_image_roi'
+        assert self._image_roi is not None, 'call set_image_roi_from_parent'
         assert self._data_object is not None, 'set data_object first'
 
         image: np.ndarray[int] = self.image_roi.image_classification
@@ -1949,7 +2046,7 @@ class ProjectBaseClass:
         **kwargs : dict
             Additional kwargs passed on to the find_holes function.
         """
-        assert self._image_roi is not None, 'call set_image_roi first'
+        assert self._image_roi is not None, 'call set_image_roi_from_parent first'
 
         if not (set_xray := check_attr(self, '_xray')):
             logger.warning(
@@ -2717,8 +2814,9 @@ class ProjectXRF(ProjectBaseClass):
         result = match.group() if match else None
         if result is None:
             logger.warning(
-                f'Folder {folder} does not contain measurement name at beginning, '
-                f'please rename folder or provide measurement name upon initialization',
+                f'Folder {folder} does not contain measurement name at beginning. '
+                f'To mute this warning rename folder or provide the measurement '
+                f'name upon initialization',
             )
             self.measurement_name = None
         else:
