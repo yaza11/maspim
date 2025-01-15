@@ -1,6 +1,8 @@
 """
 Helper functions for Spectra class.
 """
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -9,11 +11,18 @@ from matplotlib import pyplot as plt
 
 from maspim.util.convenience import check_attr
 
+rpy2_missing_msg = ("Package rpy2 not installed. Either run installation with "
+                    "'all' option (e.g. 'pip install maspim['all']') or install "
+                    "rpy2 manually (e.g. 'pip install rpy2'). For now, features"
+                    " that require rpy2 are unavailable.")
+
 
 def get_r_home():
     """Find the folder of R installation on the system."""
-
-    import rpy2.situation
+    try:
+        import rpy2.situation
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError(rpy2_missing_msg)
     import os
 
     if rpy2.situation.get_r_home() is not None:

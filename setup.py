@@ -7,7 +7,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
     long_description = "\n" + fh.read()
 
-VERSION = '1.3.0'
+VERSION = '1.3.1'
 DESCRIPTION = 'Processing of mass spectrometry imaging and micro X-Ray fluorescence data.'
 NAME = "maspim"
 
@@ -26,7 +26,6 @@ setup(
     install_requires=['matplotlib',
                       'numpy',
                       'pandas',
-                      'rpy2==3.5.12',
                       'scipy',
                       'tqdm',
                       'opencv-python',
@@ -38,7 +37,7 @@ setup(
                       'textdistance',
                       'astropy',
                       'mfe'],
-    extras_require={'dev': 'twine'},
+    extras_require={'dev': 'twine', 'all': ['rpy2==3.5.12']},
     keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI',
               'laminated', 'lamination', 'image registration'],
     classifiers=[

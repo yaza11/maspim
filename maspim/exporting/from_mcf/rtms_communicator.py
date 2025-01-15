@@ -12,22 +12,27 @@ from maspim.util.convenience import check_attr
 logger = logging.getLogger(__name__)
 
 # specify the R installation folder here (required by rpy2 package)
+_skip_rpy2: bool = False
 try:
     R_HOME = get_r_home()
 except EnvironmentError:
     R_HOME = r"C:\Program Files\R\R-4.3.2"  # your installation path here
-os.environ["R_HOME"] = R_HOME  # adding R_HOME folder to environment parameters
-os.environ["PATH"] = R_HOME + ";" + os.environ["PATH"]  # and to system path
+except ModuleNotFoundError:
+    _skip_rpy2 = True
 
-from rpy2.robjects.packages import importr, isinstalled
+if not _skip_rpy2:
+    os.environ["R_HOME"] = R_HOME  # adding R_HOME folder to environment parameters
+    os.environ["PATH"] = R_HOME + ";" + os.environ["PATH"]  # and to system path
 
-# install package if not found
-if not isinstalled("rtms"):
-    utils = importr("utils")
-    utils.install_packages("rtms")
+    from rpy2.robjects.packages import importr, isinstalled
 
-# import package
-rtms = importr('rtms')
+    # install package if not found
+    if not isinstalled("rtms"):
+        utils = importr("utils")
+        utils.install_packages("rtms")
+
+    # import package
+    rtms = importr('rtms')
 
 
 class ReadBrukerMCF(ReaderBaseClass):
