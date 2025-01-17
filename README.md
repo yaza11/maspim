@@ -19,9 +19,17 @@ You may also want to check out [msiAlign](https://github.com/weimin-liu/msiAlign
 
 ## Installing `maspim`
 
-`maspim` is now on [PyPI](https://pypi.org/project/maspim/). 
+`maspim` is now on [PyPI](https://pypi.org/project/maspim/). E.g. run 
 ```bash
 pip install maspim
+```
+to install the basic version of `maspim`. Processing raw MALDI data depends on the `R` package `rtms`. If you need that functionality, run
+```bash
+pip install maspim['all']
+```
+or, equivalently
+```bash
+pip install maspim rpy2
 ```
 
 Also, checkout our [github page](https://github.com/yaza11/maspim) for the up-to-date version and additional resources.
@@ -32,7 +40,7 @@ To get the freshest version, run
 pip install git+https://github.com/yaza11/maspim.git
 ```
 
-in your console (assuming you have pip installed).
+in your console.
 
 ## Using `maspim`
 
