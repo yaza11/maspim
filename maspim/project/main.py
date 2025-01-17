@@ -1150,7 +1150,7 @@ class ProjectBaseClass:
         if check_attr(self, 'ImageROI_file') and (not overwrite):
             logger.info('loading ImageROI')
             self._image_roi: ImageROI = ImageROI.from_disk(
-                path_folder=os.path.join(self.path_folder, self.ImageROI_file),
+                path_folder=os.path.join(self.path_folder),
                 tag=tag
             )
             return add_age_span()
@@ -1696,7 +1696,7 @@ class ProjectBaseClass:
         is_sparse: bool = keep_sparse  # will only be updated if keep_sparse_auto
         for comp in tqdm(
                 self.data_object.data_columns,
-                desc='adding ion images'
+                desc='transforming ion images'
         ):
             values: np.ndarray[float] = self.data_object.feature_table.loc[
                 :, comp
@@ -2390,8 +2390,8 @@ class ProjectBaseClass:
             **kwargs
     ) -> None:
         """
-        Create a mapper that maps the sample of another project onto this' and
-        saves it to disk.
+        Create a mapper that maps the sample region of another project onto this'
+        and saves it to disk. Leaves the resolution unchanged.
 
         Parameters
         ----------
@@ -2474,6 +2474,20 @@ class ProjectBaseClass:
                              tag=f'combine_with_{identifier}')
         mapper.save()
 
+    def add_other_by_shift_and_rescale(self, other: Self):
+        """
+        Transform feature table of other such x_ROI, y_ROI match by only
+        shifting and rescaling. It is assumed that rotation, tilting has been
+        performed (see 'data_object_apply_transformation') or is not necessary.
+        """
+        # determine shift and scaling factor
+        # respective corner points form lines that intersect in a point p
+        self.
+
+        # TODO: find transformation
+        ...
+        raise NotImplementedError
+
     def require_combine_mapper(
             self,
             other: Self,
@@ -2503,14 +2517,15 @@ class ProjectBaseClass:
                       'require_combine_mapper in a future version')
         return self.require_combine_mapper(*args, **kwargs)
 
-    def combine_with_project(
+    def transform_other_data(
             self,
             other: Self,
             use_tilt_correction: bool | Iterable = None,
             **kwargs
     ) -> None:
         """
-        Combine the data of another project with this one.
+        Match the coordinate system of another project with this one. Does not
+        add the data of the other object to this one.
 
         This function makes use of the combine_mapper
         (see require_combine_mapper).
@@ -2528,7 +2543,8 @@ class ProjectBaseClass:
         """
         warnings.warn('Behavior of this function changed in version 1.2.2, '
                       'using the old function is discouraged as it may lead to '
-                      'unexpected results.')
+                      'unexpected results. Instead use "require_combine_mapper" '
+                      'and "data_object_apply_transformation"')
 
         assert check_attr(other, '_image_roi')
         assert check_attr(other, '_data_object')
@@ -3362,6 +3378,7 @@ class ProjectMSI(ProjectBaseClass):
             if check_attr(self._spectra, '_line_spectra'):
                 logger.info('loaded fully initialized spectra object')
                 self._spectra.set_feature_table()
+                return self._spectra
             elif check_attr(self._spectra, '_feature_table'):
                 logger.info('loaded fully initialized spectra object')
                 return self._spectra
