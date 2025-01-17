@@ -11,7 +11,7 @@ import logging
 
 from skimage.segmentation import expand_labels
 from scipy.optimize import minimize
-from typing import Iterable, Self, Any
+from typing import Iterable, Self, Any, Literal
 from tqdm import tqdm
 
 from maspim.imaging.interactive import InteractiveImage
@@ -1331,7 +1331,8 @@ class ImageROI(Image):
             plt_cv2_image(image_gray, 'input in grayscale')
 
         # get mask_foreground matching image_gray
-        mask_foreground: np.ndarray[int] = self.mask_foreground
+        # adaptive mean filter requires values between 0 and 1, so divide by max
+        mask_foreground: np.ndarray[int] = (self.mask_foreground.copy() / self.mask_foreground.max()).astype(int)
 
         if plts:
             plt_cv2_image(
@@ -2291,7 +2292,7 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
     # TODO: option to fix layer widths
     def set_params_laminae_simplified(
             self,
-            height0_mode: str = 'use_peak_widths',
+            height0_mode: Literal['use_peak_widths', 'use_age_model'] = 'use_peak_widths',
             downscale_factor: float = 1,
             **kwargs
     ) -> None:
