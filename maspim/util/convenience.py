@@ -108,6 +108,7 @@ class Convenience:
     def _get_disc_folder_and_file(
             self, tag: str | None = None
     ) -> tuple[str, str]:
+        """Return the folder and the file name (including the path)"""
         assert (check_attr(self, 'path_folder')
                 or check_attr(self, 'path_file')), \
             'object does not have a path_folder attribute'
