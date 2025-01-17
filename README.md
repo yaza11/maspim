@@ -29,7 +29,7 @@ pip install maspim['all']
 ```
 or, equivalently
 ```bash
-pip install maspim rpy2
+pip install maspim rpy2==3.5.12
 ```
 
 Also, checkout our [github page](https://github.com/yaza11/maspim) for the up-to-date version and additional resources.
