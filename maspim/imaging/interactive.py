@@ -3,6 +3,7 @@ import matplotlib.patches as patches
 import matplotlib
 import logging
 
+import numpy as np
 from matplotlib.backend_bases import MouseButton
 
 logger = logging.getLogger(__name__)
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class InteractiveImage:
     def __init__(self, image, mode):
-        self.image = image.copy()
+        self.image = image.astype(np.float32) / image.max()  # creates copy
 
         self.x_pixels = []
         self.y_pixels = []
