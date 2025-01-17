@@ -11,10 +11,15 @@ from matplotlib import pyplot as plt
 
 from maspim.util.convenience import check_attr
 
-rpy2_missing_msg = ("Package rpy2 not installed. Either run installation with "
-                    "'all' option (e.g. 'pip install maspim['all']') or install "
-                    "rpy2 manually (e.g. 'pip install rpy2'). For now, features"
-                    " that require rpy2 are unavailable.")
+
+class Rpy2NotFoundError(ModuleNotFoundError):
+    def __init__(self):
+        rpy2_missing_msg = ("Package rpy2 not installed. Either run installation with "
+                            "'all' option (e.g. 'pip install maspim['all']') or install "
+                            "rpy2 manually (e.g. 'pip install rpy2'). For now, features"
+                            " that require rpy2 are unavailable.")
+        self.message = rpy2_missing_msg
+        super().__init__(self.message)
 
 
 def get_r_home():
@@ -22,7 +27,7 @@ def get_r_home():
     try:
         import rpy2.situation
     except ModuleNotFoundError:
-        raise ModuleNotFoundError(rpy2_missing_msg)
+        raise Rpy2NotFoundError()
     import os
 
     if rpy2.situation.get_r_home() is not None:
@@ -35,6 +40,7 @@ def get_r_home():
         return rpy2.situation.get_r_home()
     else:
         raise FileNotFoundError("R_HOME not found. Please set the R_HOME environment variable.")
+
 
 def get_mzs_for_limits(
         limits: Iterable[float | int],
@@ -82,7 +88,7 @@ def local_max_2D(array: np.ndarray, axis: int = 0) -> np.ndarray:
     # transpose
     t: bool = axis != 0
 
-    padded = np.pad(array.T if t else array, ((1, 1), (0, 0)),  constant_values=np.inf)
+    padded = np.pad(array.T if t else array, ((1, 1), (0, 0)), constant_values=np.inf)
 
     is_local_max = (padded[1:-1, :] > padded[:-2, :]) & (padded[1:-1, :] > padded[2:, :])
 
@@ -104,6 +110,7 @@ class Spots:
 
     Convert rtms spot to python.
     """
+
     def __init__(self, rspots):
         """
         Initialize the spots object.
@@ -124,6 +131,7 @@ class Spectrum:
 
     Adds functionality for converting an R-object to numpy as well as resampling and plotting.
     """
+
     def __init__(
             self,
             rspectrum, limits: Iterable[float] | None = None
@@ -262,7 +270,7 @@ class Spectrum:
 
     def copy(self) -> Self:
         """Return copy of object."""
-        rspectrum: tuple[np.ndarray[float], np.ndarray[float]] =\
+        rspectrum: tuple[np.ndarray[float], np.ndarray[float]] = \
             [self.mzs.copy(), self.intensities.copy()]
         new_spectrum: Self = Spectrum(rspectrum)
         return new_spectrum
@@ -343,4 +351,3 @@ class ReaderBaseClass:
         spectrum: Spectrum = self.get_spectrum(index, poly_coeffs=poly_coeffs)
         spectrum.resample(self.mzs)
         return spectrum.intensities
-
