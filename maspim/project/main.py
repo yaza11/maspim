@@ -2482,8 +2482,6 @@ class ProjectBaseClass:
         """
         # determine shift and scaling factor
         # respective corner points form lines that intersect in a point p
-        self.
-
         # TODO: find transformation
         ...
         raise NotImplementedError
