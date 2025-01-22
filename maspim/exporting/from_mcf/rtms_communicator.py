@@ -9,7 +9,7 @@ import logging
 from typing import Iterable
 
 from maspim.exporting.from_mcf.helper import get_r_home, ReaderBaseClass, Spots, Spectrum, \
-    Rpy2NotFoundError
+    Rpy2NotFoundError, apply_calibration
 from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
@@ -228,7 +228,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         spectrum: Spectrum = Spectrum(rspectrum, limits=limits)
 
         if poly_coeffs is not None:
-            spectrum: Spectrum = self.calibrate_spectrum(spectrum, poly_coeffs)
+            spectrum: Spectrum = apply_calibration(spectrum, poly_coeffs)
 
         return spectrum
 

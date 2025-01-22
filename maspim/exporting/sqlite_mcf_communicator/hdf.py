@@ -8,7 +8,7 @@ from typing import Iterable
 from tqdm import tqdm
 
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
-from maspim.exporting.from_mcf.helper import get_mzs_for_limits, ReaderBaseClass, Spectrum
+from maspim.exporting.from_mcf.helper import get_mzs_for_limits, ReaderBaseClass, Spectrum, apply_calibration
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +287,6 @@ class hdf5Handler(ReaderBaseClass):
         spectrum = Spectrum((self.mzs, intensities), **kwargs)
 
         if poly_coeffs is not None:
-            spectrum = self.calibrate_spectrum(spectrum, poly_coeffs)
+            spectrum = apply_calibration(spectrum, poly_coeffs)
 
         return spectrum
