@@ -14,7 +14,7 @@ cal = pd.read_csv(file, sep='\t')
 def get_calibrants(
         mz_limits: tuple[float, float],
         calibrants_mz: float | Iterable[float] | None = None
-) -> np.ndarray[float]:
+) -> list[float]:
     if calibrants_mz is None:
         mz = cal.loc[:, 'm/z']
         mask = (mz > mz_limits[0]) & (mz < mz_limits[1])
