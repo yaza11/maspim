@@ -1,15 +1,18 @@
 """
 Helper functions for Spectra class.
 """
-import warnings
-
 import numpy as np
 import pandas as pd
 
 from typing import Iterable, Callable, Any, Self
 from matplotlib import pyplot as plt
+from scipy.signal import find_peaks
 
 from maspim.util.convenience import check_attr
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Rpy2NotFoundError(ModuleNotFoundError):
@@ -33,13 +36,15 @@ def get_r_home():
     if rpy2.situation.get_r_home() is not None:
         # try set the R_HOME variable if it is not set on windows
         if os.name == 'nt' and 'R_HOME' not in os.environ:
-            # permanetly set the R_HOME variable for windows using setx
+            # permanently set the R_HOME variable for windows using setx
             os.system(f'setx R_HOME "{rpy2.situation.get_r_home()}"')
             # set the R_HOME variable for the current session
             os.environ['R_HOME'] = rpy2.situation.get_r_home()
         return rpy2.situation.get_r_home()
     else:
-        raise FileNotFoundError("R_HOME not found. Please set the R_HOME environment variable.")
+        raise FileNotFoundError(
+            "R_HOME not found. Please set the R_HOME environment variable."
+        )
 
 
 def get_mzs_for_limits(
@@ -276,6 +281,40 @@ class Spectrum:
         return new_spectrum
 
 
+def apply_calibration(
+        spectrum: Spectrum,
+        poly_coeffs: np.ndarray[float],
+        inplace=True
+) -> Spectrum:
+    """
+    Apply the calibration function to a spectrum.
+
+    Parameters
+    ----------
+    spectrum : np.ndarray[float]
+        The intensities of a spectrum. It is assumed that the spectrum has the
+        same sampling as the object.
+    poly_coeffs : np.ndarray[float]
+        Coefficients of the polynomial with the first coefficient corresponding
+        to the highest order term.
+    inplace : bool, optional
+        If True, calibrates the provided spectrum, otherwise returns a new instance.
+
+    Returns
+    -------
+    spectrum : Spectrum
+        The calibrated spectrum.
+    """
+    f: Callable = np.poly1d(poly_coeffs)
+
+    if not inplace:
+        spectrum = spectrum.copy()
+
+    # apply the transformation to the mzs of the spectrum
+    spectrum.mzs += f(spectrum.mzs)
+    return spectrum
+
+
 class ReaderBaseClass:
     """
     Base class for reader classes.
@@ -286,40 +325,6 @@ class ReaderBaseClass:
     """
 
     mzs: Iterable[float] | None = None
-
-    @staticmethod
-    def calibrate_spectrum(
-            spectrum: Spectrum,
-            poly_coeffs: np.ndarray[float],
-            inplace=True
-    ) -> Spectrum:
-        """
-        Apply the calibration function to a spectrum.
-
-        Parameters
-        ----------
-        spectrum : np.ndarray[float]
-            The intensities of a spectrum. It is assumed that the spectrum has the same sampling as
-            the object.
-        poly_coeffs : np.ndarray[float]
-            Coefficients of the polynomial with the first coefficient corresponding to the highest order term.
-        inplace : bool, optional
-            If True, calibrates the provided spectrum, otherwise returns a new instance.
-
-        Returns
-        -------
-        spectrum : Spectrum
-            The calibrated spectrum.
-        """
-
-        f: Callable = np.poly1d(poly_coeffs)
-
-        if not inplace:
-            spectrum = spectrum.copy()
-
-        # apply the transformation to the mzs of the spectrum
-        spectrum.mzs += f(spectrum.mzs)
-        return spectrum
 
     def get_spectrum(self, *args, **kwargs) -> Any:
         """This method is implemented by the child classes."""
@@ -351,3 +356,68 @@ class ReaderBaseClass:
         spectrum: Spectrum = self.get_spectrum(index, poly_coeffs=poly_coeffs)
         spectrum.resample(self.mzs)
         return spectrum.intensities
+
+
+def find_polycalibration_spectrum(
+        mzs: np.ndarray[float],
+        intensities: np.ndarray[float],
+        calibrants_mz: Iterable[float],
+        search_range: float,
+        calib_snr_threshold: float,
+        noise_level: np.ndarray,
+        min_height: float,
+        nearest: bool,
+        max_degree: int
+) -> tuple[np.ndarray[float], int, np.ndarray[bool]]:
+    """Find the calibration function for a single spectrum."""
+    # TODO: verify that signs are correct
+    # pick peaks
+    if calib_snr_threshold > 0:  # only set peaks above the SNR threshold
+        peaks: np.ndarray[int] = find_peaks(
+            intensities, height=noise_level * calib_snr_threshold
+        )[0]
+    else:
+        peaks: np.ndarray[int] = find_peaks(intensities, height=min_height)[0]
+    peaks_mzs: np.ndarray[float] = mzs[peaks]
+    peaks_intensities: np.ndarray[float] = intensities[peaks]
+
+    # find valid peaks for each calibrant
+    closest_peak_mzs: list[float] = []
+    closest_calibrant_mzs: list[float] = []
+    calibrator_presences = np.ones(len(calibrants_mz), dtype=bool)
+    for jt, calibrant in enumerate(calibrants_mz):
+        distances: np.ndarray[float] = np.abs(calibrant - peaks_mzs)  # theory - actual
+        if not np.any(distances < search_range):  # no peak with required SNR found inside range
+            calibrator_presences[jt] = False
+            continue
+        # select the highest peak within the search_range
+        if nearest:
+            closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
+        else:
+            peaks_mzs_within_range: np.ndarray[float] = peaks_mzs[distances < search_range]
+            peaks_intensities_within_range: np.ndarray[float] = peaks_intensities[distances < search_range]
+            closest_peak_mzs.append(peaks_mzs_within_range[np.argmax(peaks_intensities_within_range)])
+        closest_calibrant_mzs.append(calibrant)
+
+    # search the coefficients of the polynomial
+    # need degree + 1 points for nth degree fit
+    n_calibrants = len(closest_peak_mzs)
+    degree: int = min([max_degree, n_calibrants - 1])
+    if degree < 0:  # no calibrants found
+        return np.array([0]), 0, calibrator_presences
+
+    # forbid degree>=2 if the calibrants are far away from the
+    # beginning and end of the spectrum, set 5Da for now.
+    if degree > 1:
+        assert abs(min(calibrants_mz) - min(peaks_mzs)) <= 5, \
+            'calibrants are too far away from the beginning of the spectrum'
+        assert abs(max(calibrants_mz) - max(peaks_mzs)) <= 5, \
+            'calibrants are too far away from the end of the spectrum'
+
+    # polynomial coefficients
+    # theory - actual
+    yvals = [t - a for t, a in zip(closest_calibrant_mzs, closest_peak_mzs)]
+    p: np.ndarray[float] = np.polyfit(x=closest_peak_mzs, y=yvals, deg=degree)
+    n_coeffs: int = degree + 1  # number of coefficients in polynomial
+    # fill coeff matrix
+    return p, n_coeffs, calibrator_presences
