@@ -15,7 +15,7 @@ import logging
 
 import scipy.signal
 from tqdm import tqdm
-from typing import Iterable, Self, Any, Callable
+from typing import Iterable, Self, Any, Callable, Literal
 from scipy.signal import find_peaks, correlate, correlation_lags, peak_widths
 from scipy.optimize import curve_fit
 from scipy.ndimage import minimum_filter, median_filter
@@ -24,7 +24,7 @@ from maspim.data.combine_feature_tables import combine_feature_tables
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectrum
 from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
 from maspim.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
-from maspim.exporting.from_mcf.helper import get_mzs_for_limits, local_max_2D, local_max_fast
+from maspim.exporting.from_mcf.helper import get_mzs_for_limits, find_polycalibration_spectrum
 from maspim.res.calibrants import get_calibrants
 from maspim.util import Convenience
 from maspim.util.convenience import check_attr
@@ -803,7 +803,7 @@ class Spectra(Convenience):
         ----------
         prominence : float, optional
             Required prominence for peaks. The default is 0.1. This defaults
-            to 10 % of the maximum intensity. If the prominence is smaller than 1, 
+            to 10 % of the meadian intensity. If the prominence is smaller than 1,
             it will be interpreted to be relative to the median, otherwise as
             the absolute value.
         width : int, optional
@@ -933,57 +933,77 @@ class Spectra(Convenience):
         """
         def calib_spec(_spectrum: np.ndarray[float]) -> int | tuple[np.ndarray[float], int]:
             """Find the calibration function for a single spectrum."""
-            # pick peaks
-            if calib_snr_threshold > 0:  # only set peaks above the SNR threshold
-                peaks: np.ndarray[int] = find_peaks(
-                    _spectrum, height=self._noise_level * calib_snr_threshold
-                )[0]
-            else:
-                peaks: np.ndarray[int] = find_peaks(_spectrum, height=min_height)[0]
-            peaks_mzs: np.ndarray[float] = self.mzs[peaks]
-            peaks_intensities: np.ndarray[float] = self.intensities[peaks]
+            # # pick peaks
+            # if calib_snr_threshold > 0:  # only set peaks above the SNR threshold
+            #     peaks: np.ndarray[int] = find_peaks(
+            #         _spectrum, height=self._noise_level * calib_snr_threshold
+            #     )[0]
+            # else:
+            #     peaks: np.ndarray[int] = find_peaks(_spectrum, height=min_height)[0]
+            # peaks_mzs: np.ndarray[float] = self.mzs[peaks]
+            # peaks_intensities: np.ndarray[float] = self.intensities[peaks]
+            #
+            # # find valid peaks for each calibrant
+            # closest_peak_mzs: list[float] = []
+            # closest_calibrant_mzs: list[float] = []
+            # for jt, calibrant in enumerate(calibrants_mz):
+            #     distances: np.ndarray[float] = np.abs(calibrant - peaks_mzs)  # theory - actual
+            #     if not np.any(distances < search_range):  # no peak with required SNR found inside range
+            #         logger.debug(
+            #             f'found no peak above noise level for {calibrant=} and {index=}'
+            #         )
+            #         calibrator_presences[it, jt] = False
+            #         continue
+            #     # select the highest peak within the search_range
+            #     if nearest:
+            #         closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
+            #     else:
+            #         peaks_mzs_within_range: np.ndarray[float] = peaks_mzs[distances < search_range]
+            #         peaks_intensities_within_range: np.ndarray[float] = peaks_intensities[distances < search_range]
+            #         closest_peak_mzs.append(peaks_mzs_within_range[np.argmax(peaks_intensities_within_range)])
+            #     closest_calibrant_mzs.append(calibrant)
+            #
+            # # search the coefficients of the polynomial
+            # # need degree + 1 points for nth degree fit
+            # n_calibrants = len(closest_peak_mzs)
+            # if n_calibrants == 0:  # no calibrant found, keep identity
+            #     logger.debug(f'found no calibrant for {index=}')
+            #     return -1
+            # degree: int = min([max_degree, n_calibrants - 1])
+            #
+            # # forbid degree>=2 if the calibrants are far away from the
+            # # beginning and end of the spectrum, set 5Da for now.
+            # if degree > 1:
+            #     assert abs(min(calibrants_mz) - min(peaks_mzs)) <= 5, \
+            #         'calibrants are too far away from the beginning of the spectrum'
+            #     assert abs(max(calibrants_mz) - max(peaks_mzs)) <= 5, \
+            #         'calibrants are too far away from the end of the spectrum'
+            #
+            # # polynomial coefficients
+            # # theory - actual
+            # yvals = [t - a for t, a in zip(closest_calibrant_mzs, closest_peak_mzs)]
+            # p: np.ndarray[float] = np.polyfit(x=closest_peak_mzs, y=yvals, deg=degree)
+            # n_coeffs: int = degree + 1  # number of coefficients in polynomial
+            # # fill coeff matrix
+            # return p, n_coeffs
 
-            # find valid peaks for each calibrant
-            closest_peak_mzs: list[float] = []
-            closest_calibrant_mzs: list[float] = []
-            for jt, calibrant in enumerate(calibrants_mz):
-                distances: np.ndarray[float] = np.abs(calibrant - peaks_mzs)  # theory - actual
-                if not np.any(distances < search_range):  # no peak with required SNR found inside range
-                    logger.debug(
-                        f'found no peak above noise level for {calibrant=} and {index=}'
-                    )
-                    calibrator_presences[it, jt] = False
-                    continue
-                # select the highest peak within the search_range
-                if nearest:
-                    closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
-                else:
-                    peaks_mzs_within_range: np.ndarray[float] = peaks_mzs[distances < search_range]
-                    peaks_intensities_within_range: np.ndarray[float] = peaks_intensities[distances < search_range]
-                    closest_peak_mzs.append(peaks_mzs_within_range[np.argmax(peaks_intensities_within_range)])
-                closest_calibrant_mzs.append(calibrant)
+            p, n_coeffs, calibrator_presences_ = find_polycalibration_spectrum(
+                mzs=self.mzs,
+                intensities=_spectrum,
+                calibrants_mz=calibrants_mz,
+                search_range=search_range,
+                calib_snr_threshold=calib_snr_threshold,
+                noise_level=self._noise_level,
+                min_height=min_height,
+                max_degree=max_degree,
+                nearest=nearest
+            )
+            calibrator_presences[it, :] = calibrator_presences_
 
-            # search the coefficients of the polynomial
-            # need degree + 1 points for nth degree fit
-            n_calibrants = len(closest_peak_mzs)
-            if n_calibrants == 0:  # no calibrant found, keep identity
+            if calibrator_presences_.sum() == 0:  # no calibrant found, keep identity
                 logger.debug(f'found no calibrant for {index=}')
                 return -1
-            degree: int = min([max_degree, n_calibrants - 1])
 
-            # forbid degree>=2 if the calibrants are far away from the beginning and end of the spectrum, set 5Da for now.
-            if degree > 1:
-                assert(abs(min(calibrants_mz) - min(peaks_mzs)) <= 5), \
-                    'calibrants are too far away from the beginning of the spectrum'
-                assert(abs(max(calibrants_mz) - max(peaks_mzs)) <= 5), \
-                    'calibrants are too far away from the end of the spectrum'
-
-            # polynomial coefficients
-            # theory - actual
-            yvals = [t - a for t, a in zip(closest_calibrant_mzs, closest_peak_mzs)]
-            p: np.ndarray[float] = np.polyfit(x=closest_peak_mzs, y=yvals, deg=degree)
-            n_coeffs: int = degree + 1  # number of coefficients in polynomial
-            # fill coeff matrix
             return p, n_coeffs
 
         if self._check_calibration_file_exists():
@@ -1655,8 +1675,8 @@ class Spectra(Convenience):
             self,
             targets: Iterable[float],
             tolerances: Iterable[float] | float | None = None,
-            method_peak_center: str = 'theory',
-            method: str = 'max',
+            method_peak_center: Literal['theory', 'closest'] = 'theory',
+            method: Literal['max', 'height', 'area'] = 'max',
             plts: bool = False,
             **kwargs
     ) -> None:
@@ -1677,7 +1697,7 @@ class Spectra(Convenience):
             Tolerance(s) for deviation of peaks from theoretical masses.
         method_peak_center: str, optional
             How target mzs are set. Options are
-            - theo: theoretical m/z masses
+            - theory: theoretical m/z masses
             - closest: will use found peaks and pick the closest one, if it is
               inside the tolerance
         method: str, optional
@@ -1707,12 +1727,15 @@ class Spectra(Convenience):
         # set peaks and kernels artificially from the target mzs and tolerances
         if method_peak_center == 'theory':
             self.reset_peaks()
-            self._peaks = [np.argmin(np.abs(self.mzs - target)) for target in targets]
+            self._peaks: list[int] = [
+                np.argmin(np.abs(self.mzs - target)) for target in targets
+            ]
         elif method_peak_center == 'closest':
+            # get a list of candidates for the specified parameters
             self.require_peaks(**kwargs)
-            whitelist = []
-            peak_mzs: np.ndarray = self.mzs[self._peaks]
-            valid_idcs = []
+            whitelist = []  # container for peak idcs to keep
+            peak_mzs: np.ndarray = self.mzs[self._peaks]  # mzs corresponding to peaks
+            valid_idcs = []  # idcs of targets that are valid (i.e. for which a peak was found)
             for i, (target, tolerance) in enumerate(zip(targets, tolerances)):
                 # idx of mz closest to
                 dists: np.ndarray[float] = np.abs(target - peak_mzs)
@@ -1725,11 +1748,12 @@ class Spectra(Convenience):
                     continue
                 whitelist.append(idx_peak)
                 valid_idcs.append(i)
+            # set the parameters of the kernels using the whitelist to filter
+            # out all peaks that do not correspond to a target
             self.filter_peaks(whitelist=whitelist)
             # update targets and tolerances to those found
-            targets = [targets[i] for i in valid_idcs]
-            tolerances = [tolerances[i] for i in valid_idcs]
-            print(whitelist, targets, tolerances)
+            targets: list[float] = [targets[i] for i in valid_idcs]
+            tolerances: list[float] = [tolerances[i] for i in valid_idcs]
         else:
             raise NotImplementedError('internal error')
 
@@ -1743,11 +1767,12 @@ class Spectra(Convenience):
             'tolerance': tolerances
         }
         # set kernels based on tolerance
-        self._kernel_shape = 'gaussian'
+        self._kernel_shape: str = 'gaussian'
+        # each row corresponds to parameters of a kernel
         self._kernel_params = np.zeros((n_peaks, 3))
         self._kernel_params[:, 0] = targets  # center
-        self._kernel_params[:, 1] = self.intensities[self._peaks]
-        self._kernel_params[:, 2] = tolerances
+        self._kernel_params[:, 1] = self.intensities[self._peaks]  # height
+        self._kernel_params[:, 2] = tolerances  # width
 
         if plts:
             ys = np.zeros_like(self.mzs)
@@ -1843,7 +1868,7 @@ class Spectra(Convenience):
             self,
             reader: ReadBrukerMCF | hdf5Handler | None = None,
             profile_spectra: np.ndarray[float] | None = None,
-            method: str = 'height',
+            method: Literal['height', 'max', 'area'] = 'height',
             **_
     ) -> None:
         """
@@ -2010,6 +2035,7 @@ class Spectra(Convenience):
                 desc='binning spectra', smoothing=50 / n_spectra
         ):
             if reader is not None:
+                # TODO: verify that calibration is used correctly
                 spectrum: np.ndarray[float] = self.get_spectrum(
                     reader=reader, index=idx_spectrum, only_intensity=True
                 )
