@@ -1657,7 +1657,7 @@ class Spectra(Convenience):
             self._intensities -= self._kernel_func(
                 self.mzs, *self._kernel_params[idx, :]
             )
-        if spo:
+        if spo and self._warnings_count_peak_fit > 10:
             logger.warning(f'muted {self._warnings_count_peak_fit - 10} more warnings')
         self._warnings_count_peak_fit = 0
         # restore intensities
