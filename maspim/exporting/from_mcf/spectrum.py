@@ -275,6 +275,7 @@ class Spectra(Convenience):
 
         This method also attempts to set the mz values from the limits.
         """
+
         def try_inherit(attr: str) -> None:
             """Inherit attribute if self does not but reader does have it"""
             private_attr = f'_{attr}'
@@ -307,7 +308,7 @@ class Spectra(Convenience):
         if path_d_folder is not None:
             assert isinstance(path_d_folder, str), \
                 'Path d_folder must be an instance of str'
-        assert initiate in (True, False),\
+        assert initiate in (True, False), \
             'Initiate must be True or False'
 
         if (reader is None) and initiate:
@@ -525,19 +526,21 @@ class Spectra(Convenience):
         if only_intensity:
             spectrum: np.ndarray[float] = \
                 reader.get_spectrum_resampled_intensities(
-                    index=index, 
+                    index=index,
                     poly_coeffs=poly_coeffs
-            )
+                )
         else:
             spectrum: Spectrum = reader.get_spectrum(
-                index=index, 
-                poly_coeffs=poly_coeffs, 
+                index=index,
+                poly_coeffs=poly_coeffs,
                 **kwargs
             )
+            # fixed missing resample in 1.4.1
+            spectrum.resample(self.mzs)
         return spectrum
 
     def add_all_spectra(
-            self, 
+            self,
             reader: ReadBrukerMCF | hdf5Handler
     ) -> None:
         """
@@ -567,7 +570,7 @@ class Spectra(Convenience):
         for i, index in tqdm(
                 enumerate(self.indices),
                 desc='Adding spectra',
-                smoothing=50/self._n_spectra,
+                smoothing=50 / self._n_spectra,
                 total=self._n_spectra
         ):
             spectrum: np.ndarray[float] = self.get_spectrum(
@@ -605,7 +608,7 @@ class Spectra(Convenience):
         for it, index in tqdm(
                 enumerate(self.indices),
                 desc='Adding aligned spectra',
-                smoothing=50/self._n_spectra,
+                smoothing=50 / self._n_spectra,
                 total=self._n_spectra
         ):
             spectrum: np.ndarray[float] = self.get_spectrum(
@@ -791,11 +794,11 @@ class Spectra(Convenience):
             plt.plot(mass_offset * 1e3, corrs[idx], 'ro')
             plt.xlabel('m/z in mDa')
             plt.ylabel('Correlation')
-            plt.title(f'{lag=}, mass shift = {mass_offset*1e3:.1f} mDa')
+            plt.title(f'{lag=}, mass shift = {mass_offset * 1e3:.1f} mDa')
             plt.show()
         return mass_offset
 
-    def set_peaks(self, prominence: float = .1, width=3, **kwargs):
+    def set_peaks(self, prominence: float = .1, width=3, plts: bool = False, **kwargs):
         """
         Find peaks in summed spectrum using scipy's find_peaks function.
 
@@ -833,10 +836,29 @@ class Spectra(Convenience):
         self._peak_setting_parameters['prominence'] = prominence
         self._peak_setting_parameters['width'] = width
 
+        if plts:
+            self.plot_peaks()
+
     def require_peaks(self, overwrite=False, **kwargs) -> np.ndarray[int]:
-        if overwrite or (not check_attr(self, '_peaks')):
+        if overwrite or (not check_attr(self, '_peaks', True)):
             self.set_peaks(**kwargs)
         return self._peaks
+
+    def plot_peaks(self, ax: plt.Axes | None = None) -> plt.Axes:
+        """Plot peak parameters"""
+        if ax is None:
+            _, ax = plt.subplots()
+        x = self.intensities
+        t = self.mzs
+        ax.plot(t, x)
+        ax.plot(t[self._peaks], x[self._peaks], "x")
+        ax.vlines(x=t[self._peaks], ymin=x[self._peaks] - self._peak_properties["prominences"],
+                  ymax=x[self._peaks], color="C1")
+        ax.hlines(y=self._peak_properties["width_heights"],
+                  xmin=t[self._peak_properties["left_ips"].astype(int)],
+                  xmax=t[self._peak_properties["right_ips"].astype(int)],
+                  color="C1")
+        return ax
 
     def _check_calibration_file_exists(self) -> bool:
         """
@@ -931,6 +953,7 @@ class Spectra(Convenience):
         polynomials may result in unreasonably large shifts outside the found
         peak range.
         """
+
         def calib_spec(_spectrum: np.ndarray[float]) -> int | tuple[np.ndarray[float], int]:
             """Find the calibration function for a single spectrum."""
             # # pick peaks
@@ -1098,7 +1121,7 @@ class Spectra(Convenience):
         return self._calibration_parameters
 
     def set_side_peaks(
-            self, 
+            self,
             max_relative_height: float = .1,
             max_distance: float = .001,
     ) -> None:
@@ -1212,7 +1235,7 @@ class Spectra(Convenience):
         """
         assert check_attr(self, '_noise_level'), \
             'call set_noise_level first'
-        
+
         heights: np.ndarray[float] = self.get_heights()
         # noise level is assumed to be the same for each spectrum
         # get noise levels at centers of each peak
@@ -1477,6 +1500,7 @@ class Spectra(Convenience):
                 f'sigma of kernel ({sigma * 1e3:.1f} mDa) with index {peak_idx} '
                 f'is bigger than max ({sigma_max * 1e3:.1f} mDa), halfing sigma.'
             )
+            self._warnings_count_peak_fit += 1
 
             # take smaller window to hopefully climb up peak
             *_, l, r = peak_widths(
@@ -1602,11 +1626,14 @@ class Spectra(Convenience):
             self._peak_properties['prominences']
         )[::-1]
         mask_valid: np.ndarray[bool] = np.ones(len(self._peaks), dtype=bool)
+
+        spo = kwargs.pop('suppress_warnings', False)
+        self._warnings_count_peak_fit = 0
         for idx in tqdm(
                 idxs_peaks,
                 desc='setting peak parameters',
                 total=len(idxs_peaks),
-                smoothing=50/len(idxs_peaks)
+                smoothing=50 / len(idxs_peaks)
         ):
             params: tuple = self._kernel_func_from_peak(idx)
             if self._kernel_shape == 'bigaussian':
@@ -1620,7 +1647,8 @@ class Spectra(Convenience):
             else:
                 self._kernel_params[idx, :] = params
             if fine_tune:
-                params: np.ndarray = self._kernel_fit_from_peak(idx, **kwargs)
+                sp = (self._warnings_count_peak_fit > 10) or spo
+                params: np.ndarray = self._kernel_fit_from_peak(idx, suppress_warnings=sp, **kwargs)
                 if params is not None:
                     self._kernel_params[idx, :] = params
                 else:
@@ -1629,6 +1657,9 @@ class Spectra(Convenience):
             self._intensities -= self._kernel_func(
                 self.mzs, *self._kernel_params[idx, :]
             )
+        if spo:
+            logger.warning(f'muted {self._warnings_count_peak_fit - 10} more warnings')
+        self._warnings_count_peak_fit = 0
         # restore intensities
         self._intensities: np.ndarray[float] = y
 
@@ -1678,6 +1709,7 @@ class Spectra(Convenience):
             method_peak_center: Literal['theory', 'closest'] = 'theory',
             method: Literal['max', 'height', 'area'] = 'max',
             plts: bool = False,
+            axs: tuple[plt.Axes, plt.Axes] | None = None,
             **kwargs
     ) -> None:
         """
@@ -1721,6 +1753,8 @@ class Spectra(Convenience):
                  'intensities first')
 
         targets: np.ndarray[float] = np.array(targets)
+        # keep copy for plotting
+        targets_o = targets.copy()
 
         tolerances = self._find_tolerances(targets, tolerances)
 
@@ -1752,7 +1786,10 @@ class Spectra(Convenience):
             # out all peaks that do not correspond to a target
             self.filter_peaks(whitelist=whitelist)
             # update targets and tolerances to those found
-            targets: list[float] = [targets[i] for i in valid_idcs]
+            # changed in 1.4.1: targets get updated to closest peak
+            targets: list[float] = self.mzs[self._peaks]
+            logger.info(f'using closest peaks {targets} (instead of {targets_o})')
+
             tolerances: list[float] = [tolerances[i] for i in valid_idcs]
         else:
             raise NotImplementedError('internal error')
@@ -1763,7 +1800,8 @@ class Spectra(Convenience):
 
         self._peak_setting_parameters = {
             'method': method_peak_center,
-            'targets': np.array(targets),
+            'targets': np.array(targets_o),
+            'peak centers': np.array(targets),
             'tolerance': tolerances
         }
         # set kernels based on tolerance
@@ -1775,10 +1813,12 @@ class Spectra(Convenience):
         self._kernel_params[:, 2] = tolerances  # width
 
         if plts:
+            if axs is None:
+                _, axs = plt.subplots(nrows=2)
+            ax_up, ax_down = axs
             ys = np.zeros_like(self.mzs)
             mask = np.zeros_like(self.mzs, dtype=bool)
-            plt.figure()
-            plt.plot(self.mzs, self.intensities, label='original')
+            ax_up.plot(self.mzs, self.intensities, label='original')
             for i in range(len(self._peaks)):
                 y = self._kernel_func(self.mzs, *self.kernel_params[i, :])
                 mask_kernel = (np.abs(self.kernel_params[i, 0] - self.mzs)
@@ -1788,8 +1828,8 @@ class Spectra(Convenience):
 
                 ys += self._kernel_func(self.mzs, *self.kernel_params[i, :])
 
-                plt.plot(self.mzs[mask_kernel], y[mask_kernel])
-            plt.vlines(
+                ax_up.plot(self.mzs[mask_kernel], y[mask_kernel])
+            ax_up.vlines(
                 targets,
                 ymin=0,
                 ymax=self.intensities.max(),
@@ -1797,21 +1837,39 @@ class Spectra(Convenience):
                 linestyles='--',
                 label='targets'
             )
-            plt.xlabel('m/z in Da')
-            plt.ylabel('Intensity')
-            plt.legend()
-            plt.show()
+            ax_up.vlines(
+                targets_o,
+                ymin=0,
+                ymax=self.intensities.max(),
+                colors='r',
+                linestyles='--',
+                label='targets theoretical'
+            )
 
-            plt.figure()
-            plt.plot(ys[mask], label='kernels')
-            plt.plot(self.intensities[mask], label='intensities')
-            plt.xlabel('broken m/z line')
-            plt.xticks([])
-            plt.ylabel('Intensity')
-            plt.legend()
-            plt.show()
+            ax_up.set_xlabel('m/z in Da')
+            ax_up.set_ylabel('Intensity')
+            ax_up.legend()
+
+            ax_down.plot(ys[mask], label='kernels')
+            ax_down.plot(self.intensities[mask], label='intensities')
+            ax_down.set_xlabel('broken m/z line')
+            ax_down.set_xticks([])
+            ax_down.set_ylabel('Intensity')
+
+            nx = mask.sum()
+            spacing_peaks = nx / n_peaks
+            pos_peaks = spacing_peaks / 2 + np.arange(n_peaks) * spacing_peaks
+            ax_down.vlines(pos_peaks,
+                           0,
+                           self.intensities[mask].max(),
+                           linestyles='--', colors='k',
+                           label='targets')
+            ax_down.legend()
 
         self.bin_spectra(method=method, **kwargs)
+
+        if plts:
+            return axs
 
     def _get_kernels(self, norm_mode: str = 'area') -> np.ndarray[float]:
         """
@@ -1895,6 +1953,7 @@ class Spectra(Convenience):
         _line_spectra : np.ndarray[float]
             The centroided spectra.
         """
+
         def _bin_spectrum_area(_spectrum: np.ndarray[float], _idx: int) -> None:
             """
             Find intensities of compound based on kernels as the overlap.
@@ -2526,7 +2585,7 @@ class Spectra(Convenience):
             kernels = self._get_kernels(norm_mode='height')
             intensities_approx = (kernels * self.kernel_params[:, 1]).sum(axis=1)
             loss = np.sum(np.abs(self.intensities - intensities_approx)) \
-                / np.sum(self.intensities)
+                   / np.sum(self.intensities)
 
         if fig is None:
             assert ax is None
@@ -2547,7 +2606,7 @@ class Spectra(Convenience):
             ax.plot(self.mzs, intensities_approx, label='estimated')
         if check_attr(self, '_binning_by') and plt_lines:
             ax.stem(self.kernel_params[:, 0], self.get_heights().sum(axis=0),
-                     markerfmt='', linefmt='red')
+                    markerfmt='', linefmt='red')
         if limits is not None:
             ax.set_xlim(limits)
             mask: np.ndarray[bool] = (self.mzs >= limits[0]) & (self.mzs <= limits[1])
@@ -2631,7 +2690,7 @@ class Spectra(Convenience):
         # we can only plot a selection
         n_spectra = min([n_max_spectra, self._n_spectra])
         n_masses = min([n_max_masses, len(self.mzs)])
-        every_spectra = round(self._n_spectra/n_spectra)
+        every_spectra = round(self._n_spectra / n_spectra)
         every_masses = round(len(self.mzs) / n_masses)
 
         losses = self._losses[::every_spectra, ::every_masses]
@@ -2712,6 +2771,7 @@ class ClusteringManager:
 
     Currently not tested, usage is discouraged.
     """
+
     def __init__(self, reader: ReadBrukerMCF, **kwargs_spectra):
         assert check_attr(reader, 'indices'), 'call create_indices'
         assert check_attr(reader, 'limits'), \
@@ -2728,12 +2788,12 @@ class ClusteringManager:
         self.kwargs_spectra: dict = kwargs_spectra
 
     def set_clusters(
-        self,
-        ram_GB: float | None = None,
-        min_chunk_size: int = 100,
-        max_chunk_size: int | None = None,
-        N_chunks: int = None,
-        method: str = 'random'
+            self,
+            ram_GB: float | None = None,
+            min_chunk_size: int = 100,
+            max_chunk_size: int | None = None,
+            N_chunks: int = None,
+            method: str = 'random'
     ) -> tuple[int, int]:
         if ram_GB is None:
             ram_free = psutil.virtual_memory().total * .8
@@ -2852,8 +2912,9 @@ class MultiSectionSpectra(Spectra):
     To transmit the kernel parameters to the spectra children after calling
     set_kernels or set_targets!
     """
+
     def __init__(
-            self, 
+            self,
             readers: list[ReadBrukerMCF | hdf5Handler]
     ) -> None:
         """
