@@ -8,7 +8,8 @@ dists/
 maspim/test/
 maspim/testing/
 maspim/Notebooks/Demo.ipynb
-Notebooks/Data/*.pickle
+# Notebooks/Data/*.pickle
+Notebooks/
 test_files/
 
 !test.py
