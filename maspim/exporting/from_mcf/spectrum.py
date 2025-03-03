@@ -1706,7 +1706,7 @@ class Spectra(Convenience):
             self,
             targets: Iterable[float],
             tolerances: Iterable[float] | float | None = None,
-            method_peak_center: Literal['theory', 'closest'] = 'theory',
+            method_peak_center: Literal['theory', 'closest', 'highest'] = 'theory',
             method: Literal['max', 'height', 'area'] = 'max',
             plts: bool = False,
             axs: tuple[plt.Axes, plt.Axes] | None = None,
@@ -1732,6 +1732,8 @@ class Spectra(Convenience):
             - theory: theoretical m/z masses
             - closest: will use found peaks and pick the closest one, if it is
               inside the tolerance
+            - highest: will use the highest peak inside the mass tolerance
+              window found in the summed spectrum
         method: str, optional
             Method used to bin intensities. Will be provided to bin_spectra.
             Options are
@@ -1780,6 +1782,40 @@ class Spectra(Convenience):
                         f'did not find peak for {target} within {tolerance=}'
                     )
                     continue
+                whitelist.append(idx_peak)
+                valid_idcs.append(i)
+            # set the parameters of the kernels using the whitelist to filter
+            # out all peaks that do not correspond to a target
+            self.filter_peaks(whitelist=whitelist)
+            # update targets and tolerances to those found
+            # changed in 1.4.1: targets get updated to closest peak
+            targets: list[float] = self.mzs[self._peaks]
+            logger.info(f'using closest peaks {targets} (instead of {targets_o})')
+
+            tolerances: list[float] = [tolerances[i] for i in valid_idcs]
+        elif method_peak_center == 'highest':
+            logger.warning('set_targets has not been tested with method_peak_center yet')
+            # TODO: test this method
+            # get a list of candidates for the specified parameters
+            self.require_peaks(**kwargs)
+            whitelist = []  # container for peak idcs to keep
+            peak_mzs: np.ndarray = self.mzs[self._peaks]  # mzs corresponding to peaks
+            valid_idcs = []  # idcs of targets that are valid (i.e. for which a peak was found)
+            for i, (target, tolerance) in enumerate(zip(targets, tolerances)):
+                # idx of mz closest to
+                dists: np.ndarray[float] = np.abs(target - peak_mzs)
+                # filter out peaks outside the mass tolerance
+                peak_idcs_candidates: np.ndarray[int] = self._peaks[dists < tolerance]
+                if peak_idcs_candidates.shape[0] == 0:
+                    logger.warning(
+                        f'did not find peak for {target} within {tolerance=}'
+                    )
+                    continue
+
+                # out of the candidates, pick the one with the highest intensity
+                idx_candidate_peak: int = np.argmax(self.intensities[peak_idcs_candidates])
+                idx_peak: int = peak_idcs_candidates[idx_candidate_peak]
+
                 whitelist.append(idx_peak)
                 valid_idcs.append(i)
             # set the parameters of the kernels using the whitelist to filter
