@@ -4,7 +4,13 @@
 
 This package implements methods to process mass spectra, combine them with image information or other measurements (such as micro X-Ray fluorescence, µXRF) and special functionality for laminated sediments to combine spectra in the same layers.
 
-Try it yourself [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/yaza11/maspim.git/152a6199b61ab6ce09f2d2d902822e830534997a?labpath=Notebooks)
+Try it yourself
+
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/yaza11/maspim.git/152a6199b61ab6ce09f2d2d902822e830534997a?labpath=Notebooks)
+
+You are welcome to use (any parts of) this package but please cite it:
+
+[![DOI](https://zenodo.org/badge/732002772.svg)](https://doi.org/10.5281/zenodo.14961319)
 
 ## Prerequisites
 
