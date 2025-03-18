@@ -16,7 +16,6 @@ from maspim.util.convenience import Convenience, check_attr
 from maspim.res.constants import elements, YD_transition
 from maspim.imaging.util.coordinate_transformations import rescale_values
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -61,8 +60,8 @@ class TimeSeries(DataBaseClass, Convenience):
 
     def _sort_tables(self) -> None:
         if check_attr(self, '_feature_table'):
-            self._feature_table = self._feature_table\
-                .sort_values(by='x_ROI')\
+            self._feature_table = self._feature_table \
+                .sort_values(by='x_ROI') \
                 .reset_index(drop=True)
         if check_attr(self, '_feature_table_standard_deviations'):
             self._feature_table_standard_deviations = self._feature_table_standard_deviations \
@@ -706,6 +705,7 @@ that before using this option'
             self, feature_table: pd.DataFrame | None = None
     ) -> pd.DataFrame:
         """Return table of sign correlations."""
+
         def sc(a: np.ndarray, b: np.ndarray) -> float:
             """Calculate sign correlation of a and b."""
             return np.mean(np.sign(a) == np.sign(b)) * 2 - 1
@@ -872,9 +872,9 @@ that before using this option'
         TSu = self.__class__(path, self.n_successes_required)
         TSl = TimeSeries(path, self.n_successes_required)
         for attr in [
-                'feature_table_zone_averages',
-                'feature_table_zone_standard_deviations',
-                'feature_table_zone_successes'
+            'feature_table_zone_averages',
+            'feature_table_zone_standard_deviations',
+            'feature_table_zone_successes'
         ]:
             if hasattr(self, attr):
                 ftu = self.__getattribute__(attr).iloc[:idx_T, :]
@@ -931,11 +931,10 @@ that before using this option'
             contrasts: bool = False,
             annotate_l_correlations: bool = False,
             two_y_scales: bool | None = None,
-            fig: plt.Figure | None = None,
+            swap_xy: bool = False,
             ax: plt.Axes | None = None,
-            hold: bool = False,
             **kwargs
-    ) -> None | tuple[plt.Figure, plt.Axes]:
+    ) -> plt.Axes:
         """
         Plot a specific compound or list of compounds
 
@@ -965,13 +964,14 @@ that before using this option'
         two_y_scales: bool | None, optional
             If this is set to None (default), two y axes will be added if there
             are two compounds to be plotted.
-        fig: plt.Figure | None, optional
-            Figure in which to place axes. Creates new fig and ax by default.
+        swap_xy: bool, optional
+            If this is set to True, will plot the time series as a depth/age profile
         ax: plt.Axes | None, optional
             The axis on which to draw. Creates new axis by default.
         hold: bool,
             If True, will return fig and ax, otherwise plot.
         """
+
         def _filter_plot_data(
                 comp_: str | int | float
         ) -> tuple[
@@ -1016,7 +1016,7 @@ that before using this option'
                 if c_index not in season_to_color:
                     continue
 
-                ax.axvspan(
+                _vspan(ax)(
                     bounds[idx],
                     bounds[idx + 1],
                     facecolor=season_to_color[c_index],
@@ -1030,14 +1030,16 @@ that before using this option'
             # part of default plotting
             if (t.min() < YD_transition) and (YD_transition < t.max()):
                 logger.info('Pl-H transition in slice!')
-                ax.vlines(YD_transition,
-                           y_bounds[0],
-                           y_bounds[1],
-                           linestyles='solid',
-                           alpha=.75,
-                           label='Pl-H boundary',
-                           color='black',
-                           linewidth=2)
+                _flines(ax)(YD_transition,
+                            y_bounds[0],
+                            y_bounds[1],
+                            linestyles='solid',
+                            alpha=.75,
+                            label='Pl-H boundary',
+                            color='black',
+                            linewidth=2)
+
+        logger.warning('signature changed in 1.4.1: fig no longer used')
 
         # can only add l correlations when plotting contrasts
         if annotate_l_correlations and (not contrasts):
@@ -1167,11 +1169,30 @@ that before using this option'
             seas: pd.Series = self.get_seasonalities(cols=comps)
 
         # use provided fig and ax or create new
-        if fig is None:
-            assert ax is None, "If ax is provided, must also provide fig"
-            fig, ax = plt.subplots(figsize=(10, 2))
+        if ax is None:
+            _, ax = plt.subplots(figsize=(2, 10) if swap_xy else (10, 2))
         else:
             assert ax is not None, "If fig is provided, must also provide ax"
+
+        # TODO: implement swap_xy
+        if not swap_xy:
+            _flines = lambda x: x.vlines
+            _twin = lambda x: x.twinx
+            _fill = lambda x: x.fill_between
+            _plot = lambda _ax, x, y, **_kwargs: _ax.plot(x, y, **_kwargs)
+            _ylabel = lambda x: x.set_ylabel
+            _xlabel = lambda x: x.set_xlabel
+            _ylim = lambda x: x.set_ylim
+            _vspan = lambda x: x.vspan
+        else:
+            _flines = lambda x: x.hlines
+            _twin = lambda x: x.twiny
+            _fill = lambda x: x.fill_betweenx
+            _plot = lambda _ax, x, y, **_kwargs: _ax.plot(y, x, **_kwargs)
+            _ylabel = lambda x: x.set_xlabel
+            _xlabel = lambda x: x.set_ylabel
+            _ylim = lambda x: x.set_xlim
+            _vspan = lambda x: x.hspan
 
         # mask to keep track of which layers have a compound with enough
         # successful spectra
@@ -1181,7 +1202,7 @@ that before using this option'
         for idx, comp in enumerate(comps):
             # change axis for second compound
             if two_y_scales and (idx == 1):
-                ax_ = ax.twinx()
+                ax_ = _twin(ax)()
             else:
                 ax_ = ax
 
@@ -1205,20 +1226,22 @@ that before using this option'
 
             # shade area between upper and lower limit of confidence interval
             if errors:
-                ax_.fill_between(t_plot,
-                                 values_plot - error_plot,
-                                 values_plot + error_plot,
-                                 color=colors[idx],
-                                 alpha=.5,
-                                 zorder=-.5)
+                _fill(ax_)(t_plot,
+                           values_plot - error_plot,
+                           values_plot + error_plot,
+                           color=colors[idx],
+                           alpha=.5,
+                           zorder=-.5)
 
             # plot the averaged values
-            ax_.plot(
-                t_plot,
-                values_plot,
-                label=label,
-                color=colors[idx]
-            )
+            _plot(ax_, t_plot, values_plot, label=label, color=colors[idx])
+            # ax_.plot(
+            #     t_plot,
+            #     values_plot,
+            #     label=label,
+            #     color=colors[idx]
+            # )
+
             # add successful layers to mask
             mask_any |= mask_comp
 
@@ -1228,7 +1251,7 @@ that before using this option'
         # annotations and plot for luminance
         if annotate_l_correlations:
             if two_y_scales:
-                ax_ = ax.twinx()
+                ax_ = _twin(ax)()
             else:
                 ax_ = ax
             s_l = sign_corr(
@@ -1245,40 +1268,40 @@ that before using this option'
 
             if errors:
                 L_errors = errors_scaled.loc[mask_any, 'L']
-                ax_.fill_between(t[mask_any],
-                                 L[mask_any] - L_errors,
-                                 L[mask_any] + L_errors,
-                                 color='k',
-                                 alpha=.5,
-                                 zorder=-.5)
-            ax_.plot(
-                t[mask_any],
-                L[mask_any],
-                label=label_l,
-                color='k',
-                alpha=.5
-            )
+                _fill(ax_)(t[mask_any],
+                           L[mask_any] - L_errors,
+                           L[mask_any] + L_errors,
+                           color='k',
+                           alpha=.5,
+                           zorder=-.5)
+            _plot(ax_,
+                  t[mask_any],
+                  L[mask_any],
+                  label=label_l,
+                  color='k',
+                  alpha=.5
+                  )
 
         # add vertical line to mark the transition
         _add_yd_transition()
 
         # set ticks and labels
         # axs.set_xlim((t.min(), t.max()))
-        ax.set_xlabel('age (yr B2K)')
+        _xlabel(ax)('age (yr B2K)')
         if two_y_scales:
-            ax.set_ylabel(names[0])
-            ax_.set_ylabel(names[1])
+            _ylabel(ax)(names[0])
+            _ylabel(ax_)(names[1])
         else:
-            ax.set_ylim(y_bounds)
-            ax.set_ylabel(f'{"scaled" if norm_mode != "none" else ""} '
-                          f'{"contrasts" if contrasts else "intensities"}')
+            _ylim(ax)(y_bounds)
+            _ylabel(ax)(f'{"scaled" if norm_mode != "none" else ""} '
+                        f'{"contrasts" if contrasts else "intensities"}')
         # set title, grid and legend
         if title is None:
             title = (f'excluded layers with less than '
                      f'{self.n_successes_required}: '
                      f'{exclude_layers_low_successes}, '
                      f'scaled mode: {norm_mode}')
-        fig.suptitle(title)
+        ax.set_title(title)
         ax.grid(True)
         if two_y_scales:
             lines, labels = ax.get_legend_handles_labels()
@@ -1286,11 +1309,7 @@ that before using this option'
             ax_.legend(lines + lines2, labels + labels2)
         else:
             ax.legend()
-
-        fig.tight_layout()
-        if hold:
-            return fig, ax
-        plt.show()
+        return ax
 
 
 class MultiSectionTimeSeries(TimeSeries):
