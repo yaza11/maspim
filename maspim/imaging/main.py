@@ -2760,7 +2760,7 @@ use_age_model, not {height0_mode}')
 
         return isc
 
-    def filter_bad_laminae(self, quality_threshold: float = 0.):
+    def filter_bad_laminae(self, quality_threshold: float = 0., **_):
         """
         Filters out laminae below the specified threshold. 0 is a save value
         since values below 0 indicate that the layer is of the opposite class.
@@ -2774,6 +2774,8 @@ use_age_model, not {height0_mode}')
         qualities: pd.Series = self.params_laminae_simplified.quality
 
         mask_valid = qualities > quality_threshold
+        logger.info(f'filtering out {(~mask_valid).sum()} laminae ({(~mask_valid).mean():.0%}) '
+                    f'that fall below the quality threshold {quality_threshold}')
         self.params_laminae_simplified: pd.DataFrame = self.params_laminae_simplified.loc[mask_valid, :].reset_index(drop=True)
 
     def reduce_laminae(
