@@ -2172,6 +2172,8 @@ class ImageClassified(Image):
             yearly_thickness: float = 12.  # results in min distance of 3 pixels
         if min_distance is None:
             min_distance: float = yearly_thickness / 4
+        # min_distance must be at least 1
+        min_distance = max(1., min_distance)
 
         assert ~np.isnan(brightness).any(), 'brightness array contains nan'
 
@@ -2607,10 +2609,10 @@ use_age_model, not {height0_mode}')
 
         # add homogeneity, continuity, brightness, contrast, quality columns
         for idx, criterium in enumerate(criteria_quality_columns):
-            params[criterium] = criteria_array[:, idx]
+            params.loc[:, criterium] = criteria_array[:, idx]
 
-        params['contrast'] = calc_contrasts(params.brightness.to_numpy())
-        params['quality'] = params.apply(
+        params.loc[:, 'contrast'] = calc_contrasts(params.brightness.to_numpy())
+        params.loc[:, 'quality'] = params.apply(
             lambda row:
             quality(row.homogeneity, row.continuity, row.contrast),
             axis=1
@@ -2757,6 +2759,22 @@ use_age_model, not {height0_mode}')
         isc[isc == -1] = key_dark_pixels
 
         return isc
+
+    def filter_bad_laminae(self, quality_threshold: float = 0.):
+        """
+        Filters out laminae below the specified threshold. 0 is a save value
+        since values below 0 indicate that the layer is of the opposite class.
+
+        This function is intended to be called after set_quality_score and before
+        reduce_laminae.
+        """
+        assert check_attr(self, 'params_laminae_simplified'), 'call set_params_laminae_simplified first'
+        assert 'quality' in self.params_laminae_simplified.columns, 'call set_quality_score first'
+
+        qualities: pd.Series = self.params_laminae_simplified.quality
+
+        mask_valid = qualities > quality_threshold
+        self.params_laminae_simplified: pd.DataFrame = self.params_laminae_simplified.loc[mask_valid, :].reset_index(drop=True)
 
     def reduce_laminae(
             self, plts: bool = False, n_expected: int | None = None, **kwargs
@@ -3017,4 +3035,5 @@ use_age_model, not {height0_mode}')
         # add quality criteria for each layer
         logger.info("calculating quality score")
         self.set_quality_score(**kwargs)
+        self.filter_bad_laminae(**kwargs)
         self.reduce_laminae(**kwargs)
