@@ -79,7 +79,7 @@ class Image(Convenience):
 
     def __init__(
             self,
-            obj_color: str,
+            obj_color: Literal['light', 'dark'],
             path_image_file: str | None = None,
             image: np.ndarray[float | int] | None = None,
             mask_foreground: np.ndarray | None = None,
@@ -109,7 +109,6 @@ class Image(Convenience):
             Folder in which the image or saved object is located. If not provided,
             will be inferred from path_image_file.
             If that is also not provided, will be an empty string.
-
         """
         assert (path_image_file is not None) or (image is not None), \
             "Must provide either path or image"
@@ -119,14 +118,14 @@ class Image(Convenience):
         obj_colors: tuple[str, str] = ('light', 'dark')
         assert obj_color in obj_colors, f'valid object colors are {obj_colors}'
 
-        self.obj_color: str = obj_color
-
         if path_image_file is not None:
             image = cv2.imread(path_image_file)
             assert image is not None, f"Could not load image from {path_image_file}"
             self.image_file: str = os.path.basename(path_image_file)
             if path_folder is None:
                 path_folder: str = os.path.dirname(path_image_file)
+
+        self.obj_color: str = obj_color
 
         if mask_foreground is not None:
             assert mask_foreground.ndim == 2, f'mask must be 2D'
@@ -1177,10 +1176,11 @@ class ImageROI(Image):
 
     def __init__(
             self,
-            obj_color: str,
+            obj_color: str | None = None,
             path_folder: str | None = None,
             image: np.ndarray[float | int] | None = None,
             mask_foreground: np.ndarray | None = None,
+            has_no_holes: bool = False,
             image_type: str = 'cv',
             path_image_file: str | None = None,
             age_span: tuple[float | int, float | int] | None = None,
@@ -1191,26 +1191,41 @@ class ImageROI(Image):
         Parameters
         ----------
         obj_color : str
-        The foreground color of the object in the image. Either 'light' or 'dark'.
-        This is required for working with thresholded images is desired.
+            The foreground color of the object in the image. Either 'light' or 'dark'.
+            This is required for working with thresholded images is desired.
         path_image_file : str, optional
-        The file path to an image file to be read.
+            The file path to an image file to be read.
         image : np.ndarray[float | int], optional
-        Alternatively, an image can be provided directly.
-        mask_foreground: np.ndarray, optional
-        Mask specifying foreground pixels. Will be determined automatically
-        using the obj_color if not provided.
+            Alternatively, an image can be provided directly.
+            mask_foreground: np.ndarray, optional
+            Mask specifying foreground pixels. Will be determined automatically
+            using the obj_color if not provided.
         image_type: str, optional
-        If the input image is not a cv image, provide this keyword argument. Options are 'cv', 'np', 'pil'
-        for images read or processed with OpenCV, numpy or PILLOW respectively.
+            If the input image is not a cv image, provide this keyword argument. Options are 'cv', 'np', 'pil'
+            for images read or processed with OpenCV, numpy or PILLOW respectively.
         path_folder : str, optional
-        Folder in which the image or saved object is located. If not provided,
-        will be inferred from path_image_file.
-        If that is also not provided, will be an empty string.
+            Folder in which the image or saved object is located. If not provided,
+            will be inferred from path_image_file.
+            If that is also not provided, will be an empty string.
         age_span: tuple[float | int, float | int], optional
-        The age span covered by the sample.
+            The age span covered by the sample.
+        has_no_holes: bool, optional
+            If the sample does not have any holes, specifying the obj_color and
+            mask_foreground is not necessary. In this case set this parameter
+            to True.
 
         """
+        if has_no_holes:
+            # define dummies
+            if obj_color is None:
+                obj_color = 'light'
+        else:
+            assert obj_color is not None, \
+                ('if the sample has holes, specifying the object color is '
+                 'necessary to determine which areas are the background and '
+                 'which is the sample. If this does not apply to your image, '
+                 'set "has_no_holes=True"')
+
         super().__init__(
             image=image,
             image_type=image_type,
@@ -1219,6 +1234,10 @@ class ImageROI(Image):
             path_folder=path_folder,
             obj_color=obj_color
         )
+
+        if has_no_holes and (mask_foreground is None):
+            self._mask_foreground = np.full_like(self.image_grayscale, 1, dtype=np.uint8)
+            self._thr_background = 0
 
         self.age_span: tuple[float | int, float | int] | None = age_span
 
@@ -1827,10 +1846,11 @@ class ImageClassified(Image):
 
     def __init__(
             self,
-            obj_color: str,
+            obj_color: str | None = None,
             path_folder: str | None = None,
             image: np.ndarray[float | int] | None = None,
             mask_foreground: np.ndarray | None = None,
+            has_no_holes: bool = False,
             image_classification: np.ndarray[int] | None = None,
             image_type: str = 'cv',
             path_image_file: str | None = None,
@@ -1868,8 +1888,22 @@ class ImageClassified(Image):
             laminae solemnly by their width. The image_seeds is transformed
             back such that downstream applications remain unaffected by this
             parameter.
-
+        has_no_holes: bool, optional
+            If the sample does not have any holes, specifying the obj_color and
+            mask_foreground is not necessary. In this case set this parameter
+            to True.
         """
+        if has_no_holes:
+            # define dummies
+            if obj_color is None:
+                obj_color = 'light'
+        else:
+            assert obj_color is not None, \
+                ('if the sample has holes, specifying the object color is '
+                 'necessary to determine which areas are the background and '
+                 'which is the sample. If this does not apply to your image, '
+                 'set "has_no_holes=True"')
+
         super().__init__(
             path_folder=path_folder,
             path_image_file=path_image_file,
@@ -1878,6 +1912,10 @@ class ImageClassified(Image):
             image_type=image_type,
             obj_color=obj_color
         )
+
+        if has_no_holes and (mask_foreground is None):
+            self._mask_foreground = np.full_like(self.image_grayscale, 1, dtype=np.uint8)
+            self._thr_background = 0
 
         if image_classification is not None:
             assert image_classification.shape[:2] == self._image.shape[:2], (
@@ -2823,7 +2861,7 @@ use_age_model, not {height0_mode}')
 
             return highest
 
-        assert check_attr(self, 'age_span') or (n_expected is None), (
+        assert check_attr(self, 'age_span') or (n_expected is not None), (
             'reduce_laminae requires either an age_span ' +
             'or the number of expected layers, exiting method'
         )
