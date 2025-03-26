@@ -30,6 +30,7 @@ setup(
                       'tqdm',
                       'opencv-python',
                       'scikit-learn',
+                      'pyrtms',
                       'scikit-image',
                       'psutil',
                       'h5py',
@@ -37,7 +38,7 @@ setup(
                       'textdistance',
                       'astropy',
                       'mfe'],
-    extras_require={'dev': 'twine', 'all': ['rpy2==3.5.12']},
+    extras_require={'dev': 'twine', 'all': []},
     keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI',
               'laminated', 'lamination', 'image registration'],
     classifiers=[
