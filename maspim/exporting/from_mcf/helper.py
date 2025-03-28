@@ -125,9 +125,9 @@ class Spots:
         rspots : object | Iterable[Iterable[int] | Iterable[str] | Iterable[str]]
             The spots to convert. Either R-object or 3-Tuple-like of indices, names and times.
         """
-        self.idxs: np.ndarray[int] = np.array(rspots[0])
-        self.names: np.ndarray[str] = np.array(rspots[1])
-        self.times: np.ndarray[str] = np.array(rspots[2])
+        self.idxs: np.ndarray[int] = np.array(rspots['index'])
+        self.names: np.ndarray[str] = np.array(rspots['SpotNumber'])
+        self.times: np.ndarray[str] = np.array(rspots['Timestamp'])
 
 
 class Spectrum:
@@ -157,8 +157,8 @@ class Spectrum:
         None.
 
         """
-        self.mzs: np.ndarray[float] = np.array(rspectrum[0]).astype(float)
-        self.intensities: np.ndarray[float] = np.array(rspectrum[1]).astype(float)
+        self.mzs: np.ndarray[float] = np.array(rspectrum['mz']).astype(float)
+        self.intensities: np.ndarray[float] = np.array(rspectrum['intensity']).astype(float)
         assert len(self.mzs) == len(self.intensities), \
             (f'Length of mzs and intensities should be the same' +
              f' but are {len(self.mzs)} and {len(self.intensities)}.')

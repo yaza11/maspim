@@ -4,12 +4,6 @@
 
 This package implements methods to process mass spectra, combine them with image information or other measurements (such as micro X-Ray fluorescence, µXRF) and special functionality for laminated sediments to combine spectra in the same layers.
 
-Try it yourself
-
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/yaza11/maspim.git/152a6199b61ab6ce09f2d2d902822e830534997a?labpath=Notebooks)
-
-You are welcome to use (any parts of) this package but please cite it:
-
 [![DOI](https://zenodo.org/badge/732002772.svg)](https://doi.org/10.5281/zenodo.14961319)
 
 ## Prerequisites
@@ -18,8 +12,6 @@ Before you begin, ensure you have met the following requirements:
 <!--- These are just example requirements. Add, duplicate or remove as required --->
 
 * You have a version of `python3` installed (preferentially the up-to-date version)
-* You have `R` installed
-* You have the `R` package `rtms` installed
 
 You may also want to check out [msiAlign](https://github.com/weimin-liu/msiAlign), which is not directly a prerequisite, but useful for setting the punch-holes when the automatic detection fails and [msi_feature_extraction](https://github.com/weimin-liu/msi_feature_extraction) if you want to work with exported txt files from DataAnalysis.
 
@@ -35,7 +27,7 @@ pip install maspim['all']
 ```
 or, equivalently
 ```bash
-pip install maspim rpy2==3.5.12
+pip install maspim
 ```
 
 Also, checkout our [github page](https://github.com/yaza11/maspim) for the up-to-date version and additional resources.

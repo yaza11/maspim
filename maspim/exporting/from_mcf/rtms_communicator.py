@@ -5,40 +5,15 @@ import pandas as pd
 import numpy as np
 import os
 import logging
+from pyrtms.rtmsBrukerMCFReader import newBrukerMCFReader, getBrukerMCFIndices, getBrukerMCFAllMetadata, getBrukerMCFSpots, getBrukerMCFSpectrum
 
 from typing import Iterable
 
-from maspim.exporting.from_mcf.helper import get_r_home, ReaderBaseClass, Spots, Spectrum, \
-    Rpy2NotFoundError, apply_calibration
+from maspim.exporting.from_mcf.helper import ReaderBaseClass, Spots, Spectrum, \
+    apply_calibration
 from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
-
-# specify the R installation folder here (required by rpy2 package)
-_skip_rpy2: bool = False
-try:
-    R_HOME = get_r_home()
-except EnvironmentError:
-    R_HOME = r"C:\Program Files\R\R-4.3.2"  # your installation path here
-except Rpy2NotFoundError:
-    _skip_rpy2 = True
-
-if not _skip_rpy2:
-    os.environ["R_HOME"] = R_HOME  # adding R_HOME folder to environment parameters
-    os.environ["PATH"] = R_HOME + ";" + os.environ["PATH"]  # and to system path
-
-    from rpy2.robjects.packages import importr, isinstalled
-
-    # install package if not found
-    if not isinstalled("rtms"):
-        utils = importr("utils")
-        utils.install_packages("rtms")
-
-    # import package
-    rtms = importr('rtms')
-else:
-    rtms = None
-
 
 class ReadBrukerMCF(ReaderBaseClass):
     """
@@ -95,17 +70,11 @@ class ReadBrukerMCF(ReaderBaseClass):
         """
         self.path_d_folder: str = path_d_folder
         self.limits: tuple[float, float] | None = limits
-        if _skip_rpy2:
-            warnings.warn(
-                'rpy2 not installed, must methods of the ReadBrukerMCF class '
-                'will not be available')
 
     def create_reader(self):
         """Create a new BrukerMCFReader object."""
-        if _skip_rpy2:
-            raise Rpy2NotFoundError()
         logger.warning('creating BrukerMCF reader, this may take a while ...')
-        self.reader: object = rtms.newBrukerMCFReader(self.path_d_folder)
+        self.reader: object = newBrukerMCFReader(self.path_d_folder)
         logger.info('done creating reader')
 
     def create_indices(self):
@@ -113,33 +82,22 @@ class ReadBrukerMCF(ReaderBaseClass):
         assert check_attr(self, 'reader'), \
             'create a reader with create_reader first'
         # get indices from reader
-        self.indices: np.ndarray[int] = np.array(rtms.getBrukerMCFIndices(self.reader))
+        self.indices: np.ndarray[int] = np.array(getBrukerMCFIndices(self.reader))
 
     def create_spots(self):
         """Create spots object with indices and names."""
-        if _skip_rpy2:
-            raise Rpy2NotFoundError()
         assert check_attr(self, 'reader'), \
             'create a reader with create_reader first'
         logger.info('creating spots table ...')
         # get spots from reader
-        rspots = rtms.getBrukerMCFSpots(self.reader)
+        rspots = getBrukerMCFSpots(self.reader)
         self.spots: Spots = Spots(rspots)
         logger.info('done creating spots table')
 
     def set_meta_data(self):
         """Fetch metadata for measurement from mcf file and turn into df."""
-        if _skip_rpy2:
-            raise Rpy2NotFoundError()
         # arbitrary index, metaData should be the same for all spectra
-        metaData = rtms.getBrukerMCFAllMetadata(self.reader, index=1)
-        self.metaData: pd.DataFrame = pd.DataFrame({
-            'Index': np.array(metaData[0]),
-            'PermanentName': np.array(metaData[1]),
-            'GroupName': np.array(metaData[2]),
-            'DisplayName': np.array(metaData[3]),
-            'Value': np.array(metaData[4])
-        })
+        self.metaData = getBrukerMCFAllMetadata(self.reader, index=1)
 
     def set_casi_window(self):
         """Set mass window limits from cassy values in metadata.
@@ -219,9 +177,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         spectrum: Spectrum
             The resampled (and possibly calibrated) spectrum.
         """
-        if _skip_rpy2:
-            raise Rpy2NotFoundError()
-        rspectrum = rtms.getSpectrum(self.reader, int(index))
+        rspectrum = getBrukerMCFSpectrum(self.reader, int(index))
         # convert to python
         if limits is None:
             limits = self.limits
