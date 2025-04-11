@@ -5,7 +5,8 @@ import pandas as pd
 import numpy as np
 import os
 import logging
-from pyrtms.rtmsBrukerMCFReader import newBrukerMCFReader, getBrukerMCFIndices, getBrukerMCFAllMetadata, getBrukerMCFSpots, getBrukerMCFSpectrum
+from pyrtms.rtmsBrukerMCFReader import newBrukerMCFReader, getBrukerMCFIndices, getBrukerMCFAllMetadata, \
+    getBrukerMCFSpots, getBrukerMCFSpectrum, RtmsBrukerMCFReader, BatchProcessor
 
 from typing import Iterable
 
@@ -14,6 +15,7 @@ from maspim.exporting.from_mcf.helper import ReaderBaseClass, Spots, Spectrum, \
 from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
+
 
 class ReadBrukerMCF(ReaderBaseClass):
     """
@@ -27,7 +29,7 @@ class ReadBrukerMCF(ReaderBaseClass):
     Import and initialize a reader
     >>> from maspim import ReadBrukerMCF
     >>> reader = ReadBrukerMCF(path_d_folder="/path/to/d_folder.d")
-    >>> reader.create_reader()  # this can take a while
+    >>> reader._create_reader()  # this can take a while
     Get information about the indices and meta data
     >>> reader.create_indices()
     >>> reader.set_meta_data()
@@ -50,9 +52,7 @@ class ReadBrukerMCF(ReaderBaseClass):
     """
     limits: tuple[float, float] | None = None
     path_d_folder: str | None = None
-    reader: object | None = None
-    indices: np.ndarray[int] | None = None
-    spots: Spots | None = None
+    reader: RtmsBrukerMCFReader | None = None
     mzs: np.ndarray[float] | None = None
 
     def __init__(
@@ -71,36 +71,34 @@ class ReadBrukerMCF(ReaderBaseClass):
         self.path_d_folder: str = path_d_folder
         self.limits: tuple[float, float] | None = limits
 
-    def create_reader(self):
+        self._create_reader()
+
+    def _create_reader(self):
         """Create a new BrukerMCFReader object."""
         logger.warning('creating BrukerMCF reader, this may take a while ...')
-        self.reader: object = newBrukerMCFReader(self.path_d_folder)
+        self.reader: RtmsBrukerMCFReader = newBrukerMCFReader(self.path_d_folder)
         logger.info('done creating reader')
 
-    def create_indices(self):
+    @property
+    def indices(self):
         """Create indices of spectra in mcf file."""
         assert check_attr(self, 'reader'), \
-            'create a reader with create_reader first'
+            'create a reader with _create_reader first'
         # get indices from reader
-        self.indices: np.ndarray[int] = np.array(getBrukerMCFIndices(self.reader))
+        return self.reader.spotTable.index
 
-    def create_spots(self):
-        """Create spots object with indices and names."""
-        assert check_attr(self, 'reader'), \
-            'create a reader with create_reader first'
-        logger.info('creating spots table ...')
-        # get spots from reader
-        rspots = getBrukerMCFSpots(self.reader)
-        self.spots: Spots = Spots(rspots)
-        logger.info('done creating spots table')
+    @property
+    def spots(self):
+        return self.reader.get_spots()
 
-    def set_meta_data(self):
+    @property
+    def metaData(self):
         """Fetch metadata for measurement from mcf file and turn into df."""
         # arbitrary index, metaData should be the same for all spectra
-        self.metaData = getBrukerMCFAllMetadata(self.reader, index=1)
+        return self.reader.get_metadata(index=1)
 
     def set_casi_window(self):
-        """Set mass window limits from cassy values in metadata.
+        """Set mass window limits from CASI values in metadata.
 
         Continuous Accumulation of Selected Ions (CASI)
         """
@@ -111,7 +109,7 @@ class ReadBrukerMCF(ReaderBaseClass):
 
         # find entries
         # not sure what DC and CID do, but for measurements without valid
-        # cassy window Q1DC and Q1CID are both 'off', whereas Q1DC is 'on' for
+        # CASI window Q1DC and Q1CID are both 'off', whereas Q1DC is 'on' for
         # measurements where
         idx_dc: pd.Series = self.metaData.PermanentName == 'Q1DC'
         idx_cid: pd.Series = self.metaData.PermanentName == 'Q1CID'
@@ -177,7 +175,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         spectrum: Spectrum
             The resampled (and possibly calibrated) spectrum.
         """
-        rspectrum = getBrukerMCFSpectrum(self.reader, int(index))
+        rspectrum = self.reader.get_spectrum(index)
         # convert to python
         if limits is None:
             limits = self.limits
@@ -206,6 +204,8 @@ class ReadBrukerMCF(ReaderBaseClass):
         spectrum: Spectrum
             The spectrum corresponding to the spot.
         """
+        raise NotImplementedError("this feature is deprecated")
+
         assert check_attr(self, 'spots'), 'create spots with create_spots first'
         # find corresponding index
         # index in spots may be shifted or have missing values
@@ -220,6 +220,23 @@ class ReadBrukerMCF(ReaderBaseClass):
         idx_spectrum: int = int(self.spots.idxs[idx_spot])
         spectrum: Spectrum = self.get_spectrum(idx_spectrum)
         return spectrum
+
+    def get_intensities_for_array_indices(self, expr) -> np.ndarray[np.float64]:
+        """
+        Obtain intensities for the specified intensities.
+
+        Supports every indexing method from numpy arrays.
+        """
+        indices = self.indices[expr]
+        if len(indices < 100):
+            kwargs = dict(n_jobs=1)
+        else:
+            kwargs = {}
+
+        bp = BatchProcessor(reader=self.reader, **kwargs)
+
+        res = bp.get_mul_spectra(indices=indices, intensities_only=True)
+        return res
 
 
 if __name__ == '__main__':
