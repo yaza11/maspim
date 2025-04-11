@@ -26,7 +26,7 @@ class hdf5Handler(ReaderBaseClass):
     >>> from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
     >>> from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
     >>> brukerReader = ReadBrukerMCF('some/d/folder.d')
-    >>> brukerReader.create_reader()
+    >>> brukerReader._create_reader()
     >>> brukerReader.create_indices()
     >>> brukerReader.set_meta_data()
     >>> brukerReader.set_casi_window()  # very important, otherwise the saved file will be huge
@@ -279,8 +279,6 @@ class hdf5Handler(ReaderBaseClass):
         spectrum: Spectrum
             The (calibrated) spectrum.
         """
-        index -= 1  # convert 1 based to 0 based index
-
         with h5py.File(self.path_file, 'r') as f:
             intensities = f['intensities'][index, :]
 
