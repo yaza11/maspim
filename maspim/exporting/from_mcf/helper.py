@@ -15,38 +15,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class Rpy2NotFoundError(ModuleNotFoundError):
-    def __init__(self):
-        rpy2_missing_msg = ("Package rpy2 not installed. Either run installation with "
-                            "'all' option (e.g. 'pip install maspim['all']') or install "
-                            "rpy2 manually (e.g. 'pip install rpy2'). For now, features"
-                            " that require rpy2 are unavailable.")
-        self.message = rpy2_missing_msg
-        super().__init__(self.message)
-
-
-def get_r_home():
-    """Find the folder of R installation on the system."""
-    try:
-        import rpy2.situation
-    except ModuleNotFoundError:
-        raise Rpy2NotFoundError()
-    import os
-
-    if rpy2.situation.get_r_home() is not None:
-        # try set the R_HOME variable if it is not set on windows
-        if os.name == 'nt' and 'R_HOME' not in os.environ:
-            # permanently set the R_HOME variable for windows using setx
-            os.system(f'setx R_HOME "{rpy2.situation.get_r_home()}"')
-            # set the R_HOME variable for the current session
-            os.environ['R_HOME'] = rpy2.situation.get_r_home()
-        return rpy2.situation.get_r_home()
-    else:
-        raise FileNotFoundError(
-            "R_HOME not found. Please set the R_HOME environment variable."
-        )
-
-
 def get_mzs_for_limits(
         limits: Iterable[float | int],
         delta_mz: float | int
@@ -139,7 +107,8 @@ class Spectrum:
 
     def __init__(
             self,
-            rspectrum, limits: Iterable[float] | None = None
+            rspectrum,
+            limits: Iterable[float] | None = None
     ) -> None:
         """
         Convert rtms spectrum to python.
@@ -157,8 +126,8 @@ class Spectrum:
         None.
 
         """
-        self.mzs: np.ndarray[float] = np.array(rspectrum['mz']).astype(float)
-        self.intensities: np.ndarray[float] = np.array(rspectrum['intensity']).astype(float)
+        self.mzs: np.ndarray[float] = np.array(rspectrum[0]).astype(float)
+        self.intensities: np.ndarray[float] = np.array(rspectrum[1]).astype(float)
         assert len(self.mzs) == len(self.intensities), \
             (f'Length of mzs and intensities should be the same' +
              f' but are {len(self.mzs)} and {len(self.intensities)}.')
