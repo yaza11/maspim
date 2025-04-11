@@ -3223,10 +3223,6 @@ class ProjectMSI(ProjectBaseClass):
 
     def get_mcf_reader(self, **kwargs) -> ReadBrukerMCF:
         reader = ReadBrukerMCF(self.path_d_folder, **kwargs)
-        reader.create_reader()
-        reader.create_indices()
-        reader.create_spots()
-        reader.set_meta_data()
         if 'limits' not in kwargs:
             try:
                 reader.set_casi_window()
@@ -3611,8 +3607,6 @@ class IonImagePlotter:
     def _reader_setup(self) -> tuple[ReadBrukerMCF | hdf5Handler, pd.DataFrame]:
         """Get a reader and the feature table."""
         reader_: ReadBrukerMCF | hdf5Handler = self._project.get_reader()
-        reader_.create_reader()
-        reader_.create_indices()
         df_: pd.DataFrame = self._pixel_table_from_xml()
         return reader_, df_
 
