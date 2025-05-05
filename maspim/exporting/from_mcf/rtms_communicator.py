@@ -29,20 +29,8 @@ class ReadBrukerMCF(ReaderBaseClass):
     Import and initialize a reader
     >>> from maspim import ReadBrukerMCF
     >>> reader = ReadBrukerMCF(path_d_folder="/path/to/d_folder.d")
-    >>> reader._create_reader()  # this can take a while
-    Get information about the indices and meta data
-    >>> reader.create_indices()
-    >>> reader.set_meta_data()
-    In case a QTOF was used, the masss window limits can be set from the meta data:
-    >>> reader.set_meta_data()
     Now we can get spectra, either by providing an index
     >>> spec = reader.get_spectrum(1000)
-    or a spot name
-    >>> spec = reader.get_spectrum_by_spot('R00X100Y085')
-    If you define an m/z vector, it is also possible to resample the spectra right away
-    (this is not the recommended way, the project class takes care of the details)
-    >>> reader.set_mzs(np.arange(spec.limits[0], spec.limits[1], 1e-4))
-    >>> intensities = reader.get_spectrum_resampled_intensities(1000)
 
     Notes
     -----
@@ -72,6 +60,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         self.limits: tuple[float, float] | None = limits
 
         self._create_reader()
+        self.set_mzs()
 
     def _create_reader(self):
         """Create a new BrukerMCFReader object."""
@@ -186,9 +175,15 @@ class ReadBrukerMCF(ReaderBaseClass):
 
         return spectrum
 
-    def set_mzs(self, mzs: Iterable[float]):
+    def set_mzs(self):
         """Set the mz values for other classes to use to resample spectra"""
-        self.mzs: np.ndarray[float] = np.array(mzs).astype(float)
+        self.mzs: np.ndarray[float] = self.reader.get_spectrum(0)[0]
+        # check for a few spectra if they all have the same mzs
+        # so far, this has always been the case
+        for i in np.random.choice(self.indices, 100, replace=False):
+            assert np.allclose(self.reader.get_spectrum(i)[0], self.mzs), \
+                ("Encountered spectra with non-equally sampled mz values. "
+                 "This is unsupported behavior. Please contact the developers")
 
     def get_spectrum_by_spot(self, spot: str) -> Spectrum:
         """

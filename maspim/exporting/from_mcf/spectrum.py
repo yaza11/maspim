@@ -379,18 +379,11 @@ class Spectra(Convenience):
         #     indices = reader.indices
         self._indices = np.array(indices)
         if limits is None:
-            if (not check_attr(reader, 'metaData')) and is_rtms:
-                reader.set_meta_data()
             if not check_attr(reader, 'limits'):
                 reader.set_casi_window()
             limits = reader.limits
         self._limits = limits
-
-        if is_rtms:
-            self._mzs = get_mzs_for_limits(self._limits, self._delta_mz)
-            reader.set_mzs(self._mzs)
-        else:
-            self._mzs = reader.mzs
+        self._mzs = reader.mzs
         self._intensities = np.zeros_like(self._mzs)
 
     def _pre_save(self):
