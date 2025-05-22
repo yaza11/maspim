@@ -173,7 +173,7 @@ class DataBaseClass:
         assert method in ['median', 'mean', 'portion'], f'{method=} not valid'
         assert (check_attr(self, '_feature_table')
                 and (column_tic in self.feature_table)),\
-            '{column_tic=} not in ft, make sure that ft is defined'
+            f'{column_tic=} not in ft, make sure that ft is defined'
 
         tics: pd.Series = self.feature_table.loc[:, column_tic]
         if method == 'median':
