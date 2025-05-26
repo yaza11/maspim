@@ -89,17 +89,19 @@ def get_comp_as_img(
 def clip_image(
         image: np.ndarray,
         comp: str | float | int,
-        clip_above_percentile: float = .95,
-        clip_below_percentile: float = .0,
-        **_
+        clip_above_percentile: float = None,
+        clip_below_percentile: float = None
 ) -> tuple[np.ndarray, float, float]:
     """Return copy of image where values below and above specified percentiles are clipped."""
+    default_above_clip = .95
+    default_below_clip = 0
+
     image_clipped = image.copy()
     if clip_above_percentile is None:
         comp_is_numeric = str(comp).replace(".", "").isnumeric()
         comp_is_element = str(comp) in elements.Abbreviation
         comp_is_data = comp_is_element or comp_is_numeric
-        clip_above_percentile = .95 if comp_is_data else None
+        clip_above_percentile = default_above_clip if comp_is_data else None
     if clip_above_percentile is not None:
         vmax = np.nanquantile(image, clip_above_percentile)
         logger.info(f'clipping values to {clip_above_percentile:.0%} percentile')
@@ -111,7 +113,7 @@ def clip_image(
         comp_is_numeric = str(comp).replace(".", "").isnumeric()
         comp_is_element = str(comp) in elements.Abbreviation
         comp_is_data = comp_is_element or comp_is_numeric
-        clip_below_percentile = 0 if comp_is_data else None
+        clip_below_percentile = default_below_clip if comp_is_data else None
     if clip_below_percentile is not None:
         vmin = np.nanquantile(image, clip_below_percentile)
         logger.info(f'clipping values to {clip_below_percentile:.0%} percentile')
@@ -144,7 +146,9 @@ def plot_comp_on_image(
     # get ion image
     img_mz, *_ = get_comp_as_img(data_frame, comp, **kwargs)
     # apply clipping
-    img_mz, *_ = clip_image(img_mz, comp=comp, **kwargs)
+    img_mz, *_ = clip_image(img_mz, comp=comp,
+                            clip_above_percentile=kwargs.get('clip_above_percentile'),
+                            clip_below_percentile=kwargs.get('clip_below_percentile'))
 
     # pad to fill out entire image
     x_ROI, *_ = get_comp_as_img(data_frame, 'x_ROI', **kwargs)
@@ -245,8 +249,20 @@ def plot_comp(
     tick_precision: int, optional,
         The number decimals of the depth scale. The default is 0.
     kwargs: dict, optional
-        keywords for get_comp_as_img
+        keywords for get_comp_as_img, plt.imshow, clip_image
     """
+    # check kwargs
+    keys_get_comp_as_image = 'idx_x idx_y'.split()
+    keys_clip_image = 'clip_above_percentile clip_below_percentile'.split()
+    keys_imshow: list[str] = (
+        'cmap norm aspect interpolation alpha vmin vmax origin extent '
+        'interpolation_stage filternorm filterrad resample url data'
+    ).split()
+    available_keys = keys_get_comp_as_image + keys_clip_image + keys_imshow
+    unused_kwargs = [k for k in kwargs if k not in available_keys]
+    if len(unused_kwargs) > 1:
+        raise KeyError(f'{unused_kwargs} are not valid keywords. Available keywords are {available_keys}.')
+
     if img_mz is None:
         assert data_frame is not None, 'if no image is provided, provide a dataframe'
         assert comp in data_frame.columns, \
@@ -258,10 +274,13 @@ def plot_comp(
         data_frame.loc[:, 'y'] = y.ravel()
 
     img_mz, idx_x, idx_y = get_comp_as_img(
-        data_frame=data_frame, comp=comp, flip=flip, **kwargs
+        data_frame=data_frame, comp=comp, flip=flip,
+        idx_x=kwargs.get('idx_x'), idx_y=kwargs.get('idx_y')
     )
 
-    img_clipped, vmin, vmax = clip_image(img_mz, comp=comp, **kwargs)
+    img_clipped, vmin, vmax = clip_image(img_mz, comp=comp,
+                                         clip_above_percentile=kwargs.get('clip_above_percentile'),
+                                         clip_below_percentile=kwargs.get('clip_below_percentile'))
     if 'vmin' not in kwargs:
         kwargs['vmin'] = vmin
     if 'vmax' not in kwargs:
@@ -280,19 +299,12 @@ def plot_comp(
                  else np.argmin(img_clipped.shape))
     tick_axis: str = ['y', 'x'][tick_axis]
 
-    if 'aspect' not in kwargs:
-        kwargs['aspect'] = 'equal'
-    if 'interpolation' not in kwargs:
-        kwargs['interpolation'] = 'none'
-
-    keys_imshow = (
-        'cmap norm aspect interpolation alpha vmin vmax origin extent '
-        'interpolation_stage filternorm filterrad resample url data'
-    ).split()
     kwargs_imshow = {k: v for k, v in kwargs.items() if k in keys_imshow}
 
     im = ax.imshow(
         img_clipped,
+        aspect=kwargs_imshow.pop('aspect', 'equal'),
+        interpolation=kwargs_imshow.pop('interpolation', 'none'),
         **kwargs_imshow
     )
 
