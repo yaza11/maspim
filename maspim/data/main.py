@@ -593,12 +593,17 @@ class Data(DataBaseClass, Convenience):
         self._nmf_xy: pd.DataFrame = self.xy.loc[mask_valid_rows, :]
         feature_table_scaled = MaxAbsScaler().fit_transform(data_valid)
 
+        mfe_found = False
         if use_repeated_NMF:
-            from mfe.feature import repeated_nmf
-            S: type = repeated_nmf(feature_table_scaled, k, N_rep, max_iter=max_iter)
-            self._W: np.ndarray[float] = S.matrix_w_accum
-            self._H: np.ndarray[float] = S.matrix_h_accum
-        else:
+            try:
+                from mfe.feature import repeated_nmf
+                mfe_found = True
+                S: type = repeated_nmf(feature_table_scaled, k, N_rep, max_iter=max_iter)
+                self._W: np.ndarray[float] = S.matrix_w_accum
+                self._H: np.ndarray[float] = S.matrix_h_accum
+            except ModuleNotFoundError as _e:
+                logger.warning(f'{_e}, not using repeated NMF')
+        if (not use_repeated_NMF) or (not mfe_found):
             model: NMF = NMF(n_components=k, max_iter=max_iter, init='nndsvd')
 
             self._W: np.ndarray[float] = model.fit_transform(feature_table_scaled)

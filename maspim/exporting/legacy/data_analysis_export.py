@@ -3,14 +3,20 @@ import os
 import scipy
 import numpy as np
 import pandas as pd
+import logging
 
 from tqdm import tqdm
 
-from mfe.from_txt import (
-    get_ref_peaks, parse_da_export,
-    create_bin, combine_spectrum,
-    Spectrum as mfe_spectrum
-)
+logger = logging.getLogger(__name__)
+
+try:
+    from mfe.from_txt import (
+        get_ref_peaks, parse_da_export,
+        create_bin, combine_spectrum,
+        Spectrum as mfe_spectrum
+    )
+except ModuleNotFoundError as _e:
+    logger.warnin(f'{_e}, some functions are unavailable')
 
 from maspim.util import Convenience
 from maspim.util.convenience import check_attr
