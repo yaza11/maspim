@@ -373,10 +373,10 @@ class Spectra(Convenience):
             (f'limits must either be None or contain an upper and lower bound '
              f'with upper != lower, you provided {limits}.')
 
-        # if indices is None:
-        #     if not check_attr(reader, 'indices'):
-        #         reader.create_indices()
-        #     indices = reader.indices
+        if indices is None:
+            if not check_attr(reader, 'indices'):
+                reader.create_indices()
+            indices = reader.indices
         self._indices = np.array(indices)
         if limits is None:
             if not check_attr(reader, 'limits'):
