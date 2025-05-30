@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from maspim.imaging.util.coordinate_transformations import rescale_values
 from maspim.res.constants import elements
+from maspim.util.function_args import get_arg_names_of_func
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,10 @@ def get_comp_as_img(
 
     if flip:
         idx_x, idx_y = idx_y, idx_x
+
+    # set classification column to holes, if not provided
+    if (classification_column is None) and exclude_holes:
+        classification_column = 'valid'
 
     if (
             (classification_column is not None) and
@@ -252,16 +257,17 @@ def plot_comp(
         keywords for get_comp_as_img, plt.imshow, clip_image
     """
     # check kwargs
-    keys_get_comp_as_image = 'idx_x idx_y'.split()
-    keys_clip_image = 'clip_above_percentile clip_below_percentile'.split()
-    keys_imshow: list[str] = (
-        'cmap norm aspect interpolation alpha vmin vmax origin extent '
-        'interpolation_stage filternorm filterrad resample url data'
-    ).split()
+    keys_get_comp_as_image = get_arg_names_of_func(get_comp_as_img)
+    keys_clip_image = get_arg_names_of_func(clip_image)
+    keys_imshow: list[str] = get_arg_names_of_func(plt.imshow)
     available_keys = keys_get_comp_as_image + keys_clip_image + keys_imshow
     unused_kwargs = [k for k in kwargs if k not in available_keys]
-    if len(unused_kwargs) > 1:
-        raise KeyError(f'{unused_kwargs} are not valid keywords. Available keywords are {available_keys}.')
+
+    print(kwargs, unused_kwargs)
+
+    if len(unused_kwargs) > 0:
+        raise KeyError(f'{unused_kwargs} are not valid keywords. '
+                       f'Available keywords are {available_keys}.')
 
     if img_mz is None:
         assert data_frame is not None, 'if no image is provided, provide a dataframe'
@@ -273,9 +279,10 @@ def plot_comp(
         data_frame.loc[:, 'x'] = x.ravel()
         data_frame.loc[:, 'y'] = y.ravel()
 
+    kwargs_get_comp = {k: v for k, v in kwargs.items() if k in keys_get_comp_as_image}
     img_mz, idx_x, idx_y = get_comp_as_img(
         data_frame=data_frame, comp=comp, flip=flip,
-        idx_x=kwargs.get('idx_x'), idx_y=kwargs.get('idx_y')
+        **kwargs_get_comp
     )
 
     img_clipped, vmin, vmax = clip_image(img_mz, comp=comp,
