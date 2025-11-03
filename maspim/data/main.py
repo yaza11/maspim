@@ -24,7 +24,6 @@ from maspim.res.constants import dict_labels
 from maspim.util.convenience import Convenience, check_attr
 from maspim.imaging.util.image_plotting import plt_cv2_image
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -1217,7 +1216,7 @@ class Data(DataBaseClass, Convenience):
             comp: str | float | int,
             correct_tic: bool = False,
             **kwargs
-    ) -> None:
+    ) -> dict | None:
         """
         Plot the ion image of a compound or feature.
 
@@ -1235,7 +1234,7 @@ class Data(DataBaseClass, Convenience):
         if check_attr(self, '_distance_pixels'):
             kwargs['distance_pixels'] = self.distance_pixels
 
-        plot_comp(
+        return plot_comp(
             comp,
             data_frame=(self.get_feature_table_tic_corrected(**kwargs)
                         if correct_tic

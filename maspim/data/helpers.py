@@ -229,7 +229,7 @@ def plot_comp(
         cax_size: str | float = '10%',
         cax_pad: float = 0.05,
         **kwargs
-) -> tuple[plt.Figure, plt.Axes] | None:
+) -> dict | None:
     """
     Plot the ion image of a compound or feature.
 
@@ -290,8 +290,12 @@ def plot_comp(
                                          clip_below_percentile=kwargs.get('clip_below_percentile'))
     if 'vmin' not in kwargs:
         kwargs['vmin'] = vmin
+    else:
+        vmin = kwargs['vmin']
     if 'vmax' not in kwargs:
         kwargs['vmax'] = vmax
+    else:
+        vmax = kwargs['vmax']
     assert not math.isclose(vmin, vmax), f'Found same vmin/vmax for {comp}'
 
     if fig is None:
@@ -307,6 +311,7 @@ def plot_comp(
     tick_axis: str = ['y', 'x'][tick_axis]
 
     kwargs_imshow = {k: v for k, v in kwargs.items() if k in keys_imshow}
+    print(f"{kwargs_imshow=}")
 
     im = ax.imshow(
         img_clipped,
@@ -378,7 +383,7 @@ def plot_comp(
     # SNR ratios
     if SNR_scale:
         ticks = [vmin, vmin + (vmax - vmin) / 3, vmin + (vmax - vmin) * 2 / 3, vmax]
-        ticklabels = [str(np.around(t, 1)) for t in ticks]
+        tick_labels_cbar = [str(np.around(t, 1)) for t in ticks]
     else:
         ticks = [vmin, vmax]
         i = 0
@@ -388,11 +393,12 @@ def plot_comp(
             min_label = f'{vmin:.{i}e}'
             max_label = f'{vmax:.{i}e}'
             i += 1
-        ticklabels = [min_label, max_label]
+        tick_labels_cbar = [min_label, max_label]
     if vmin > np.nanmin(img_mz):
-        ticklabels[0] = r'$\leq$' + ticklabels[0]
+        tick_labels_cbar[0] = r'$\leq$' + tick_labels_cbar[0]
     if vmax < np.nanmax(img_mz):
-        ticklabels[-1] = r'$\geq$' + ticklabels[-1]
+        tick_labels_cbar[-1] = r'$\geq$' + tick_labels_cbar[-1]
+    print(f'{tick_labels_cbar=}')
 
     if colorbar:
         divider = make_axes_locatable(ax)
@@ -406,18 +412,23 @@ def plot_comp(
             shrink=.8,
             cax=cax
         )
-        cbar.set_ticks(ticks=ticks, labels=ticklabels)
+        cbar.set_ticks(ticks=ticks, labels=tick_labels_cbar)
 
         if portrait_mode:
-            cbar.ax.set_yticklabels(ticklabels)
+            cbar.ax.set_yticklabels(tick_labels_cbar)
             cbar.ax.set_ylabel('Intensity', rotation=270, fontsize='10')
         else:
-            cbar.ax.set_xticklabels(ticklabels)
+            cbar.ax.set_xticklabels(tick_labels_cbar)
             cbar.ax.set_xlabel('Intensity', fontsize='10')
+    else:
+        cax = None
+        cbar = None
+
+    out = dict(mappable=im, ax=ax, fig=fig, cax=cax, cbar=cbar)
     if save_png is not None:
         plt.savefig(save_png, dpi=300)
     if hold:
-        return fig, ax
+        return out
     plt.show()
 
 

@@ -1174,7 +1174,7 @@ that before using this option'
         else:
             assert ax is not None, "If fig is provided, must also provide ax"
 
-        # TODO: implement swap_xy
+        # implement swap_xy
         if not swap_xy:
             _flines = lambda x: x.vlines
             _twin = lambda x: x.twinx

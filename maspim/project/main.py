@@ -19,6 +19,7 @@ from typing import Iterable, Self, Any
 from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 
 from maspim.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image, get_comp_as_img
+
 from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
 from maspim.exporting.legacy.ion_image import (get_da_export_ion_image,
                                                get_da_export_data)
@@ -2749,7 +2750,7 @@ class ProjectBaseClass:
             tolerance=tolerance,
             da_export_file=da_export_file,
         )
-        plotter.plot_comp(
+        return plotter.plot_comp(
             comp=comp,
             plot_on_background=plot_on_background,
             title=title,
@@ -3722,8 +3723,7 @@ class IonImagePlotter:
         df: pd.DataFrame = self._get_df()
 
         if self._source == 'time_series':
-            self._object.plot_comp(self._comp, title=title, **kwargs)
-            return
+            return self._object.plot_comp(self._comp, title=title, **kwargs)
 
         self._set_data_object(df)
 
@@ -3734,7 +3734,7 @@ class IonImagePlotter:
             background_image = convert(
                 'cv', 'np', self._project.image_roi.image
             )
-            plot_comp_on_image(
+            return plot_comp_on_image(
                 comp=self._comp,
                 background_image=background_image,
                 data_frame=self._data_object.feature_table,
@@ -3742,7 +3742,7 @@ class IonImagePlotter:
                 **kwargs
             )
         else:
-            plot_comp(
+            return plot_comp(
                 data_frame=self._data_object.feature_table,
                 title=title,
                 comp=self._comp,
