@@ -107,7 +107,7 @@ class Spectrum:
 
     def __init__(
             self,
-            rspectrum,
+            pyrtms_spectrum: np.ndarray[float],
             limits: Iterable[float] | None = None
     ) -> None:
         """
@@ -115,7 +115,7 @@ class Spectrum:
 
         Parameters
         ----------
-        rspectrum : object | Iterable[Iterable[float]]
+        pyrtms_spectrum : object | Iterable[Iterable[float]]
             The rtms object to convert or a 2-Tuple like object with the mz and intensity values.
         limits : Iterable[float] | None, optional
             mz limits to crop the spectrum as a tuple with upper and lower bound.
@@ -126,8 +126,8 @@ class Spectrum:
         None.
 
         """
-        self.mzs: np.ndarray[float] = np.array(rspectrum[0]).astype(float)
-        self.intensities: np.ndarray[float] = np.array(rspectrum[1]).astype(float)
+        self.mzs: np.ndarray[float] = pyrtms_spectrum[:, 0]
+        self.intensities: np.ndarray[float] = pyrtms_spectrum[:, 1]
         assert len(self.mzs) == len(self.intensities), \
             (f'Length of mzs and intensities should be the same' +
              f' but are {len(self.mzs)} and {len(self.intensities)}.')

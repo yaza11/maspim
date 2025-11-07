@@ -46,7 +46,8 @@ class ReadBrukerMCF(ReaderBaseClass):
     def __init__(
             self,
             path_d_folder: str,
-            limits: tuple[float, float] | None = None
+            limits: tuple[float, float] | None = None,
+            check_mzs_are_equal: bool = True
     ) -> None:
         """
         Initializer
@@ -60,7 +61,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         self.limits: tuple[float, float] | None = limits
 
         self._create_reader()
-        self.set_mzs()
+        self.set_mzs(check_mzs_are_equal)
 
     def _create_reader(self):
         """Create a new BrukerMCFReader object."""
@@ -175,13 +176,15 @@ class ReadBrukerMCF(ReaderBaseClass):
 
         return spectrum
 
-    def set_mzs(self):
+    def set_mzs(self, check_mzs=True):
         """Set the mz values for other classes to use to resample spectra"""
-        self.mzs: np.ndarray[float] = self.reader.get_spectrum(0)[0]
+        self.mzs: np.ndarray[float] = self.reader.get_spectrum(0)[:, 0]
+        if not check_mzs:
+            return
         # check for a few spectra if they all have the same mzs
         # so far, this has always been the case
         for i in np.random.choice(self.indices, 100, replace=False):
-            assert np.allclose(self.reader.get_spectrum(i)[0], self.mzs), \
+            assert np.allclose(self.reader.get_spectrum(i)[:, 0], self.mzs), \
                 ("Encountered spectra with non-equally sampled mz values. "
                  "This is unsupported behavior. Please contact the developers")
 
