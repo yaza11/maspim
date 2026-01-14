@@ -510,8 +510,10 @@ class Spectra(Convenience):
         # Determine whether to use calibration functions on spectra
         calibrate: bool = check_attr(self, '_calibration_parameters')
 
+        array_idx: int = self.spectrum_idx2array_idx(index)
+        need_to_shift_index = isinstance(reader, hdf5Handler)
+
         if calibrate:
-            array_idx: int = self.spectrum_idx2array_idx(index)
             poly_coeffs: np.ndarray = self._calibration_parameters[array_idx, :]
         else:
             poly_coeffs: None = None
@@ -519,12 +521,12 @@ class Spectra(Convenience):
         if only_intensity:
             spectrum: np.ndarray[float] = \
                 reader.get_spectrum_resampled_intensities(
-                    index=index,
+                    index=array_idx if need_to_shift_index else index,
                     poly_coeffs=poly_coeffs
                 )
         else:
             spectrum: Spectrum = reader.get_spectrum(
-                index=index,
+                index=array_idx if need_to_shift_index else index,
                 poly_coeffs=poly_coeffs,
                 **kwargs
             )
