@@ -107,7 +107,7 @@ class Spectrum:
 
     def __init__(
             self,
-            pyrtms_spectrum: np.ndarray[float],
+            pyrtms_spectrum: np.ndarray[float] | tuple[np.ndarray, np.ndarray],
             limits: Iterable[float] | None = None
     ) -> None:
         """
@@ -126,8 +126,12 @@ class Spectrum:
         None.
 
         """
-        self.mzs: np.ndarray[float] = pyrtms_spectrum[:, 0]
-        self.intensities: np.ndarray[float] = pyrtms_spectrum[:, 1]
+        if isinstance(pyrtms_spectrum, np.ndarray):
+            self.mzs: np.ndarray[float] = pyrtms_spectrum[:, 0]
+            self.intensities: np.ndarray[float] = pyrtms_spectrum[:, 1]
+        else:
+            self.mzs: np.ndarray[float] = pyrtms_spectrum[0]
+            self.intensities: np.ndarray[float] = pyrtms_spectrum[1]
         assert len(self.mzs) == len(self.intensities), \
             (f'Length of mzs and intensities should be the same' +
              f' but are {len(self.mzs)} and {len(self.intensities)}.')
