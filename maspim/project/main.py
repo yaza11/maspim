@@ -42,7 +42,7 @@ from maspim.data.age_model import AgeModel
 from maspim.project.file_helpers import (
     get_folder_structure, find_files, get_mis_file, get_d_folder,
     search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy,
-    get_spots
+    get_spots, get_resolution_msi
 )
 
 from maspim.imaging.main import ImageSample, ImageROI, ImageClassified
@@ -405,7 +405,7 @@ class SampleImageHandlerMSI(Convenience):
         ax.add_patch(rect_photo)
         if hold:
             return fig, ax
-        plt.show()
+
 
 
 class SampleImageHandlerXRF(Convenience):
@@ -3173,6 +3173,10 @@ class ProjectMSI(ProjectBaseClass):
     def path_mis_file(self):
         return os.path.join(self.path_folder, self.mis_file)
 
+    @property
+    def distance_pixels(self):
+        return get_resolution_msi(self.path_mis_file)
+
     def set_image_handler(self, **kwargs) -> None:
         """
         Initialize and SampleImageHandlerMSI object and set the photo.
@@ -3507,6 +3511,14 @@ class ProjectMSI(ProjectBaseClass):
         self.uk37_proxy = UK37(time_series=self.time_series, **kwargs)
         self.uk37_proxy.correct(correction_factor=correction_factor)
         self.uk37_proxy.add_SST(method=method_SST, prior_std=prior_std_bayspline)
+
+    def print_overview(self):
+        reader = self.get_reader()
+
+        print(f'distance pixels: {self.distance_pixels} µm')
+        print(f'mz range: {reader.limits}')
+        print(f'covered x range: {(reader.xs.max() - reader.xs.min()) * self.distance_pixels / 10000:.2f} cm')
+        print(f'covered y range: {reader.ys.max() - reader.ys.min()} pixels')
 
 
 class IonImagePlotter:
