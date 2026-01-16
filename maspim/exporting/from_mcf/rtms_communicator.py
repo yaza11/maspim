@@ -11,7 +11,7 @@ from pyrtms.rtmsBrukerMCFReader import newBrukerMCFReader, getBrukerMCFIndices, 
 from typing import Iterable
 
 from maspim.exporting.from_mcf.helper import ReaderBaseClass, Spots, Spectrum, \
-    apply_calibration
+    apply_calibration, split_spot
 from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,18 @@ class ReadBrukerMCF(ReaderBaseClass):
     @property
     def spots(self):
         return self.reader.get_spots()
+
+    @property
+    def rs(self):
+        return self.spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[0])
+
+    @property
+    def xs(self):
+        return self.spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[1])
+
+    @property
+    def ys(self):
+        return self.spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[2])
 
     @property
     def metaData(self):

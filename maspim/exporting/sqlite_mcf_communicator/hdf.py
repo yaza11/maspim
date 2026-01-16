@@ -5,6 +5,8 @@ import os
 import logging
 
 from typing import Iterable
+
+import pandas as pd
 from tqdm import tqdm
 
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
@@ -137,10 +139,14 @@ class hdf5Handler(ReaderBaseClass):
         with h5py.File(self.path_file, 'a') as f:
             if 'indices' not in f.keys():
                 f.create_dataset('indices', data=indices)
-            f.create_dataset('R', data=spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[0]))
-            f.create_dataset('X', data=spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[1]))
-            f.create_dataset('Y', data=spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[2]))
-        met.to_hdf(self.path_file, key='instrument_settings', mode='a')
+            if 'R' not in f.keys():
+                f.create_dataset('R', data=reader.rs)
+            if 'X' not in f.keys():
+                f.create_dataset('X', data=reader.xs)
+            if 'Y' not in f.keys():
+                f.create_dataset('Y', data=reader.ys)
+        if 'instrument_settings' not in f.keys():
+            met.to_hdf(self.path_file, key='instrument_settings', mode='a')
 
     def write(
             self,
@@ -151,7 +157,7 @@ class hdf5Handler(ReaderBaseClass):
         """
         Using the ReadBrukerMCF reader, write an hdf5 file.
 
-        This is recommended, if you can affort the extra disk space (e.g. ~150 GB for
+        This is recommended, if you can afford the extra disk space (e.g. ~150 GB for
         a measurement with 20_000 spectra and a mass range of 100 Da at a coverage of
         0.1 mDa)
 
@@ -264,6 +270,24 @@ class hdf5Handler(ReaderBaseClass):
                 'mzs': masses,
                 'intensities': intensities
             }
+
+    @property
+    def rs(self):
+        with (h5py.File(self.path_file, 'r') as f):
+            return np.asarray(f['R'])
+
+    @property
+    def xs(self):
+        with (h5py.File(self.path_file, 'r') as f):
+            return np.asarray(f['X'])
+    @property
+    def ys(self):
+        with (h5py.File(self.path_file, 'r') as f):
+            return np.asarray(f['Y'])
+
+    @property
+    def instrument_settings(self):
+        return pd.read_hdf(self.path_file, key='instrument_settings')
 
     def get_intensities_for_array_indices(self, expr) -> np.ndarray[np.float64]:
         """
