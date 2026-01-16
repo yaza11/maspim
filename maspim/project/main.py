@@ -3512,13 +3512,24 @@ class ProjectMSI(ProjectBaseClass):
         self.uk37_proxy.correct(correction_factor=correction_factor)
         self.uk37_proxy.add_SST(method=method_SST, prior_std=prior_std_bayspline)
 
-    def print_overview(self):
+    def get_overview(self, print_values: bool = True) -> tuple[dict, pd.DataFrame]:
+        # TODO: return dict
         reader = self.get_reader()
 
-        print(f'distance pixels: {self.distance_pixels} µm')
-        print(f'mz range: {reader.limits}')
-        print(f'covered x range: {(reader.xs.max() - reader.xs.min()) * self.distance_pixels / 10000:.2f} cm')
-        print(f'covered y range: {reader.ys.max() - reader.ys.min()} pixels')
+        # TODO: measurement creation date
+        out = {
+            'distance_pixels_um': self.distance_pixels,
+            'mz_limits': reader.limits,
+            'depth_extent_cm': (reader.xs.max() - reader.xs.min()) * self.distance_pixels / 10000,
+            'horizontal_extent_spots': reader.ys.max() - reader.ys.min()
+        }
+
+        if print_values:
+            print(f'distance pixels: {out['distance_pixels_um']} µm')
+            print(f'mz range: {out["mz_limits"]}')
+            print(f'covered x range: {out["depth_extent_cm"]:.2f} cm')
+            print(f'covered y range: {out["horizontal_extent_spots"]} pixels')
+        return out, reader.metaData if isinstance(reader, ReadBrukerMCF) else reader.instrument_settings
 
 
 class IonImagePlotter:
