@@ -143,7 +143,7 @@ class ReadBrukerMCF(ReaderBaseClass):
 
     def get_spectrum(
             self,
-            index: int,
+            index: int = None,
             poly_coeffs: np.ndarray[float] | None = None,
             limits: tuple[float, float] | None = None
     ) -> Spectrum:
@@ -153,7 +153,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         Parameters
         ----------
         index: int
-            The 1-based index of the spectrum.
+            The index of the spectrum.
         poly_coeffs: np.ndarray[float], optional
             Coefficients of the calibration polynomial. The default is None
             and will not apply a calibration.

@@ -8,7 +8,8 @@ from typing import Iterable
 from tqdm import tqdm
 
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
-from maspim.exporting.from_mcf.helper import get_mzs_for_limits, ReaderBaseClass, Spectrum, apply_calibration
+from maspim.exporting.from_mcf.helper import get_mzs_for_limits, ReaderBaseClass, Spectrum, apply_calibration, \
+    split_spot
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,21 @@ class hdf5Handler(ReaderBaseClass):
         """For compatibility with ReadBrukerMCF class."""
         pass
 
+    def add_metadata(self, reader: ReadBrukerMCF) -> None:
+        """Add index, measurement parameters and coordinates to hdf5 metadata"""
+
+        spots = reader.spots
+        met = reader.metaData
+        indices = spots.index.to_numpy()
+
+        with h5py.File(self.path_file, 'w') as f:
+            if 'indices' not in f.keys():
+                f.create_dataset('indices', data=indices)
+            f.create_dataset('R', data=spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[0]))
+            f.create_dataset('X', data=spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[1]))
+            f.create_dataset('Y', data=spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[2]))
+        met.to_hdf(self.path_file, key='instrument_settings', mode='a')
+
     def write(
             self,
             reader: ReadBrukerMCF,
@@ -173,8 +189,8 @@ class hdf5Handler(ReaderBaseClass):
 
         with h5py.File(self.path_file, 'w') as f:
             # use file name as group name
-            group_name: str = os.path.basename(reader.path_d_folder)
-            f.create_group(group_name)
+            # group_name: str = os.path.basename(reader.path_d_folder)
+            # f.create_group(group_name)
             data_shape: tuple[int, int] = (len(indices), len(mzs))
             dset = f.create_dataset(
                 'intensities',
@@ -202,6 +218,8 @@ class hdf5Handler(ReaderBaseClass):
         self.limits: tuple[float, float] = limits
         self.mzs: np.ndarray[float] = mzs
 
+        self.add_metadata(reader)
+
     def read(
             self,
             indices: Iterable[int] | None = None,
@@ -223,7 +241,7 @@ class hdf5Handler(ReaderBaseClass):
               and M is the number of mz values.
         """
         with (h5py.File(self.path_file, 'r') as f):
-            indices_hpf5 = f['indices'][:]
+            indices_hpf5 = np.asarray(f['indices'])
 
             if indices is None:
                 mask = np.ones_like(self.indices, dtype=bool)
@@ -288,3 +306,17 @@ class hdf5Handler(ReaderBaseClass):
             spectrum = apply_calibration(spectrum, poly_coeffs)
 
         return spectrum
+
+
+if __name__ == '__main__':
+    hdf5_reader = hdf5Handler(
+        r"C:\Users\Yannick Zander\Promotion\Cariaco MSI 2024\490-495cm\2018_08_27 Cariaco 490-495 alkenones.i\2018_08_27 Cariaco 490-495 alkenones.d\Spectra.hdf5"
+    )
+
+    reader = ReadBrukerMCF(
+        r'C:\Users\Yannick Zander\Promotion\Cariaco MSI 2024\490-495cm\2018_08_27 Cariaco 490-495 alkenones.i\2018_08_27 Cariaco 490-495 alkenones.d'
+    )
+
+    hdf5_reader.write(reader=reader)
+
+

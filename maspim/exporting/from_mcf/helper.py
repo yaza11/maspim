@@ -15,6 +15,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def split_spot(spotname: str) -> tuple[int, int, int]:
+    """
+    Extract region, x, and y from spot name
+
+    >>> split_spot('R00X121Y085')
+    (0, 121, 85)
+    """
+    r, xy = spotname.lstrip('R').split('X')
+    x , y = xy.split('Y')
+    return int(r), int(x), int(y)
+
+
 def get_mzs_for_limits(
         limits: Iterable[float | int],
         delta_mz: float | int
@@ -305,8 +317,9 @@ class ReaderBaseClass:
 
     def get_spectrum_resampled_intensities(
             self,
-            index: int,
-            poly_coeffs: np.ndarray[float] | None = None
+            *args,
+            poly_coeffs: np.ndarray[float] | None = None,
+            **kwargs
     ) -> np.ndarray[float]:
         """
         Return the intensities of a resampled (and calibrated) spectrum.
@@ -326,7 +339,7 @@ class ReaderBaseClass:
         """
         assert check_attr(self, 'mzs'), 'need mz values to resample'
 
-        spectrum: Spectrum = self.get_spectrum(index, poly_coeffs=poly_coeffs)
+        spectrum: Spectrum = self.get_spectrum(*args, poly_coeffs=poly_coeffs, **kwargs)
         spectrum.resample(self.mzs)
         return spectrum.intensities
 
@@ -343,7 +356,6 @@ def find_polycalibration_spectrum(
         max_degree: int
 ) -> tuple[np.ndarray[float], int, np.ndarray[bool]]:
     """Find the calibration function for a single spectrum."""
-    # TODO: verify that signs are correct
     # pick peaks
     if calib_snr_threshold > 0:  # only set peaks above the SNR threshold
         peaks: np.ndarray[int] = find_peaks(

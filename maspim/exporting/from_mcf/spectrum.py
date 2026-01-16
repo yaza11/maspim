@@ -510,27 +510,23 @@ class Spectra(Convenience):
         # Determine whether to use calibration functions on spectra
         calibrate: bool = check_attr(self, '_calibration_parameters')
 
-        array_idx: int = self.spectrum_idx2array_idx(index)
-        need_to_shift_index = isinstance(reader, hdf5Handler)
-
         if calibrate:
-            poly_coeffs: np.ndarray = self._calibration_parameters[array_idx, :]
+            poly_coeffs: np.ndarray = self._calibration_parameters[index, :]
         else:
             poly_coeffs: None = None
 
         if only_intensity:
             spectrum: np.ndarray[float] = \
                 reader.get_spectrum_resampled_intensities(
-                    index=array_idx if need_to_shift_index else index,
+                    index=index,
                     poly_coeffs=poly_coeffs
                 )
         else:
             spectrum: Spectrum = reader.get_spectrum(
-                index=array_idx if need_to_shift_index else index,
+                index=index,
                 poly_coeffs=poly_coeffs,
                 **kwargs
             )
-            # fixed missing resample in 1.4.1
             spectrum.resample(self.mzs)
         return spectrum
 
@@ -572,7 +568,7 @@ class Spectra(Convenience):
                 reader=reader, index=index, only_intensity=True
             )
             self.add_spectrum(spectrum)
-            self._tic[i] = np.trapz(spectrum, dx=self.delta_mz)
+            self._tic[i] = np.trapezoid(spectrum, dx=self.delta_mz)
 
         # due to floating point precision?
         self._intensities[self._intensities < 0] = 0
@@ -616,7 +612,7 @@ class Spectra(Convenience):
                 self._mzs += shift * weight
                 spectrum.mzs -= shift * (1 - weight)
             self.add_spectrum(spectrum.intensities)
-            self._tic[it] = np.trapz(spectrum, dx=self.delta_mz)
+            self._tic[it] = np.trapezoid(spectrum, dx=self.delta_mz)
 
         self._intensities[self._intensities < 0] = 0
 
@@ -1069,7 +1065,7 @@ class Spectra(Convenience):
                 smoothing=50 / n_spectra
         ):
             spectrum: np.ndarray[float] = \
-                reader.get_spectrum_resampled_intensities(int(index))
+                reader.get_spectrum_resampled_intensities(index=index)
             ret = calib_spec(spectrum)
             if ret == -1:
                 continue
@@ -2322,14 +2318,14 @@ class Spectra(Convenience):
             )
 
     def spectrum_idx2array_idx(
-            self, spectrum_idx: int | Iterable[int]
+            self, index: int | Iterable[int]
     ) -> int | np.ndarray[int]:
         """
         Convert the 1-based spectrum index to 0-based array index.
 
         Parameters
         ----------
-        spectrum_idx : int | Iterable[int]
+        index : int | Iterable[int]
             Spectrum index or indices to convert (scalar or 1D array-like).
 
         Return
@@ -2337,16 +2333,16 @@ class Spectra(Convenience):
         array_idx : int | np.ndarray[int]
             Indices in array that correspond to the spectrum indices.
         """
-        if hasattr(spectrum_idx, '__iter__'):
-            idxs: list[int] = [np.argwhere(self.indices == idx)[0][0] for idx in spectrum_idx]
+        if hasattr(index, '__iter__'):
+            idxs: list[int] = [np.argwhere(self.indices == idx)[0][0] for idx in index]
             return np.array(idxs)
         else:
-            return np.argwhere(self.indices == spectrum_idx)[0][0]
+            return np.argwhere(self.indices == index)[0][0]
 
     def set_reconstruction_losses(
             self,
             reader: ReadBrukerMCF | hdf5Handler,
-            spectrum_idxs: list[int] | None = None,
+            indices: list[int] | None = None,
     ) -> None:
         """
         Obtain the loss of information for each spectrum from the binning.
@@ -2363,13 +2359,13 @@ class Spectra(Convenience):
         ----------
         reader: ReadBrukerMCF | hdf5Handler
             Reader to use for getting spectra.
-        spectrum_idxs: list[int] | None, optional
+        indices: list[int] | None, optional
             Indices for which to construct the loss. Defaults to all.
         plts: bool, optional
             Whether to plot the reconstructed and original spectra.
         """
-        if spectrum_idxs is None:
-            spectrum_idxs: np.ndarray[int] = self.indices
+        if indices is None:
+            indices: np.ndarray[int] = self.indices
 
         if not check_attr(self, 'losses'):
             self._losses: np.ndarray[float] = np.zeros((self._n_spectra, len(self.mzs)))
@@ -2382,15 +2378,15 @@ class Spectra(Convenience):
         # precompute kernel functions
         kernels: np.ndarray[float] = self._get_kernels(norm_mode='height')
         # loop over spectra
-        for c, spectrum_idx in tqdm(
-                enumerate(spectrum_idxs),
+        for c, index in tqdm(
+                enumerate(indices),
                 total=self._n_spectra,
                 desc='Setting losses'
         ):
             # get index in array corresponding to spectrum index
-            array_idx: int = self.spectrum_idx2array_idx(spectrum_idx)
+            array_idx: int = self.spectrum_idx2array_idx(index)
             spec: np.ndarray[float] = self.get_spectrum(
-                reader=reader, index=spectrum_idx, only_intensity=True
+                reader=reader, index=index, only_intensity=True
             )
 
             Hs: np.ndarray[float] = self.H_from_area(
