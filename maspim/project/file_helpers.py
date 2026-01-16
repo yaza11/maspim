@@ -144,6 +144,24 @@ def search_keys_in_xml(path_mis_file: str, keys: Iterable[str]) -> dict[str, lis
             out_dict[key] = value[0]
     return out_dict
 
+def get_resolution_msi(path_mis_file: str) -> float:
+    """
+    Read the spot resolution from the mis file and return the resolution  in micrometer. Assumes that the resolution
+    in the x and y direction is the same."""
+    distances: str | list[str] = search_keys_in_xml(
+        path_mis_file, ['Raster']
+    )['Raster']
+    if type(distances) is list:
+        distance: str = distances[0]
+        assert all([d == distance for d in distances]), \
+            "found different raster sizes in mis file, cannot handle this"
+    else:
+        distance: str = distances
+    distance_t: list[str] = distance.split(',')
+    assert (d := distance_t[0]) == distance_t[1], \
+        'cant handle grid with different distances in x and y'
+    return float(d)
+
 
 def get_image_file(path_folder: str) -> str:
     try:

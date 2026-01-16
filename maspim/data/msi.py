@@ -8,7 +8,7 @@ import logging
 from maspim.exporting.from_mcf.spectrum import Spectra
 from maspim.data.main import Data
 from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
-from maspim.project.file_helpers import search_keys_in_xml
+from maspim.project.file_helpers import search_keys_in_xml, get_resolution_msi
 from maspim.util.convenience import check_attr
 
 logger = logging.getLogger(__name__)
@@ -110,21 +110,7 @@ class MSI(Data):
             return
 
         logger.info(f"reading pixel distance from {self.path_mis_file}")
-
-        # should be x,x (distance in x, y in um)
-        distances: str | list[str] = search_keys_in_xml(
-            self.path_mis_file, ['Raster']
-        )['Raster']
-        if type(distances) is list:
-            distance: str = distances[0]
-            assert all([d == distance for d in distances]), \
-                "found different raster sizes in mis file, cannot handle this"
-        else:
-            distance: str = distances
-        distance_t: list[str] = distance.split(',')
-        assert (d := distance_t[0]) == distance_t[1], \
-            'cant handle grid with different distances in x and y'
-        self._distance_pixels = float(d)
+        self._distance_pixels = get_resolution_msi(self.path_mis_file)
     
     def inject_feature_table_from(
             self,
