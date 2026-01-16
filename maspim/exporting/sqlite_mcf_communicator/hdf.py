@@ -134,7 +134,7 @@ class hdf5Handler(ReaderBaseClass):
         met = reader.metaData
         indices = spots.index.to_numpy()
 
-        with h5py.File(self.path_file, 'w') as f:
+        with h5py.File(self.path_file, 'a') as f:
             if 'indices' not in f.keys():
                 f.create_dataset('indices', data=indices)
             f.create_dataset('R', data=spots.SpotNumber.apply(lambda spotname: split_spot(spotname)[0]))
