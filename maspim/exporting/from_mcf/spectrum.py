@@ -876,9 +876,10 @@ class Spectra(Convenience):
             calib_snr_threshold: float = 4,
             max_degree: int = 1,
             method: str = 'polynomial',
-            interpolation_method: str = 'previous',
+            interpolation_method: str = 'none',
             min_height: float | int = 10_000,
             nearest: bool = False,
+            show_progress: bool = False,
             **_
     ):
         """
@@ -955,60 +956,6 @@ class Spectra(Convenience):
 
         def calib_spec(_spectrum: np.ndarray[float]) -> int | tuple[np.ndarray[float], int]:
             """Find the calibration function for a single spectrum."""
-            # # pick peaks
-            # if calib_snr_threshold > 0:  # only set peaks above the SNR threshold
-            #     peaks: np.ndarray[int] = find_peaks(
-            #         _spectrum, height=self._noise_level * calib_snr_threshold
-            #     )[0]
-            # else:
-            #     peaks: np.ndarray[int] = find_peaks(_spectrum, height=min_height)[0]
-            # peaks_mzs: np.ndarray[float] = self.mzs[peaks]
-            # peaks_intensities: np.ndarray[float] = self.intensities[peaks]
-            #
-            # # find valid peaks for each calibrant
-            # closest_peak_mzs: list[float] = []
-            # closest_calibrant_mzs: list[float] = []
-            # for jt, calibrant in enumerate(calibrants_mz):
-            #     distances: np.ndarray[float] = np.abs(calibrant - peaks_mzs)  # theory - actual
-            #     if not np.any(distances < search_range):  # no peak with required SNR found inside range
-            #         logger.debug(
-            #             f'found no peak above noise level for {calibrant=} and {index=}'
-            #         )
-            #         calibrator_presences[it, jt] = False
-            #         continue
-            #     # select the highest peak within the search_range
-            #     if nearest:
-            #         closest_peak_mzs.append(peaks_mzs[np.argmin(distances)])
-            #     else:
-            #         peaks_mzs_within_range: np.ndarray[float] = peaks_mzs[distances < search_range]
-            #         peaks_intensities_within_range: np.ndarray[float] = peaks_intensities[distances < search_range]
-            #         closest_peak_mzs.append(peaks_mzs_within_range[np.argmax(peaks_intensities_within_range)])
-            #     closest_calibrant_mzs.append(calibrant)
-            #
-            # # search the coefficients of the polynomial
-            # # need degree + 1 points for nth degree fit
-            # n_calibrants = len(closest_peak_mzs)
-            # if n_calibrants == 0:  # no calibrant found, keep identity
-            #     logger.debug(f'found no calibrant for {index=}')
-            #     return -1
-            # degree: int = min([max_degree, n_calibrants - 1])
-            #
-            # # forbid degree>=2 if the calibrants are far away from the
-            # # beginning and end of the spectrum, set 5Da for now.
-            # if degree > 1:
-            #     assert abs(min(calibrants_mz) - min(peaks_mzs)) <= 5, \
-            #         'calibrants are too far away from the beginning of the spectrum'
-            #     assert abs(max(calibrants_mz) - max(peaks_mzs)) <= 5, \
-            #         'calibrants are too far away from the end of the spectrum'
-            #
-            # # polynomial coefficients
-            # # theory - actual
-            # yvals = [t - a for t, a in zip(closest_calibrant_mzs, closest_peak_mzs)]
-            # p: np.ndarray[float] = np.polyfit(x=closest_peak_mzs, y=yvals, deg=degree)
-            # n_coeffs: int = degree + 1  # number of coefficients in polynomial
-            # # fill coeff matrix
-            # return p, n_coeffs
-
             p, n_coeffs, calibrator_presences_ = find_polycalibration_spectrum(
                 mzs=self.mzs,
                 intensities=_spectrum,
@@ -1070,7 +1017,8 @@ class Spectra(Convenience):
                 enumerate(self.indices),
                 total=n_spectra,
                 desc='Finding calibration parameters',
-                smoothing=50 / n_spectra
+                smoothing=50 / n_spectra,
+                disable=not show_progress
         ):
             spectrum: np.ndarray[float] = \
                 reader.get_spectrum_resampled_intensities(index=index)
@@ -1089,13 +1037,16 @@ class Spectra(Convenience):
         logger.info('\n'.join([f'{k} : {v:.0%}' for k, v in calibrant_matches.items()]))
 
         # interpolate parameters of calibration curve with the specified method
-        if interpolation_method == 'previous':
+        if interpolation_method == 'none':
+            pass
+        elif interpolation_method == 'previous':
             for idx_spectrum in range(n_spectra):
                 if idx_spectrum == 0:
                     continue
                 if calibrator_presences[idx_spectrum, :].any():
                     continue
-                calibrator_presences[idx_spectrum, :] = calibrator_presences[idx_spectrum - 1, :]
+                logger.debug(f'filled calibration parameters of spectrum {idx_spectrum}')
+                calibration_parameters[idx_spectrum, :] = calibration_parameters[idx_spectrum - 1, :]
         else:
             raise KeyError(f'interpolation method {interpolation_method} does not exist.')
 
