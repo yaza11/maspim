@@ -98,11 +98,13 @@ class hdf5Handler(ReaderBaseClass):
         if not os.path.exists(self.path_file):
             return
 
-        keys: list[str] = ['indices', 'mzs']
+        # keys: list[str] = ['indices', 'mzs']
         with h5py.File(self.path_file, 'r') as f:
-            for key in keys:
-                if key in f:
-                    self.__dict__[key] = f[key][:]
+            # for key in keys:
+            #     if key in f:
+            #         self.__dict__[key] = f[key][:]
+            self.mzs = np.asarray(f['mzs'])
+            self.indices = np.asarray(f['indices'])
             if (key := 'limits') in f.attrs:
                 self.limits = f.attrs[key]
 
