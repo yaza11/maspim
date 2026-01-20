@@ -476,6 +476,7 @@ class Spectra(Convenience):
             reader: ReadBrukerMCF | hdf5Handler,
             index: int | str,
             only_intensity: bool,
+            calibrate: bool = None,
             **kwargs: Any
     ) -> np.ndarray[float] | Spectrum:
         """
@@ -508,7 +509,8 @@ class Spectra(Convenience):
         index: int = int(index)
 
         # Determine whether to use calibration functions on spectra
-        calibrate: bool = check_attr(self, '_calibration_parameters')
+        if calibrate is None:
+            calibrate: bool = check_attr(self, '_calibration_parameters')
 
         if calibrate:
             poly_coeffs: np.ndarray = self._calibration_parameters[index, :]
