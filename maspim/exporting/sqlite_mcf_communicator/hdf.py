@@ -154,7 +154,8 @@ class hdf5Handler(ReaderBaseClass):
             self,
             reader: ReadBrukerMCF,
             mzs: np.ndarray[float] | None = None,
-            delta_mz=1e-4
+            delta_mz=1e-4,
+            show_progress: bool = False,
     ) -> None:
         """
         Using the ReadBrukerMCF reader, write an hdf5 file.
@@ -211,7 +212,8 @@ class hdf5Handler(ReaderBaseClass):
                     enumerate(indices),
                     total=N,
                     desc='Writing to hdf5',
-                    smoothing=50/N
+                    smoothing=50/N,
+                    disable=not show_progress
             ):
                 spec: Spectrum = reader.get_spectrum(idx)
                 spec.resample(mzs)

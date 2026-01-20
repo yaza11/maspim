@@ -532,7 +532,8 @@ class Spectra(Convenience):
 
     def add_all_spectra(
             self,
-            reader: ReadBrukerMCF | hdf5Handler
+            reader: ReadBrukerMCF | hdf5Handler,
+            show_progress: bool = False
     ) -> None:
         """
         Add up all spectra found in the mcf file.
@@ -562,7 +563,8 @@ class Spectra(Convenience):
                 enumerate(self.indices),
                 desc='Adding spectra',
                 smoothing=50 / self._n_spectra,
-                total=self._n_spectra
+                total=self._n_spectra,
+                disable=not show_progress
         ):
             spectrum: np.ndarray[float] = self.get_spectrum(
                 reader=reader, index=index, only_intensity=True
@@ -577,7 +579,8 @@ class Spectra(Convenience):
 
     def add_all_spectra_aligned(
             self,
-            reader: ReadBrukerMCF | hdf5Handler
+            reader: ReadBrukerMCF | hdf5Handler,
+            show_progress: bool = False
     ) -> None:
         """
         Add all spectra together but insert an alignment step based on the
@@ -600,7 +603,8 @@ class Spectra(Convenience):
                 enumerate(self.indices),
                 desc='Adding aligned spectra',
                 smoothing=50 / self._n_spectra,
-                total=self._n_spectra
+                total=self._n_spectra,
+                disable=not show_progress
         ):
             spectrum: np.ndarray[float] = self.get_spectrum(
                 reader=reader, index=index, only_intensity=False
