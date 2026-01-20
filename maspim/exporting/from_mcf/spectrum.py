@@ -876,6 +876,7 @@ class Spectra(Convenience):
             calib_snr_threshold: float = 4,
             max_degree: int = 1,
             method: str = 'polynomial',
+            interpolation_method: str = 'previous',
             min_height: float | int = 10_000,
             nearest: bool = False,
             **_
@@ -884,7 +885,7 @@ class Spectra(Convenience):
         Calibrate spectra using calibrants by fitting a polynomial of degree
         max_degree or less.
 
-        This algorithm matches the cloesest peak fulfilling the criteria (search
+        This algorithm matches the closest peak fulfilling the criteria (search
         range and calib_snr_threshold or min_height) to the theoretical masses.
         A polynomial of at most degree max_degree is fitted to the differences
         from the closest peak to theoretical masses. If not enough peaks are found,
@@ -914,6 +915,9 @@ class Spectra(Convenience):
             The type of calibration function to use. 'polynomial' will fit a
             polynomial of max_degree or number of found calibrants to the
             spectrum.
+        interpolation_method: str, optional
+            The type of interpolation method to use for finding calibrations for spectra in which no calibrants were
+            found. 'previous' will start with the first spectrum and fill consecutive values from the proceeding ones.
         min_height: float | int, optional
             Minimum intensity required. The default is 10_000. Only used, if
             calib_snr_threshold is not provided.
@@ -1084,6 +1088,17 @@ class Spectra(Convenience):
         logger.info('done calibrating spectra, found calibrants in the following abundances:')
         logger.info('\n'.join([f'{k} : {v:.0%}' for k, v in calibrant_matches.items()]))
 
+        # interpolate parameters of calibration curve with the specified method
+        if interpolation_method == 'previous':
+            for idx_spectrum in range(n_spectra):
+                if idx_spectrum == 0:
+                    continue
+                if calibrator_presences[idx_spectrum, :].any():
+                    continue
+                calibrator_presences[idx_spectrum, :] = calibrator_presences[idx_spectrum - 1, :]
+        else:
+            raise KeyError(f'interpolation method {interpolation_method} does not exist.')
+
         self._calibration_parameters = calibration_parameters
 
         self._calibration_settings: dict[str, Any] = {
@@ -1091,7 +1106,8 @@ class Spectra(Convenience):
             'search_range': search_range,
             'calib_snr_threshold': calib_snr_threshold,
             'max_degree': max_degree,
-            'presences calibrants': calibrant_matches
+            'presences calibrants': calibrant_matches,
+            'interpolation_method': interpolation_method,
         }
 
     def require_calibration_functions(
