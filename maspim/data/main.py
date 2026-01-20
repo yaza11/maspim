@@ -931,6 +931,7 @@ class Data(DataBaseClass, Convenience):
             exclude_zeros: bool = False,
             correct_zeros: bool = False,
             calc_std: bool = False,
+            show_progress: bool = False,
             **_
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | pd.DataFrame:
         """
@@ -1023,7 +1024,8 @@ class Data(DataBaseClass, Convenience):
         for idx, zone in tqdm(
                 enumerate(zones),
                 total=n_zones,
-                desc='averaging values for zones'
+                desc='averaging values for zones',
+                disable=not show_progress
         ):
             # average of each component in that zone
             # pixel mask: where entry in zones_key matches key
