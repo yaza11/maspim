@@ -296,7 +296,7 @@ def apply_calibration(
         spectrum = spectrum.copy()
 
     # apply the transformation to the mzs of the spectrum
-    spectrum.mzs += f(spectrum.mzs)
+    spectrum.mzs = spectrum.mzs + f(spectrum.mzs)  # do not use += here since mzs may be referenced, so we want to create a copy here
     return spectrum
 
 
