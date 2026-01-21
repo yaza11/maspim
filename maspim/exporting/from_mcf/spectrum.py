@@ -2255,7 +2255,7 @@ class Spectra(Convenience):
         Notes
         -----
         Theory:
-            \int_{-infty}^{infty} H \exp(- (x - x_c)^2 / (2 sigma)^2)dx
+            int_{-infty}^{infty} H exp(- (x - x_c)^2 / (2 sigma)^2)dx
                = sqrt(2 pi) H sigma
             => A = H sqrt(pi / 2) (sigma_l + sigma_r)
             <=> H = sqrt(2 / pi) * A* 1 / (sigma_l + sigma_r)
