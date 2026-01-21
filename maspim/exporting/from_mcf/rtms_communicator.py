@@ -195,7 +195,7 @@ class ReadBrukerMCF(ReaderBaseClass):
             return
         # check for a few spectra if they all have the same mzs
         # so far, this has always been the case
-        for i in np.random.choice(self.indices, 100, replace=False):
+        for i in np.random.choice(self.indices, min(100, self.indices.shape[0]), replace=False):
             assert np.allclose(self.reader.get_spectrum(i)[:, 0], self.mzs), \
                 ("Encountered spectra with non-equally sampled mz values. "
                  "This is unsupported behavior. Please contact the developers")
