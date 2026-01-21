@@ -2717,7 +2717,7 @@ class Spectra(Convenience):
 
         # Plot the functions on each axis
         # normalized to total intensity of spectrum
-        spectra_wise_loss = np.trapz(self._losses, dx=self.delta_mz, axis=1)
+        spectra_wise_loss = np.trapezoid(self._losses, dx=self.delta_mz, axis=1)
         # average loss at masses, normalized to average intensity
         mass_wise_loss = np.nanmedian(self._losses, axis=0)
 

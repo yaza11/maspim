@@ -453,7 +453,7 @@ def plt_gabor(width):
     plt.vlines([-width / 2, width / 2], osz.min(), osz.max(), 'k')
     plt.show()
 
-    print(np.trapz(osz * gauss, x))
+    print(np.trapezoid(osz * gauss, x))
 
 
 def plt_gabor_overview():
