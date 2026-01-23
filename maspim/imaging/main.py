@@ -3093,7 +3093,7 @@ use_age_model, not {height0_mode}')
         self.reduce_laminae(**kwargs)
 
     def require_laminae_params_table(self, **kwargs):
-        if (self.params_laminae_simplified is not None) and ('homogeneity' not in self.params_laminae_simplified):
+        if (self.params_laminae_simplified is not None) and ('homogeneity' not in self.params_laminae_simplified.columns):
             self.set_quality_score(plts=kwargs.get('plts', False))
         if self.params_laminae_simplified is None:
             self.set_laminae_params_table(**kwargs)

@@ -1183,7 +1183,7 @@ class ProjectBaseClass:
         if not check_attr(self, '_image_classified'):
             self.require_image_classified(full=False)
 
-        self.image_classified.set_corrected_image(**kwargs)
+        self.image_classified.set_corrected_images(**kwargs)
         self._update_files()
 
     def require_tilt_corrector(self, overwrite=False, **kwargs) -> Mapper:
@@ -1526,10 +1526,10 @@ class ProjectBaseClass:
 
         # insert into feature table
         self.data_object.add_attribute_from_image(
-            XT, 'x_ROI_T', fill_value=np.nan
+            image=XT, column_name='x_ROI_T', fill_value=np.nan
         )
         self.data_object.add_attribute_from_image(
-            YT, 'y_ROI_T', fill_value=np.nan
+            image=YT, column_name='y_ROI_T', fill_value=np.nan
         )
 
         # fit feature table
@@ -1615,14 +1615,16 @@ class ProjectBaseClass:
         # scale x_ROI, y_ROI in feature table in order for
         # add_attribute_from_image to work correctly. Columns will be scaled
         # back in the end
-        # avoid pandas complaining about dtypes
         ft = self.data_object.feature_table
-        ft.loc[:, 'x_ROI'] = ft.loc[:, 'x_ROI'].astype(float) * rescale_x
-        ft.loc[:, 'y_ROI'] = ft.loc[:, 'y_ROI'].astype(float) * rescale_y
+        x_ROI_original = ft.loc[:, 'x_ROI'].copy()
+        y_ROI_original = ft.loc[:, 'y_ROI'].copy()
+        # do not use loc to for explicit type conversions (will raise warning otherwise)
+        ft['x_ROI'] = ft.loc[:, 'x_ROI'].astype(float) * rescale_x
+        ft['y_ROI'] = ft.loc[:, 'y_ROI'].astype(float) * rescale_y
 
         # rescale points
-        x_roi_ft: pd.Series = self.data_object.feature_table.x_ROI
-        y_roi_ft: pd.Series = self.data_object.feature_table.y_ROI
+        x_roi_ft: pd.Series = ft.x_ROI
+        y_roi_ft: pd.Series = ft.y_ROI
         points: np.ndarray[float] = np.c_[x_roi_ft, y_roi_ft]
 
         # roi area in terms of target image coordinates
@@ -1721,13 +1723,16 @@ class ProjectBaseClass:
             self.data_object.add_attribute_from_image(
                 image=warped_image, column_name=comp
             )
-        # scale ROI coordinates back
-        self.data_object.feature_table.loc[:, 'x_ROI'] = np.around(
-            self.data_object.feature_table.loc[:, 'x_ROI'] / rescale_x
-        ).astype(int)
-        self.data_object.feature_table.loc[:, 'y_ROI'] = np.around(
-            self.data_object.feature_table.loc[:, 'y_ROI'] / rescale_y
-        ).astype(int)
+
+        self.data_object.feature_table.loc[:, 'x_ROI'] = x_ROI_original
+        self.data_object.feature_table.loc[:, 'y_ROI'] = y_ROI_original
+        # TODO: calculate corresponding coordinates of target ROI
+        # this is achieved by first transforming the x_ROI and y_ROI according to the ROI and then applying the warping
+        # above, we already found the scalings, but we also need the shifts
+        ...
+
+        # self.data_object.feature_table.loc[:, 'x_ROI_other'] = ...
+        # self.data_object.feature_table.loc[:, 'y_ROI_other'] = ...
 
     @property
     def corrected_tilt(self) -> bool:
@@ -2385,8 +2390,8 @@ class ProjectBaseClass:
             other: Self,
             self_tilt_correction: bool,
             other_tilt_correction: bool,
-            mapping_method: list[str] | None = None,
-            mapping_method_kwargs: list[dict] | None = None,
+            mapping_method: list[str] = None,
+            mapping_method_kwargs: list[dict] = None,
             plts: bool = False,
             **kwargs
     ) -> None:
@@ -3391,7 +3396,7 @@ class ProjectMSI(ProjectBaseClass):
         else:
             logger.info('Continuing processing of spectra object')
         self.set_spectra(
-            spectra=self._spectra,  # continue from loaded spectra or None
+            spectra=None if overwrite else self._spectra,  # continue from loaded spectra or None
             tag=tag,
             **kwargs
         )
