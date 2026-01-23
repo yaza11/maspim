@@ -2663,7 +2663,7 @@ class Spectra(Convenience):
             poly_coeffs: np.ndarray = self._calibration_parameters[array_idx, :]
             f: Callable = np.poly1d(poly_coeffs)
             cal_vals: np.ndarray[float] = f(self.mzs)
-            ax_l.plot(self.mzs, self.noise_level)
+            ax_l.plot(self.mzs, self.noise_level * self._calibration_settings['calib_snr_threshold'])
             ax_l.plot(spec_o.mzs, spec_o.intensities)
             ax_l.plot(spec_c.mzs, spec_c.intensities)
             ax_l.vlines(calibrants_mz, 0, spec_o.intensities.max(), colors='k', linestyles='--')
@@ -2671,7 +2671,7 @@ class Spectra(Convenience):
             ax_r.plot(self.mzs, cal_vals * 1e3)
         ax_l.set_xlabel('m/z in Da')
         ax_r.set_xlabel('m/z in Da')
-        ax_l.legend(['noise lvl', 'original', 'calibrated', 'calibrants', 'verification'])
+        ax_l.legend(['SNR threshold', 'original', 'calibrated', 'calibrants', 'verification'])
         ax_r.legend(['shift in mDa'])
 
         fig.tight_layout()
