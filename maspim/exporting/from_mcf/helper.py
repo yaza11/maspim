@@ -245,7 +245,8 @@ class Spectrum:
                     'passed delta_mz must either be float or list of equally spaced mzs'
             mzs_ip = delta_mz
         # already same mzs, nothing todo
-        if (len(self.mzs) == len(mzs_ip)) and np.allclose(self.mzs, mzs_ip):
+        # need to set tolerances for allcose manually, defaults are not good enough
+        if (len(self.mzs) == len(mzs_ip)) and np.allclose(self.mzs, mzs_ip, atol=1e-6, rtol=1e-12):
             return
         # interpolate to regular spaced mz values
         ints_ip = np.interp(mzs_ip, self.mzs, self.intensities)
