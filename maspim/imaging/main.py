@@ -1814,21 +1814,21 @@ class ImageClassified(Image):
     >>> ic.plot_overview()
     """
 
-    _image_classification: np.ndarray | None = None
-    _image_classification_corrected: np.ndarray | None = None
-    _image_corrected: np.ndarray | None = None
+    _image_classification: np.ndarray = None
+    _image_classification_corrected: np.ndarray = None
+    _image_corrected: np.ndarray = None
 
-    _seeds_light: np.ndarray[int] | None = None
-    _seeds_dark: np.ndarray[int] | None = None
-    _width_light: np.ndarray[float] | None = None
-    _width_dark: np.ndarray[float] | None = None
-    _prominences_light: np.ndarray[float] | None = None
-    _prominences_dark: np.ndarray[float] | None = None
+    _seeds_light: np.ndarray[int] = None
+    _seeds_dark: np.ndarray[int] = None
+    _width_light: np.ndarray[float] = None
+    _width_dark: np.ndarray[float] = None
+    _prominences_light: np.ndarray[float] = None
+    _prominences_dark: np.ndarray[float] = None
 
-    _qualities: np.ndarray[float] | None = None
+    _qualities: np.ndarray[float] = None
 
-    image_seeds: np.ndarray[int] | None = None
-    params_laminae_simplified: pd.DataFrame | None = None
+    image_seeds: np.ndarray[int] = None
+    params_laminae_simplified: pd.DataFrame = None
 
     _save_attrs: set[str] = {
         'age_span',
@@ -1846,15 +1846,15 @@ class ImageClassified(Image):
 
     def __init__(
             self,
-            obj_color: str | None = None,
-            path_folder: str | None = None,
-            image: np.ndarray[float | int] | None = None,
-            mask_foreground: np.ndarray | None = None,
+            obj_color: Literal['light', 'dark'] = None,
+            path_folder: str = None,
+            image: np.ndarray[float | int] = None,
+            mask_foreground: np.ndarray = None,
             has_no_holes: bool = False,
-            image_classification: np.ndarray[int] | None = None,
+            image_classification: np.ndarray[int] = None,
             image_type: str = 'cv',
-            path_image_file: str | None = None,
-            age_span: tuple[float | int, float | int] | None = None,
+            path_image_file: str = None,
+            age_span: tuple[float | int, float | int] = None,
             use_tilt_correction: bool = True,
             **_
     ):
@@ -1989,9 +1989,10 @@ class ImageClassified(Image):
         return av
 
     def _set_corrected_using_mapper(self, mapper: Mapper) -> None:
+        """Set the tilt corrected images using a transformation object."""
         self._image_corrected: np.ndarray = mapper.fit(
             self._image, preserve_range=True)
-        ic_corrected: np.ndarray = mapper.fit(
+        ic_corrected: np.ndarray[int] = mapper.fit(
             self._image_classification, preserve_range=True
         )
         # restore original values
@@ -2006,7 +2007,8 @@ class ImageClassified(Image):
             **kwargs
     ) -> Descriptor:
         """
-
+        Get a descriptor object that is initialized with a downscaled image. Descriptor objects are used to find
+        the tilt correction.
 
         Parameters
         ----------
@@ -2047,9 +2049,9 @@ class ImageClassified(Image):
 
         return descriptor
 
-    def set_corrected_image(
+    def set_corrected_images(
             self,
-            descriptor: Descriptor | None = None,
+            descriptor: Descriptor = None,
             plts: bool = False,
             **kwargs
     ) -> None:
@@ -2103,6 +2105,9 @@ class ImageClassified(Image):
     def require_corrected_images(
             self, overwrite: bool = False, **kwargs
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Return tilt corrected RGB and classified image. This method will return existing tilt corrected images if
+        attempt to load a mapping, if it exists already or create a new mapping if necessary."""
+
         # return an existing corrected image
         if check_attr(self, '_image_corrected') and (not overwrite):
             return (
@@ -2122,7 +2127,7 @@ class ImageClassified(Image):
             )
 
         # nothing found, create a new mapping
-        self.set_corrected_image(**kwargs)
+        self.set_corrected_images(**kwargs)
         return (
             self._image_corrected.copy(),
             self._image_classification_corrected.copy()
@@ -2138,7 +2143,11 @@ class ImageClassified(Image):
 
     @property
     def image(self) -> np.ndarray:
-        return self.image_corrected if self.use_tilt_correction else self._image
+        return self.image_corrected if self.use_tilt_correction else self.image_uncorrected
+
+    @property
+    def image_classification_uncorrected(self) -> np.ndarray:
+        return self._image_classification
 
     @property
     def image_classification_corrected(self) -> np.ndarray:
@@ -2149,7 +2158,7 @@ class ImageClassified(Image):
         return (
             self.image_classification_corrected
             if self.use_tilt_correction
-            else self._image_classification.copy()
+            else self.image_classification_uncorrected
         )
 
     def set_seeds(
@@ -2938,6 +2947,8 @@ use_age_model, not {height0_mode}')
 
     def plot_quality(self, take_abs=True, hold=False, fig=None, ax=None):
         """Plot quality criteria."""
+        assert self.params_laminae_simplified is not None, 'call set_params_laminae_simplified first'
+
         params = self.params_laminae_simplified
         height_img, width_img = self.image_grayscale.shape
         # overview plot
@@ -3066,7 +3077,10 @@ use_age_model, not {height0_mode}')
         # set seeds with their prominences
         logger.info("setting seeds")
         self.set_seeds(**kwargs)
-        self.reduce_to_n_factor_seeds(kwargs.pop('factor_above_age_span', None))
+        if self.age_span is not None:
+            self.reduce_to_n_factor_seeds(kwargs.pop('factor_above_age_span', None))
+        else:
+            logger.warning('Age span not set, cannot rude seeds')
         # initiate params dataframe with seeds and params for distorted rects
         logger.info("finding distorted rects")
         self.set_params_laminae_simplified(**kwargs)
@@ -3077,3 +3091,10 @@ use_age_model, not {height0_mode}')
         self.set_quality_score(**kwargs)
         self.filter_bad_laminae(**kwargs)
         self.reduce_laminae(**kwargs)
+
+    def require_laminae_params_table(self, **kwargs):
+        if (self.params_laminae_simplified is not None) and ('homogeneity' not in self.params_laminae_simplified):
+            self.set_quality_score(plts=kwargs.get('plts', False))
+        if self.params_laminae_simplified is None:
+            self.set_laminae_params_table(**kwargs)
+        return self.params_laminae_simplified
