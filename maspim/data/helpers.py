@@ -9,14 +9,62 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from skimage.transform import warp
 from scipy.interpolate import LinearNDInterpolator, griddata
-from typing import Iterable
+from typing import Iterable, Literal
 from tqdm import tqdm
 
 from maspim.imaging.util.coordinate_transformations import rescale_values
+from maspim.project.helpers import get_mask_convex_hull_points
 from maspim.res.constants import elements
 from maspim.util.function_args import get_arg_names_of_func
 
 logger = logging.getLogger(__name__)
+
+
+def get_grid_for_image_sample(image_sample_shape):
+    return np.meshgrid(np.arange(image_sample_shape[1]), np.arange(image_sample_shape[0]))
+
+
+def sample_area_conform_image_from_dataframe(
+        values,
+        xs_ROI,
+        ys_ROI,
+        image_sample_shape: tuple[int, int],
+        interpolation_method: Literal['nearest', 'linear', 'cubic', 'auto'] = 'auto',
+        sparsity_threshold: float = 0.5,
+        fill_value=0,
+        grid_xy=None,
+        mask_convhull_data=None
+):
+    """
+    Using the extent of the sample area, interpolate (and extrapolate) data points to match the resolution and
+    extent of the sample area. Pixels corresponding to data points outside the convex hull of the point cloud will
+    be set to the fillvalue.
+    """
+    assert (sparsity_threshold >= 0) and (sparsity_threshold <= 1), \
+        'sparsity threshold must be between 0 and 1'
+
+    # x_ROI and y_ROI are relative to the detected sample area
+    points_data_source = np.c_[xs_ROI, ys_ROI]
+
+    if interpolation_method == 'auto':
+        # determine which method to use. For sparsely populated ion images prefer 'nearest', otherwise 'linear'
+        interpolation_method = 'linear' if np.mean(values) > sparsity_threshold else 'nearest'
+
+    # grid points for pixel coordinates in the sample area ROI
+    if grid_xy is None:
+        grid_xy = get_grid_for_image_sample(image_sample_shape)
+
+    if mask_convhull_data is None:
+        mask_convhull_data = get_mask_convex_hull_points(image_sample_shape, points_data_source)
+
+    interpolated = griddata(
+        points_data_source, values,
+        grid_xy,
+        method=interpolation_method,
+        fill_value=fill_value
+    )
+    interpolated[~mask_convhull_data] = fill_value
+    return interpolated
 
 
 def get_comp_as_img(
@@ -132,7 +180,6 @@ def clip_image(
     return image_clipped, vmin, vmax
 
 
-
 def plot_comp_on_image(
         comp: str | float | int,
         background_image: np.ndarray,
@@ -145,6 +192,7 @@ def plot_comp_on_image(
         cmap='inferno',
         **kwargs
 ):
+    # TODO: call get_comp_as_image instead
     assert 'x_ROI' in data_frame.columns
     assert 'y_ROI' in data_frame.columns
 
@@ -220,7 +268,7 @@ def plot_comp(
         SNR_scale: bool = False,
         N_labels: int = 5,
         tick_precision: int = 0,
-        distance_pixels = None,
+        distance_pixels=None,
         hold: bool = False,
         fig: plt.Figure | None = None,
         ax: plt.Axes | None = None,
@@ -306,12 +354,12 @@ def plot_comp(
 
     # chose the y or x axis, depending on ticks_on_longer_axis
     tick_axis: int = (np.argmax(img_clipped.shape)
-                 if ticks_on_longer_axis
-                 else np.argmin(img_clipped.shape))
+                      if ticks_on_longer_axis
+                      else np.argmin(img_clipped.shape))
     tick_axis: str = ['y', 'x'][tick_axis]
 
     kwargs_imshow = {k: v for k, v in kwargs.items() if k in keys_imshow}
-    print(f"{kwargs_imshow=}")
+    # print(f"{kwargs_imshow=}")
 
     im = ax.imshow(
         img_clipped,
@@ -398,7 +446,7 @@ def plot_comp(
         tick_labels_cbar[0] = r'$\leq$' + tick_labels_cbar[0]
     if vmax < np.nanmax(img_mz):
         tick_labels_cbar[-1] = r'$\geq$' + tick_labels_cbar[-1]
-    print(f'{tick_labels_cbar=}')
+    # print(f'{tick_labels_cbar=}')
 
     if colorbar:
         divider = make_axes_locatable(ax)
@@ -524,15 +572,16 @@ def transform_feature_table(
     After applying the transformation, x_ROI_T and y_ROI_T will not be in the
     feature table.
     """
+
     def get_comp_as_arr(comp: str | float | int) -> np.ndarray:
         return df.pivot(index='y_ROI', columns='x_ROI', values=comp).to_numpy()
 
     assert 'x_ROI' in df.columns
     assert 'y_ROI' in df.columns
     assert (
-        (('x_ROI_T' in df.columns) and ('y_ROI_T' in df.columns)) or
-        (p_ROI_T is not None) or
-        ((x_ROI_T is not None) and (y_ROI_T is not None))
+            (('x_ROI_T' in df.columns) and ('y_ROI_T' in df.columns)) or
+            (p_ROI_T is not None) or
+            ((x_ROI_T is not None) and (y_ROI_T is not None))
     ), 'If x_ROI_T and y_ROI_T are not in the df, you must specify them directly'
 
     # get x_ROI_T, y_ROI_T
@@ -588,7 +637,3 @@ def transform_feature_table(
     df_new.loc[:, 'y_ROI'] = Y.ravel()
     mask_nan = np.isnan(df_new.x_ROI) | np.isnan(df_new.y_ROI)
     return df_new.loc[~mask_nan, :]
-
-
-
-
