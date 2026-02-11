@@ -169,7 +169,7 @@ class Descriptor:
     def __init__(
             self,
             image: np.ndarray,
-            mask: np.ndarray | None = None,
+            mask: np.ndarray = None,
             use_mask: bool = False,
             n_angles: int = 32,
             n_sizes: int = 8,
@@ -177,7 +177,7 @@ class Descriptor:
             n_periods: int = 1,
             min_period: int | float = None,
             max_period: int | float = None,
-            min_angle: float = 0,
+            min_angle: float = -np.pi,
             max_angle: float = np.pi,
             kernel_type: str = 'rect',
             **_
@@ -326,22 +326,22 @@ class Descriptor:
     @cached_property
     def image_processed(self) -> np.ndarray[float]:
         """
-        Preprocess image to be between -1 and 1 and set background pixels to 0.
+        Preprocess image to be between -1 and 1 and set background pixels to the mean of the image.
         """
         # single channel
         image: np.ndarray = ensure_image_is_gray(self.image)
         foreground: np.ndarray[bool] = self.mask
         image: np.ndarray[float] = image.astype(float)
         # shift to min = 0
-        image -= image[foreground].min()
+        image[foreground] -= image[foreground].min()
         # equalize
         # image *= 255 / image[foreground].max()
         # image = image.astype(np.uint8)
         # image = skimage.exposure.equalize_hist(image, mask=self.mask).astype(float)
         # set max to 2
-        image *= 2 / image.max()
+        image[foreground] *= 2 / image[foreground].max()
         # range -1 to 1
-        image -= 1
+        image[foreground] -= 1
         image[~foreground] = image[foreground].mean()
         # image *= self._get_taper()
         return image
