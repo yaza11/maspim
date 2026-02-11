@@ -684,7 +684,6 @@ class Spectra(Convenience):
             )
         elif window_size == 0:  # subtract minimum
             base_lvl: float = self.intensities.min()
-            self._intensities -= base_lvl
             self._noise_level: np.ndarray[float] = np.full_like(
                 self.intensities, base_lvl / n_spectra
             )
