@@ -2003,6 +2003,8 @@ class ImageClassified(Image):
 
     def get_descriptor(
             self,
+            image=None,
+            mask=None,
             nx_pixels_downscaled: int = 500,
             **kwargs
     ) -> Descriptor:
@@ -2024,25 +2026,39 @@ class ImageClassified(Image):
         -------
 
         """
+        if image is None:
+            image = self.image_uncorrected
+        else:
+            assert image.shape[:2] == self.image_uncorrected.shape[:2], \
+                (f'provided image should have the same shape as reference image '
+                 f'({self.image_uncorrected.shape[:2]}) but got {image.shape[:2]}.')
+
+        if mask is None:
+            mask = self.mask_foreground
+        else:
+            assert mask.shape == image.shape[:2]
+
         # downscaled image has at most nx_pixels_downscaled pixels in x-direction
         downscale_factor: float = min((
-            nx_pixels_downscaled / self._image.shape[1],
+            nx_pixels_downscaled / image.shape[1],
             1
         ))
         downscaled_shape = (
-            round(self._image.shape[0] * downscale_factor),
-            round(self._image.shape[1] * downscale_factor)
+            round(image.shape[0] * downscale_factor),
+            round(image.shape[1] * downscale_factor)
         )
         image_downscaled: np.ndarray = skimage.transform.resize(
-            self._image, downscaled_shape
+            image, downscaled_shape
         )
+
+        mask_downscaled: np.ndarray = skimage.transform.resize(mask, downscaled_shape, preserve_range=True) > .5
 
         logger.info(
             f'initializing descriptor with image of shape '
-            f'{image_downscaled.shape} (instead of {self._image.shape})'
+            f'{image_downscaled.shape} (instead of {image.shape})'
         )
         # TODO: set max_size and min_size from age model, if available
-        descriptor = Descriptor(image=image_downscaled, **kwargs)
+        descriptor = Descriptor(image=image_downscaled, mask=mask_downscaled, **kwargs)
 
         descriptor.set_conv()
         descriptor.fit(**kwargs)
@@ -3069,7 +3085,6 @@ use_age_model, not {height0_mode}')
 
         if hold:
             return fig, axs
-
         plt.show()
 
     def set_laminae_params_table(self, **kwargs):
@@ -3092,9 +3107,9 @@ use_age_model, not {height0_mode}')
         self.filter_bad_laminae(**kwargs)
         self.reduce_laminae(**kwargs)
 
-    def require_laminae_params_table(self, **kwargs):
+    def require_laminae_params_table(self, overwrite=False, **kwargs):
         if (self.params_laminae_simplified is not None) and ('homogeneity' not in self.params_laminae_simplified.columns):
             self.set_quality_score(plts=kwargs.get('plts', False))
-        if self.params_laminae_simplified is None:
+        if overwrite or (self.params_laminae_simplified is None):
             self.set_laminae_params_table(**kwargs)
         return self.params_laminae_simplified
