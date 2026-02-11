@@ -8,7 +8,7 @@ import logging
 import skimage.registration
 
 from scipy.optimize import basinhopping
-from typing import Callable, Any, Iterable, Sequence
+from typing import Callable, Any, Iterable, Sequence, Literal
 from skimage.transform import warp, PiecewiseAffineTransform
 
 from maspim.imaging.main import ImageSample, ImageROI
@@ -17,6 +17,7 @@ from maspim.imaging.register.helpers import apply_displacement, Mapper
 from maspim.imaging.register.descriptor import Descriptor
 from maspim.imaging.util.coordinate_transformations import (
     kartesian_to_polar, polar_to_kartesian, rescale_values)
+from maspim.imaging.util.image_helpers import get_center_strip_from_img
 from maspim.imaging.util.image_plotting import plt_contours, plt_cv2_image
 from maspim.res.constants import key_light_pixels, key_dark_pixels, key_hole_pixels
 from maspim.util.convenience import check_attr
@@ -222,7 +223,8 @@ def find_stretching_function_basin(
         horizon_target: np.ndarray,
         x00: Iterable | None = None,
         deg: int | None = None,
-        return_steps: bool = False
+        return_steps: bool = False,
+        eval_func: Literal['corr', 'area'] = 'area',
 ) -> dict[str, Any] | tuple[dict[str, Any], list]:
     """
     Find the stretching function for two horizons by optimizing.
@@ -257,7 +259,7 @@ def find_stretching_function_basin(
         vecm = vec - np.mean(vec)
         return target_scaled @ vecm / np.sqrt(np.sum(vecm ** 2))
 
-    def evaluate_fit_pad(x0: Iterable) -> float:
+    def evaluate_fit_corr(x0: Iterable) -> float:
         """Calculate error (negative correlation) between target and object."""
         x0s.append(x0)
 
@@ -280,11 +282,22 @@ def find_stretching_function_basin(
     assert (x00 is not None) or (deg is not None), \
         'provide either start values "x00" or the degree of the polynomial "deg"'
 
+    assert ~(np.isnan(horizon_source).any()), 'source must not contain NaNs'
+    assert ~(np.isnan(horizon_target).any()), 'source must not contain NaNs'
+
+    if eval_func == 'area':
+        eval_func = evaluate_fit_area
+    elif eval_func == 'corr':
+        eval_func = evaluate_fit_corr
+    else:
+        raise ValueError('eval_func must be "area" or "corr"')
+
     x0s = []
 
     if x00 is None:
         x00: np.ndarray[float] = np.zeros(deg)
-        x00[-2] = 1
+        if deg >= 1:
+            x00[-2] = 1  # y = x
 
     # scaling to mean 0 and var 1
     # therefore this has to be calculated only once
@@ -292,11 +305,11 @@ def find_stretching_function_basin(
         (horizon_target - horizon_target.mean()).T
         / np.sqrt(np.sum((horizon_target - horizon_target.mean()) ** 2))
     )
-    err00: float = evaluate_fit_pad(x00)
+    err00: float = eval_func(x00)
     logger.info(f'starting optimization with loss {err00:.3f}')
     params = basinhopping(
         # evaluate_fit_pad,
-        evaluate_fit_area,
+        eval_func,
         x0=x00,
         # stepsize=.05,
         disp=False,
@@ -307,7 +320,7 @@ def find_stretching_function_basin(
 
     # get params
     x = params.x
-    err: float = evaluate_fit_pad(x)
+    err: float = eval_func(x)
     logger.info(f'finished with correlation of {-err} and params {x=}')
     ret = {'x': x, 'err': err, 'err00': err00, 'method': 'basin_hopping'}
 
@@ -859,6 +872,8 @@ class Transformation:
             self,
             plts: bool = False,
             degree: int = 5,
+            use_classified: bool = True,
+            stripwidth: float = .2,
             **kwargs
     ) -> None:
         """
@@ -875,18 +890,23 @@ class Transformation:
             Default is False.
         degree: int, optional
             Degree of the stretching function. The default is 5.
+        stripwidth: float in (0, 1].
+            width portion of the image to use to calculate the 1D series from the center.
         local: bool, optional
             Whether to perform local or global optimization. The default is True.
         """
         def calc_light_dark_ratio(img: np.ndarray) -> np.ndarray[float]:
             """Takes an image, turns it into a time series"""
-            lights: np.ndarray[float] = (img == key_light_pixels).sum(axis=0).astype(float)
-            darks: np.ndarray[float] = (img == key_dark_pixels).sum(axis=0).astype(float)
-            holes: np.ndarray[float] = (img == key_hole_pixels).sum(axis=0).astype(float)
+            strip = get_center_strip_from_img(img, stripwidth)
+
+            lights: np.ndarray[float] = (strip == key_light_pixels).sum(axis=0).astype(float)
+            darks: np.ndarray[float] = (strip == key_dark_pixels).sum(axis=0).astype(float)
+            holes: np.ndarray[float] = (strip == key_hole_pixels).sum(axis=0).astype(float)
             both: np.ndarray[float] = lights + darks
             ratio: np.ndarray[float] = np.divide(
                 lights,
-                np.ones_like(lights) * img.shape[0],
+                # np.ones_like(lights) * img.shape[0],
+                darks,
                 out=np.zeros_like(lights),
                 where=(lights != 0)
             )
@@ -931,19 +951,41 @@ class Transformation:
 
             return image_warped
 
-        # new source image
+        # new source image with previous transformation steps applied
         source_new: ImageROI = self.get_transformed_source()
 
         # use classified images for brightness function
         target: ImageROI = self.target.copy()
-        target.set_classification_adaptive_mean()
-        source_new.set_classification_adaptive_mean()
 
-        target_ic: np.ndarray = target.image_classification
-        source_ic: np.ndarray = source_new.image_classification
+        if use_classified:
+            target.set_classification_adaptive_mean()
+            source_new.set_classification_adaptive_mean()
+            target_ic: np.ndarray = target.image_classification
+            source_ic: np.ndarray = source_new.image_classification
+            target_ld = calc_light_dark_ratio(target_ic)
+            source_ld = calc_light_dark_ratio(source_ic)
+        else:
+            target_ic = target.image_grayscale.astype(float)
+            target_ic /= target_ic.max()
+            target_ic[~(target.mask_foreground > 0)] = np.nan
+            target_strip = get_center_strip_from_img(target_ic, stripwidth)
+            target_ld = np.nanmean(target_strip, axis=0)
 
-        target_ld = calc_light_dark_ratio(target_ic)
-        source_ld = calc_light_dark_ratio(source_ic)
+            source_ic = source_new.image_grayscale.astype(float)
+            source_ic /= source_ic.max()
+            source_ic[~(source_new.mask_foreground > 0)] = np.nan
+            source_strip = get_center_strip_from_img(source_ic, stripwidth)
+            source_ld = np.nanmean(source_strip, axis=0)
+
+        # fill nans with averages
+        source_ld[np.isnan(source_ld)] = np.nanmean(source_ld)
+        target_ld[np.isnan(target_ld)] = np.nanmean(target_ld)
+
+        plt.figure()
+        plt.plot(target_ld)
+        plt.plot(source_ld)
+        plt.show()
+
         transect_params: dict = find_stretching_function_basin(
             target_ld, source_ld, deg=degree
         )
@@ -954,7 +996,7 @@ class Transformation:
 
         if plts:
             self.plt_flow(
-                self.source.image_grayscale, self.target.image_grayscale, u, v
+                source_new.image_grayscale, self.target.image_grayscale, u, v
             )
 
             fig, axs_ = plt.subplots(
@@ -969,24 +1011,25 @@ class Transformation:
             )
 
             params = transect_params
-            source_horizons = calc_light_dark_ratio(target_ic)
-            target_horizons = calc_light_dark_ratio(source_ic)
-            source_horizons_warped, x_warped = apply_stretching(
-                source_horizons, *pop_params(params)
+            # source_horizons = calc_light_dark_ratio(target_ic)
+            # target_horizons = calc_light_dark_ratio(source_ic)
+
+            source_ld_warped, x_warped = apply_stretching(
+                source_ld, *pop_params(params)
             )
             x0 = pop_params(params)
 
             # plot showing the average number of light pixels per column before and
             #   after transformation
-            axs_[0].plot(target_horizons, label='target', color='blue')
+            axs_[0].plot(target_ld, label='target', color='blue')
             axs_[0].plot(
-                source_horizons,
+                source_ld,
                 label='source',
                 color='orange',
                 linestyle='--'
             )
             axs_[0].plot(
-                source_horizons_warped,
+                source_ld_warped,
                 label='warped source',
                 color='red',
                 linestyle='--'
