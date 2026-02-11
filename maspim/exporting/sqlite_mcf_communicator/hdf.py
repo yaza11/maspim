@@ -156,6 +156,7 @@ class hdf5Handler(ReaderBaseClass):
             mzs: np.ndarray[float] | None = None,
             delta_mz=1e-4,
             show_progress: bool = False,
+            **kwargs,
     ) -> None:
         """
         Using the ReadBrukerMCF reader, write an hdf5 file.
@@ -205,7 +206,8 @@ class hdf5Handler(ReaderBaseClass):
                 'intensities',
                 shape=data_shape,
                 dtype='float64',
-                chunks=(1, len(mzs))
+                chunks=(1, len(mzs)),
+                **kwargs,
             )
             # read, resample and write all spectra
             for it, idx in tqdm(
