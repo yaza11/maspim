@@ -42,6 +42,10 @@ class ROI:
     def xywh(self) -> np.ndarray[int]:
         return self._xwyh
 
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self._xwyh[3], self._xwyh[2]
+
     def __add__(self, other) -> Self:
         if isinstance(other, ROI):
             return self.__class__(self.xywh + other.xywh)
