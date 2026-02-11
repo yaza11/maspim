@@ -6,7 +6,9 @@ import json
 import os
 import re
 import warnings
+from copy import deepcopy
 
+import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,10 +17,11 @@ import logging
 from matplotlib import patches
 from scipy.interpolate import griddata
 from tqdm import tqdm
-from typing import Iterable, Self, Any
+from typing import Iterable, Self, Any, Literal
 from PIL import Image as PIL_Image, ImageDraw as PIL_ImageDraw
 
-from maspim.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image, get_comp_as_img
+from maspim.data.helpers import plot_comp, transform_feature_table, plot_comp_on_image, get_comp_as_img, \
+    sample_area_conform_image_from_dataframe, get_grid_for_image_sample
 
 from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
 from maspim.exporting.legacy.ion_image import (get_da_export_ion_image,
@@ -26,6 +29,7 @@ from maspim.exporting.legacy.ion_image import (get_da_export_ion_image,
 from maspim.imaging.util.image_boxes import region_in_box
 from maspim.imaging.util.image_geometry import ROI
 from maspim.imaging.util.image_plotting import plt_rect_on_image, plt_cv2_image
+from maspim.project.helpers import get_mask_convex_hull_points
 from maspim.time_series.helpers import get_averaged_tables
 
 from maspim.util import Convenience
@@ -407,7 +411,6 @@ class SampleImageHandlerMSI(Convenience):
             return fig, ax
 
 
-
 class SampleImageHandlerXRF(Convenience):
     """
     Image handler for XRF measurements. Finds the image region corresponding
@@ -731,7 +734,6 @@ class ProjectBaseClass:
         to the private attribute.
         """
 
-
         private_attributes: list[str] = [
             k[1:] for k in self.__dir__()
             if k.startswith('_') and not k.startswith('__')
@@ -751,7 +753,7 @@ class ProjectBaseClass:
         self._age_model: AgeModel = AgeModel(
             path_file=path_file, **kwargs_read
         )
-        self._age_model.path_file = self.path_d_folder
+        self._age_model.path_folder = self.path_d_folder
         self._age_model.save()
 
         self._update_files()
@@ -760,7 +762,7 @@ class ProjectBaseClass:
             self,
             path_file: str | None = None,
             overwrite: bool = False,
-            **kwargs_read: dict
+            **kwargs_read
     ) -> AgeModel:
         """
         Load an age model from the d folder if it exists, from another file if
@@ -776,7 +778,7 @@ class ProjectBaseClass:
         load : bool, optional
             Set to true if you want to load an AgeModel object. 
             The default is True.
-        **kwargs_read : dict
+        **kwargs_read
             Keyword arguments to be passed to AgeModel if the object is not 
             loaded.
 
@@ -860,9 +862,9 @@ class ProjectBaseClass:
         None
         """
         assert (
-            (depth_span is not None) or
-            (self.depth_span is not None) or
-            (self.age_span is not None)
+                (depth_span is not None) or
+                (self.depth_span is not None) or
+                (self.age_span is not None)
         ), 'specify the depth in cm or the age span in yrs b2k'
         assert (age_span is not None) or (self.age_model is not None)
         if depth_span is None:
@@ -1089,8 +1091,8 @@ class ProjectBaseClass:
             # now we can be sure data roi is same as sample roi
             self.image_handler._data_roi_xywh = (0, 0, w, h)
             self.image_sample._image_roi = self.image_sample.image[
-                                           y: y + h, x: x + w
-                                           ].copy()
+                y: y + h, x: x + w
+            ].copy()
 
         else:
             logger.warning(
@@ -1467,21 +1469,26 @@ class ProjectBaseClass:
             self.data_object.feature_table.valid
         ).astype(int)
 
-    def data_object_apply_tilt_correction(self) -> None:
+    def data_object_apply_tilt_correction(self, inplace=False) -> Self:
         assert not self.corrected_tilt, 'tilt has already been corrected'
         assert self._data_object is not None, 'set data_object.'
         assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
 
+        if inplace:
+            new = self
+        else:
+            new = self.copy()
+
         mapper = Mapper(
             image_shape=(-1, -1),
-            path_folder=self.path_folder,
+            path_folder=new.path_folder,
             tag='tilt_correction'
         )
 
-        if self.image_classified is None:
+        if new.image_classified is None:
             logger.warning('no image_classified set, not correcting tilts')
             return
-        elif not self.image_classified.use_tilt_correction:
+        elif not new.image_classified.use_tilt_correction:
             logger.warning(
                 'image classified set, but tilt correction set to False, '
                 'not correcting tilts'
@@ -1499,21 +1506,23 @@ class ProjectBaseClass:
         XT, YT = mapper.get_transformed_coords()
 
         # insert into feature table
-        self.data_object.add_attribute_from_image(
+        new.data_object.add_attribute_from_image(
             XT, 'x_ROI_T', fill_value=np.nan
         )
-        self.data_object.add_attribute_from_image(
+        new.data_object.add_attribute_from_image(
             YT, 'y_ROI_T', fill_value=np.nan
         )
 
         # fit feature table
-        self.data_object.inject_feature_table_from(
-            transform_feature_table(self.data_object.feature_table),
+        new.data_object.inject_feature_table_from(
+            transform_feature_table(new.data_object.feature_table),
             supress_warnings=True
         )
         logger.info('successfully loaded mapper and applied tilt correction')
 
-        self._data_object.tilt_correction_applied = True
+        new._data_object.tilt_correction_applied = True
+
+        return new
 
     def data_object_apply_transformation_old(self, mapper: Mapper) -> None:
         """Apply a mapping from a mapper object to the data."""
@@ -1539,14 +1548,21 @@ class ProjectBaseClass:
         )
         logger.info('successfully applied mapping')
 
+    def copy(self):
+        return deepcopy(self)
+
     def data_object_apply_transformation(
             self,
             mapper: Mapper,
-            keep_sparse: bool | None = None,
+            keep_sparse: bool = None,
             sparsity_threshold: float = .5,
+            transform_coordinates: bool = True,
+            target_coordinates: Self | pd.DataFrame = None,
+            inplace: bool = False,
             plts: bool = False,
+            _debug: bool = False,
             **kwargs
-    ) -> None:
+    ) -> Self:
         """
         Apply a mapping from a mapper object to the data.
 
@@ -1563,26 +1579,42 @@ class ProjectBaseClass:
             compound separately based on the sparsity threshold.
         sparsity_threshold: float, optional
             Ratio of non-zero values required for a compound to be not sparse.
+        transform_coordinates: bool, optional
+            If this is set to True, the x_ROI and y_ROI will match coordinates of the target.
+            Otherwise will keep the scaling of the source.
         """
+
         def reformat_ion_image_to_mapper_input(values_) -> np.ndarray[float]:
             """
             Take the raveled intensities of an ion image and format them to
-            match the shape of the target image.
+            match the shape of the source image.
 
             """
             # ion image has to match extent from the image inputted into the
             # mapper
-            # first step: scale to photo resolution
+            #  first step: scale to photo resolution
             ion_image: np.ndarray = griddata(
-                points,
+                points_source,
                 values_,
-                (grid_x, grid_y),
+                (grid_x_source, grid_y_source),
                 method='nearest',
                 fill_value=0
             )
 
-            # second step: zeropad/crop to match
+            if _debug:
+                plt.figure()
+                plt.imshow(ion_image)
+                plt.title('scaled ion image')
+                plt.show()
+
+            #  second step: zeropad/crop to match
             target_image[mask_ion_image] = ion_image
+
+            if _debug:
+                plt.figure()
+                plt.imshow(target_image)
+                plt.title('scaled and cropped ion image')
+                plt.show()
 
             return target_image
 
@@ -1591,46 +1623,70 @@ class ProjectBaseClass:
         assert check_attr(self, '_image_handler'), \
             'need image handler to determine image region'
 
+        if inplace:
+            new = self
+        else:
+            new = self.copy()
+
+        if transform_coordinates:
+            assert target_coordinates is not None, ('if coordinates are to be transformed, a table or '
+                                                    'project from which to take the coordinates is necessary')
+            if hasattr(target_coordinates, 'data_object'):
+                target_coordinates = target_coordinates.data_object.feature_table
+            assert all([c in target_coordinates.columns for c in ['x_ROI', 'y_ROI']]), \
+                'feature table with target coordinates needs columns x_ROI and y_ROI'
+            target_coordinates = target_coordinates.loc[:, ['x_ROI', 'y_ROI']]
+
         keep_sparse_auto: bool = keep_sparse is None
         assert (sparsity_threshold >= 0) and (sparsity_threshold <= 1), \
             'sparsity threshold must be between 0 and 1'
 
         # container in which to place ion images for fitting
-        # can use the same container for each ion image since the extent
-        # of ion images remains the same
-        source_sample_roi: ROI = ROI(self.image_sample.xywh_ROI)
+        #  can use the same container for each ion image since the extent
+        #   of ion images remains the same
+        source_sample_roi: ROI = ROI(new.image_sample.xywh_ROI)
         source_shape = (source_sample_roi.h, source_sample_roi.w)
         target_shape = mapper.image_shape
 
-        logger.debug('source_shape', source_shape)
-        logger.debug('target_shape', target_shape)
+        logger.info(f'source_shape: {source_shape}')
+        logger.info(f'target_shape: {target_shape}')
 
-        # must be the same as with which the mapper was created
-        # in Transformer, source image is rescaled to match it to target image
-        # determine rescaling factors to match shape of target and source
-        # source * factor = target <==> factor = target / source
-        rescale_x: float = target_shape[1] / source_shape[1]
-        rescale_y: float = target_shape[0] / source_shape[0]
+        if not transform_coordinates:
+            # input ion image shapes
+            # must be the same as with which the mapper was created
+            # in Transformer, source image is rescaled to match it to target image
+            # determine rescaling factors to match shape of target and source
+            # source * factor = target <==> factor = target / source
+            rescale_x: float = target_shape[1] / source_shape[1]
+            rescale_y: float = target_shape[0] / source_shape[0]
 
-        # scale x_ROI, y_ROI in feature table in order for
-        # add_attribute_from_image to work correctly. Columns will be scaled
-        # back in the end
-        ft = self.data_object.feature_table
-        x_ROI_original = ft.loc[:, 'x_ROI'].copy()
-        y_ROI_original = ft.loc[:, 'y_ROI'].copy()
-        # do not use loc to for explicit type conversions (will raise warning otherwise)
-        ft['x_ROI'] = ft.loc[:, 'x_ROI'].astype(float) * rescale_x
-        ft['y_ROI'] = ft.loc[:, 'y_ROI'].astype(float) * rescale_y
+            # scale x_ROI, y_ROI in feature table in order for
+            # add_attribute_from_image to work correctly. Columns will be scaled
+            # back in the end
+            ft = new.data_object.feature_table
+            x_ROI_original = ft.loc[:, 'x_ROI'].copy()
+            y_ROI_original = ft.loc[:, 'y_ROI'].copy()
+            # do not use loc for explicit type conversions (will raise warning otherwise)
 
-        # rescale points
-        x_roi_ft: pd.Series = ft.x_ROI
-        y_roi_ft: pd.Series = ft.y_ROI
-        points: np.ndarray[float] = np.c_[x_roi_ft, y_roi_ft]
+            # TODO: check: how can we first rescale points and then compare them to
+            #  unscaled photo coordinates?
+            ft['x_ROI'] = ft.loc[:, 'x_ROI'].astype(float) * rescale_x
+            ft['y_ROI'] = ft.loc[:, 'y_ROI'].astype(float) * rescale_y
+
+            # rescale points
+            x_roi_ft: pd.Series = ft.x_ROI
+            y_roi_ft: pd.Series = ft.y_ROI
+            points_source: np.ndarray[float] = np.c_[x_roi_ft, y_roi_ft]
+
+        else:  # start new feature table and let add_attribute_from_image take care of the rescaling
+            new.feature_table = target_coordinates.copy()
+            ft = new.data_object.feature_table
+            points_source = ...
 
         # roi area in terms of target image coordinates
         # (this is not the same as the measurement roi of the target because
         # measurement areas may cover different areas in source and target)
-        source_meas_roi: ROI = ROI(self.image_handler.photo_roi_xywh)
+        source_meas_roi: ROI = ROI(new.image_handler.photo_roi_xywh)
         source_meas_roi_rescaled: ROI = source_meas_roi.resize(
             source_shape, target_shape
         )
@@ -1640,18 +1696,18 @@ class ProjectBaseClass:
             source_shape, target_shape
         )
 
-        logger.debug(f'{source_sample_roi=}')
-        logger.debug(f'{source_meas_roi=}')
+        logger.info(f'{source_sample_roi=}')
+        logger.info(f'{source_meas_roi=}')
 
-        logger.debug('after rescaling to match target')
-        logger.debug(f'{source_sample_roi_rescaled=}')
-        logger.debug(f'{source_meas_roi_rescaled=}')
+        logger.info('after rescaling to match target')
+        logger.info(f'{source_sample_roi_rescaled=}')
+        logger.info(f'{source_meas_roi_rescaled=}')
 
         # container for ion image intensities
         target_image: np.ndarray[float] = np.zeros(target_shape, dtype=float)
 
         # measurement relative to sample
-        # find indices of overlap between data and sample roi's in target coordinates
+        # find indices of overlap between data and sample roi's in source coordinates
         y_ion_roi: int = source_meas_roi_rescaled.y - source_sample_roi_rescaled.y
         if y_ion_roi < 0:  # measurement area starts above of sample area
             y_ion_roi = 0
@@ -1672,14 +1728,14 @@ class ProjectBaseClass:
         mask_ion_image = roi_ion.index_exp
 
         # regular grid spanning the overlap area of sample and measurement region
-        grid_x, grid_y = np.meshgrid(
+        grid_x_source, grid_y_source = np.meshgrid(
             np.arange(roi_ion.x, roi_ion.x + roi_ion.w),
             np.arange(roi_ion.y, roi_ion.y + roi_ion.h)
         )
 
         if plts:
             plt.figure()
-            source_photo_shape = self.image_sample.image.shape[:2]
+            source_photo_shape = new.image_sample.image.shape[:2]
             area = np.zeros(source_photo_shape)
             area[source_sample_roi.get_mask_for_image(source_photo_shape)] = 1
             area[source_meas_roi.get_mask_for_image(source_photo_shape)] = 2
@@ -1698,13 +1754,21 @@ class ProjectBaseClass:
 
         is_sparse: bool = keep_sparse  # will only be updated if keep_sparse_auto
         for comp in tqdm(
-                self.data_object.data_columns,
+                new.data_object.data_columns,
                 desc='transforming ion images'
         ):
-            values: np.ndarray[float] = self.data_object.feature_table.loc[
+            values: np.ndarray[float] = new.data_object.feature_table.loc[
                 :, comp
             ].fillna(0).to_numpy()
 
+            if _debug:
+                plt.figure()
+                plt.imshow(new.data_object.feature_table.pivot(
+                    columns='x_ROI', index='y_ROI', values=comp)
+                )
+                plt.title('ion image to be transformed')
+
+            # ion image in coordinates of source image
             ion_image = reformat_ion_image_to_mapper_input(values)
 
             if keep_sparse_auto:
@@ -1712,6 +1776,7 @@ class ProjectBaseClass:
                 if is_sparse:
                     logger.info(f'found sparse compound: {comp}')
 
+            # image in coordinates of target image
             warped_image: np.ndarray[float] = mapper.fit(
                 ion_image,
                 preserve_range=True,
@@ -1719,13 +1784,30 @@ class ProjectBaseClass:
                 **kwargs
             )
 
+            if _debug:
+                plt.figure()
+                plt.imshow(warped_image)
+                plt.title('warped ion image')
+                plt.show()
+
             # add to feature table
-            self.data_object.add_attribute_from_image(
+            new.data_object.add_attribute_from_image(
                 image=warped_image, column_name=comp
             )
 
-        self.data_object.feature_table.loc[:, 'x_ROI'] = x_ROI_original
-        self.data_object.feature_table.loc[:, 'y_ROI'] = y_ROI_original
+            if _debug:
+                warped_in_ft = new.data_object.feature_table.pivot(
+                    columns='x_ROI', index='y_ROI', values=comp)
+                plt.figure()
+                plt.imshow(warped_in_ft)
+                plt.title('transformed ion image')
+                plt.show()
+
+            if _debug:
+                break
+
+        new.data_object.feature_table.loc[:, 'x_ROI'] = x_ROI_original
+        new.data_object.feature_table.loc[:, 'y_ROI'] = y_ROI_original
         # TODO: calculate corresponding coordinates of target ROI
         # this is achieved by first transforming the x_ROI and y_ROI according to the ROI and then applying the warping
         # above, we already found the scalings, but we also need the shifts
@@ -1733,6 +1815,144 @@ class ProjectBaseClass:
 
         # self.data_object.feature_table.loc[:, 'x_ROI_other'] = ...
         # self.data_object.feature_table.loc[:, 'y_ROI_other'] = ...
+
+        return new
+
+    def get_comp_as_sample_area_image(
+            self,
+            comp,
+            **kwargs
+    ) -> np.ndarray:
+        """
+        Using the extent of the sample area, interpolate (and extrapolate) data points to match the resolution and
+        extent of the sample area. Pixels corresponding to data points outside the convex hull of the point cloud will
+        be set to the fillvalue.
+        """
+        assert check_attr(self, '_data_object')
+        assert check_attr(self, '_image_sample')
+        assert comp in self.data_object.feature_table.columns, f'{comp} not found in the feature table of {self.data_object}'
+        assert 'x_ROI' in self.data_object.feature_table.columns, 'need to set x_ROI, y_ROI before calling this function'
+        assert 'y_ROI' in self.data_object.feature_table.columns, 'need to set x_ROI, y_ROI before calling this function'
+
+        return sample_area_conform_image_from_dataframe(
+            values=self.data_object.feature_table.loc[:, comp].fillna(0).to_numpy(),
+            xs_ROI=self.data_object.feature_table.loc[:, 'x_ROI'].to_numpy(),
+            ys_ROI=self.data_object.feature_table.loc[:, 'y_ROI'].to_numpy(),
+            image_sample_shape=(self.image_sample.xywh_ROI[3], self.image_sample.xywh_ROI[2]),
+            **kwargs
+        )
+
+    def data_object_apply_transformation_new(
+            self,
+            mapper: Mapper,
+            project_target: Self,
+            sparsity_threshold: float = 0.5,
+            inplace=False,
+            **kwargs
+    ) -> pd.DataFrame:
+        """
+        Use the transformation defined from 'require_combine_mapper' to match ion images to
+        that of the source.
+
+        We need to perform the following steps:
+        - transform ion images of source to match the sample area coordinates (need to change resolution and region)
+        - prepare ion images for mapping (Transformer matches the shapes of target and source directly, so stretching may occur)
+        - warp the images using the flow field defined by the mapper
+        - add ion images to the feeature table (use the same sample locations as for the target)
+        """
+        # TODO: add some control mechanism or warning if tilt correction was used on project_target but data not
+        #  transformed: warping source images will also apply tilt correction but we have no way of inverting this step
+        #  after warping, so we would need to tilt correct the target data as well
+        target_shape = mapper.image_shape
+
+        # x_ROI and y_ROI are relative to the detected sample area
+        x_ROI_data_source = self.data_object.feature_table.loc[:, 'x_ROI'].to_numpy()
+        y_ROI_data_source = self.data_object.feature_table.loc[:, 'y_ROI'].to_numpy()
+
+        # sample area (section used as input for Transformer)
+        roi_sample_source: ROI = ROI(self.image_sample.xywh_ROI)
+        roi_sample_shape: tuple[int, int] = roi_sample_source.shape
+
+        def _resize_ion_image_to_source_sample_area(img):
+            return cv2.resize(
+                img,
+                dsize=(target_shape[1], target_shape[0]),
+                interpolation=cv2.INTER_AREA
+            )
+
+        points_data_source = np.c_[  # array of shape (n_points, 2)
+            x_ROI_data_source,
+            y_ROI_data_source
+        ]
+
+        # create a regular grid to interpolate the ion images to
+        grid_xy = get_grid_for_image_sample(roi_sample_shape)
+
+        # TODO: use polygon defined in mis file for MSI data
+        mask_convhull_data = get_mask_convex_hull_points(roi_sample_shape, points_data_source)
+
+        # plt.figure()
+        # plt.imshow(mask_convhull_data)
+        # plt.show()
+
+        for comp in tqdm(
+                self.data_object.data_columns,
+                desc='transforming ion images'
+        ):
+            is_sparse = (self.data_object.feature_table.loc[:, comp] > 0).mean() < sparsity_threshold
+            img_interpolated = self.get_comp_as_sample_area_image(
+                comp,
+                grid_xy=grid_xy,
+                mask_convhull_data=mask_convhull_data,
+                interpolation_method='nearest' if is_sparse else 'linear',
+                **kwargs
+            )
+
+            # resize to match shape of target
+            img_resized = _resize_ion_image_to_source_sample_area(img_interpolated)
+            img_warped = mapper.fit(img_resized, keep_sparse=is_sparse)
+
+            project_target.data_object.add_attribute_from_image(
+                image=img_warped,
+                column_name=comp,
+                median=False
+            )
+
+            # plt.figure()
+            # plt.imshow(self.data_object.feature_table.pivot(columns='x_ROI', index='y_ROI', values=comp))
+            # plt.show()
+            #
+            # plt.figure()
+            # plt.imshow(img_interpolated)
+            # plt.show()
+            #
+            # plt.figure()
+            # plt.imshow(img_resized)
+            # plt.show()
+            #
+            # plt.figure()
+            # plt.imshow(img_warped)
+            # plt.show()
+            break
+
+        out = project_target.data_object.feature_table.loc[:, [self.data_object.data_columns[0]] + ['x_ROI', 'y_ROI']]
+        if not inplace:
+            project_target.data_object.feature_table.drop(columns=self.data_object.data_columns, inplace=True)
+        return out
+
+    def data_object_merge_rois(
+            self,
+            other: Self,
+            how: Literal['left', 'inner', 'outer'],
+            inplace=False
+    ) -> Self:
+        """
+        Add ion images of other to self by using scaling information from the sample ROIs.
+
+        After the transformation has been applied to other, data is still in the coordinates
+        of other.
+        """
+        ...
 
     @property
     def corrected_tilt(self) -> bool:
@@ -1758,8 +1978,8 @@ class ProjectBaseClass:
         assert self._data_object is not None, 'set data_object first'
 
         assert (  # image classified either not tilt corrected or data object transformed
-            (not self._image_classified.use_tilt_correction)
-            or self._data_object.tilt_correction_applied
+                (not self._image_classified.use_tilt_correction)
+                or self._data_object.tilt_correction_applied
         ), (
             'found image_classified but use_tilt_correction is set to True and '
             'data object was not tilt-corrected. Please first '
@@ -1785,7 +2005,7 @@ class ProjectBaseClass:
         assert self._data_object is not None, 'set the data_object first'
         assert self.depth_span is not None, 'set the depth_span first'
         if exclude_gaps:
-            assert 'valid' in self.data_object.feature_table.columns,\
+            assert 'valid' in self.data_object.feature_table.columns, \
                 'set holes in data_object first'
 
         min_depth, max_depth = self.depth_span
@@ -2101,6 +2321,7 @@ class ProjectBaseClass:
         -------
         None
         """
+
         def idx_to_depth(
                 idx: np.ndarray[int], img_shape: tuple[int, ...]
         ) -> np.ndarray[float]:
@@ -2421,7 +2642,7 @@ class ProjectBaseClass:
         if self_tilt_correction:
             assert check_attr(self, '_image_classified'), \
                 'need image_classified object when tilt correction is desired.'
-            if not os.path.exists(os.path.join(self.path_folder, 'tilt_correction')):
+            if not os.path.exists(os.path.join(self.path_folder, 'Mapper_tilt_correction.pickle')):
                 logger.warning(
                     'did not find tilt correction for self in '
                     'set_combine_mapper, using default parameters to set Mapper.'
@@ -3291,10 +3512,10 @@ class ProjectMSI(ProjectBaseClass):
         reader = hdf5Handler(self.path_d_folder)
         return reader
 
-    def require_hdf_reader(self, overwrite: bool = False) -> hdf5Handler:
+    def require_hdf_reader(self, overwrite: bool = False, **kwargs) -> hdf5Handler:
         if (not check_attr(self, 'hdf_file')) or overwrite:
             reader: ReadBrukerMCF = self.get_mcf_reader()
-            self.set_hdf_file(reader)
+            self.set_hdf_file(reader, **kwargs)
         return self.get_hdf_reader()
 
     def get_reader(self, prefer_hdf: bool = True) -> ReadBrukerMCF | hdf5Handler:
@@ -3363,10 +3584,10 @@ class ProjectMSI(ProjectBaseClass):
             return self._spectra
         # load from existing file
         if (
-            (
-                check_attr(self, 'Spectra_file')
-                or (tag is not None)
-            ) and (not overwrite)
+                (
+                        check_attr(self, 'Spectra_file')
+                        or (tag is not None)
+                ) and (not overwrite)
         ):
             self._spectra: Spectra = Spectra(
                 path_d_folder=self.path_d_folder, initiate=False
@@ -3424,9 +3645,9 @@ class ProjectMSI(ProjectBaseClass):
             return self._da_export
 
         if (
-            (
-                check_attr(self, 'DataAnalysisExport_file')
-            ) and (not overwrite)
+                (
+                        check_attr(self, 'DataAnalysisExport_file')
+                ) and (not overwrite)
         ):
             self._da_export: DataAnalysisExport = DataAnalysisExport(
                 path_file=''
@@ -3461,7 +3682,7 @@ class ProjectMSI(ProjectBaseClass):
             self._data_object.inject_feature_table_from(self.spectra)
         elif source == 'da_export':
             assert (
-                    check_attr(self.da_export, 'feature_table')
+                check_attr(self.da_export, 'feature_table')
             ), 'set spectra object first'
             # use msi_feature_extraction
             self._data_object.inject_feature_table_from(self._da_export)
