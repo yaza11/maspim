@@ -354,6 +354,8 @@ class Data(DataBaseClass, Convenience):
     ) -> None:
         """
         Add x_ROI, y_ROI columns.
+
+        x_ROI and y_ROI refer are in photo pixel coordinates and are relative to the origin of the sample area.
         """
         # pixel coords of data, set by set_photo_roi
         (xd, yd, wd, hd) = data_ROI_xywh  # data units
