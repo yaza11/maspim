@@ -488,3 +488,14 @@ def restore_unique_values(
 
 if __name__ == '__main__':
     pass
+
+
+def get_center_strip_from_img(img, stripwidth):
+    assert (stripwidth > 0) and (stripwidth <= 1)
+
+    ny_pixels = img.shape[0]
+    indices = np.arange(ny_pixels)
+    idx_center = round((ny_pixels - 1) / 2)
+    mask_strip = np.abs(idx_center - indices) / ny_pixels < (stripwidth / 2)
+    print(f'taking {mask_strip.sum()} wide strip from image with {ny_pixels} vertical pixels')
+    return img[mask_strip, ...].copy()
