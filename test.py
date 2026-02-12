@@ -4,8 +4,8 @@ from maspim.res.compound_masses import mC37_2, mC37_3
 age_model = AgeModel(depth=(480, 485), age=(0, 1))
 
 plts: bool = True
-# path_i_folder: str = r'C:\Users\Yannick Zander\Promotion\Cariaco MSI 2024\490-495cm\2018_08_27 Cariaco 490-495 alkenones.i'
-path_i_folder = r'C:\Users\Yannick Zander\Promotion\Test data'
+path_i_folder: str = r'C:\Users\Yannick Zander\Promotion\Cariaco MSI 2024\490-495cm\2018_08_27 Cariaco 490-495 alkenones.i'
+# path_i_folder = r'C:\Users\Yannick Zander\Promotion\Test data'
 
 p = get_project(is_MSI=True, path_folder=path_i_folder)
 

@@ -207,6 +207,8 @@ class hdf5Handler(ReaderBaseClass):
                 shape=data_shape,
                 dtype='float64',
                 chunks=(1, len(mzs)),
+                # according to test, lzf is faster to read, about 10 % smaller on disk and has similar write times to no compression
+                compression=kwargs.pop('compression', 'lzf'),
                 **kwargs,
             )
             # read, resample and write all spectra

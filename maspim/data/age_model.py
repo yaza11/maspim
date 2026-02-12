@@ -263,7 +263,7 @@ class AgeModel(Convenience):
             logger.warning('Depths not always strictly increasing!')
         if not np.all(np.diff(self.depth) >= 0):
             raise ValueError('Depths not always increasing!')
-        # lineraly interpolate between values
+        # linearly interpolate between values
         return np.interp(depth, self.depth, self.age)
 
     def plot(self):
