@@ -694,26 +694,27 @@ class ProjectBaseClass:
     Abstract base class for ProjectMSI and ProjectXRF.
     """
     # placeholders for objects
-    _age_model: AgeModel | None = None
-    depth_span: tuple[float, float] | None = None
-    age_span: tuple[float, float] | None = None
+    _age_model: AgeModel  = None
+    depth_span: tuple[float, float]  = None
+    age_span: tuple[float, float]  = None
 
     holes_data = None
     holes_xray = None
 
-    _image_handler: SampleImageHandlerMSI | SampleImageHandlerXRF | None = None
+    _image_handler: SampleImageHandlerMSI | SampleImageHandlerXRF = None
     _image_sample: ImageSample = None
     _image_roi: ImageROI = None
     _image_classified: ImageClassified = None
 
-    path_folder: str | None = None
-    path_d_folder: str | None = None
+    path_folder: str  = None
+    path_d_folder: str  = None
+    files: dict[str, str] = None
 
-    _da_export: DataAnalysisExport | None = None
+    _da_export: DataAnalysisExport  = None
     _spectra: Spectra = None
     _data_object: MSI | XRF = None
-    _xray_long: XRay | None = None
-    _xray: XRayROI | None = None
+    _xray_long: XRay  = None
+    _xray: XRayROI  = None
     _time_series: TimeSeries = None
     # flags
     _is_laminated = None
@@ -3316,33 +3317,32 @@ class ProjectMSI(ProjectBaseClass):
                 (f'Found no d folder in {self.path_folder}, maybe the d '
                  f'folder does not end in .d?')
             d_folder: str = d_folders[0]
-            # best guess for mis file name is that it is the same as the folder
-            # name
-            name_mis_file: str = d_folder.split('.')[0] + '.mis'
         else:
-            name_mis_file: None = None
+            # check that provided d_folder is valid
+            assert os.path.exists(f:= os.path.join(self.path_folder, d_folder)), f'provided d-folder {d_folder} does not exist at {f}'
+        # best guess for mis file name is that it is the same as the folder
+        #  name
+        name_mis_file: str = d_folder.split('.')[0] + '.mis'
         if mis_file is None:
             mis_file: str = get_mis_file(self.path_folder, name_file=name_mis_file)
+        else:
+            # check that provided mis file is valid
+            assert os.path.exists(
+                f := os.path.join(self.path_folder, mis_file)), f'provided mis file {mis_file} does not exist at {f}'
 
+        # initiate found files with d-folder and mis file
         dict_files: dict[str, str] = {
             'd_folder': d_folder,
             'mis_file': mis_file
         }
 
-        if dict_files.get('d_folder') is not None:
-            self.d_folder: str = dict_files['d_folder']
-        else:
-            raise FileNotFoundError(f'Found no d folder in {self.path_folder}')
-
-        if dict_files.get('mis_file') is not None:
-            self.mis_file: str = dict_files['mis_file']
-        else:
-            raise FileNotFoundError(f'Found no mis file in {self.path_folder}')
+        self.d_folder: str = dict_files['d_folder']
+        self.mis_file: str = dict_files['mis_file']
 
         # try finding savefiles inside d-folder
         targets_d_folder: list[str] = [
-            'peaks.sqlite',
             'Spectra.pickle',
+            'Spectra.hdf5'
             'MSI.pickle',
             'AgeModel.pickle',
             'TimeSeries.pickle'
@@ -3361,18 +3361,34 @@ class ProjectMSI(ProjectBaseClass):
             entry['name'] == dict_files['d_folder']
             for entry in folder_structure['children']
         ])
-        assert len(idxs[0]) == 1, 'found no or conflicting files, check folder'
+        # assert len(idxs[0]) == 1, 'found no or conflicting files, check folder'
         idx = idxs[0][0]
+        # target files inside the d-folder
         dict_files_dfolder = find_files(
             folder_structure['children'][idx],
-            *targets_d_folder
+            *targets_d_folder,
+            match_mode='keyword',
+            keyword=self.d_folder.rstrip('.d')
         )
+        # also try to find the sqlite file
+        d = find_files(
+            folder_structure['children'][idx],
+            ['peaks.sqlite'],
+            match_mode='exact',
+            require_unique_matches=False
+        )
+        if len(d['peaks.sqlite']) > 0:
+            dict_files_dfolder['peaks.sqlite'] = d['peaks.sqlite']
+
 
         dict_files_folder = find_files(
             folder_structure,
-            *targets_folder
+            *targets_folder,
+            keyword=os.path.basename(self.path_folder).rstrip('.i')
         )
 
+
+        # add as properties
         for k, v in dict_files_dfolder.items():
             k_new = k.split('.')[0] + '_file'
             dict_files[k_new] = v
@@ -3380,10 +3396,7 @@ class ProjectMSI(ProjectBaseClass):
             k_new = k.split('.')[0] + '_file'
             dict_files[k_new] = v
 
-        if os.path.exists(os.path.join(self.path_d_folder, 'Spectra.hdf5')):
-            dict_files['hdf_file'] = 'Spectra.hdf5'
-
-        self.__dict__ |= dict_files
+        self.files = dict_files
 
     def _update_files(self):
         self._set_files(

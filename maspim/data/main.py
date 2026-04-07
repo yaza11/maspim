@@ -549,6 +549,9 @@ class Data(DataBaseClass, Convenience):
         self._pcs: np.ndarray[float] = self._pca.fit_transform(FT_s)
         self._pca_columns: pd.Series = columns
 
+    def set_distance_pixels(self, distance_micrometer: float) -> None:
+        self._distance_pixels = distance_micrometer
+
     @property
     def distance_pixels(self) -> int | float:
         assert check_attr(self, '_distance_pixels')

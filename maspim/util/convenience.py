@@ -118,15 +118,24 @@ class Convenience:
         if tag is None and check_attr(self, '_tag'):
             tag = self.__getattribute__('_tag')
 
+        # changed in version 1.5.2: include name of the d folder in file name
+        #  this allows having multiple d folders in the same i folder
+        has_d_folder = check_attr(self, 'path_d_folder')
+
+        if has_d_folder:
+            file_name_prefix = self.path_d_folder.rsplit('.d')
+        else:
+            file_name_prefix = ''
+
         if tag is not None:
-            file_name: str = f'{class_name}_{tag}.pickle'
+            file_name: str = f'{file_name_prefix}{class_name}_{tag}.pickle'
         elif check_attr(self, '_save_file'):
             file_name: str = self.save_file
         else:
             file_name: str = f'{class_name}.pickle'
 
         if self._save_in_d_folder:
-            if not check_attr(self, 'path_d_folder'):
+            if not has_d_folder:
                 logger.warning(
                     'object does not have a path_d_folder attribute, saving in '
                     f'{self.path_folder} instead'

@@ -6,7 +6,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from typing import Iterable
+from typing import Iterable, Literal
 from textdistance import damerau_levenshtein as textdistance
 
 logger = logging.getLogger(__name__)
@@ -90,19 +90,46 @@ def get_folder_structure(path):
     return result 
 
 
-def find_files(folder_structure: dict[str, dict | str], *names, by_suffix=False):
+def find_files(
+        folder_structure: dict[str, dict | str],
+        *target_names,
+        match_mode: Literal['exact', 'file_type', 'ends_with_name', 'keyword']='exact',
+        keyword=None,
+        require_unique_matches: bool = True
+):
     # first level entries
     children = folder_structure['children']
     # initiate dict with matches
-    matches = {}
+    matches: dict[str, list[str]] = {k: [] for k in target_names}
     # iterate over entries
     for child in children:
         # get name of child
-        name = child['name']
-        if by_suffix:
-            name = name.split('.')[-1] if '.' in name else ''
-        if name in names:
-            matches[name] = child['name']
+        name: str = child['name']
+        if match_mode == 'file_type':
+            suffix = name.split('.')[-1]
+            for target in target_names:
+                if target.split('.')[-1] == suffix:
+                    matches[target].append(name)
+        elif match_mode == 'exact':
+            for target in target_names:
+                if target == name:
+                    matches[target].append(name)
+        elif match_mode == 'ends_wth_name':
+            for target in target_names:
+                if name.endswith(target):
+                    matches[target].append(name)
+        elif match_mode == 'keyword':
+            for target in target_names:
+                if (target in name) and (keyword in name):
+                    matches[target].append(name)
+    if require_unique_matches:
+        out = {}
+        for k, v in matches.items():
+            assert (n:= len(v)) <= 1, f'found target {n} matches for {k} with {match_mode=} and {keyword=} but was expecting zero or one.'
+            if n == 0:
+                continue
+            out[k] = v[0]
+        matches = out
     return matches
 
 
