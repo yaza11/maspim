@@ -2,6 +2,7 @@ import os
 import re
 import sqlite3
 import logging
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import pandas as pd
@@ -13,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 def find_matches(
-        substrings: str | list[str] | None = None, 
-        files: None | list[str] = None, 
-        folder: str | None = None, 
+        substrings: str | list[str] | None = None,
+        files: None | list[str] = None,
+        folder: str | None = None,
         file_types: str | list[str] | None = None,
         must_include_substrings: bool = False,
         return_mode: str = 'best'
@@ -24,23 +25,23 @@ def find_matches(
         'Provide either the folder or a list of files.'
     assert return_mode in (return_modes := ('best', 'valid', 'all')), \
         f'return mode must be one of {return_modes}, not {return_mode}'
-    
+
     if substrings is None:
         substrings = ['']
     elif type(substrings) is str:
         substrings = [substrings]
     if type(file_types) is str:
         file_types = [file_types]
-    
+
     if files is None:
         files = os.listdir(folder)
-    
+
     if must_include_substrings:
         # exclude files that do not contain substring
         files = [
-            file for file in files if 
+            file for file in files if
             all(substring in file for substring in substrings)
-        ]    
+        ]
     if file_types is not None:
         # exclude files whose suffix does not match
         files = [file for file in files if file.split('.')[-1] in file_types]
@@ -62,38 +63,39 @@ def find_matches(
         idx_min = np.argmin(distances)
         return files[idx_min]
 
+
 def get_folder_structure(path):
     # Initialize the result dictionary with folder 
     # name, type, and an empty list for children 
     result = {
-        'name': os.path.basename(path), 
-        'type': 'folder', 
+        'name': os.path.basename(path),
+        'type': 'folder',
         'children': []
-    } 
-  
+    }
+
     # Check if the path is a directory 
-    if not os.path.isdir(path): 
-        return result 
-  
-    # Iterate over the entries in the directory 
-    for entry in os.listdir(path): 
-       # Create the full path for the current entry 
-        entry_path = os.path.join(path, entry) 
-  
+    if not os.path.isdir(path):
+        return result
+
+        # Iterate over the entries in the directory
+    for entry in os.listdir(path):
+        # Create the full path for the current entry
+        entry_path = os.path.join(path, entry)
+
         # If the entry is a directory, recursively call the function 
-        if os.path.isdir(entry_path): 
-            result['children'].append(get_folder_structure(entry_path)) 
-        # If the entry is a file, create a dictionary with name and type 
-        else: 
-            result['children'].append({'name': entry, 'type': 'file'}) 
-  
-    return result 
+        if os.path.isdir(entry_path):
+            result['children'].append(get_folder_structure(entry_path))
+            # If the entry is a file, create a dictionary with name and type
+        else:
+            result['children'].append({'name': entry, 'type': 'file'})
+
+    return result
 
 
 def find_files(
         folder_structure: dict[str, dict | str],
         *target_names,
-        match_mode: Literal['exact', 'file_type', 'ends_with_name', 'keyword']='exact',
+        match_mode: Literal['exact', 'file_type', 'ends_with_name', 'keyword'] = 'exact',
         keyword=None,
         require_unique_matches: bool = True
 ):
@@ -125,7 +127,8 @@ def find_files(
     if require_unique_matches:
         out = {}
         for k, v in matches.items():
-            assert (n:= len(v)) <= 1, f'found target {n} matches for {k} with {match_mode=} and {keyword=} but was expecting zero or one.'
+            assert (n := len(
+                v)) <= 1, f'found target {n} matches for {k} with {match_mode=} and {keyword=} but was expecting zero or one.'
             if n == 0:
                 continue
             out[k] = v[0]
@@ -145,12 +148,33 @@ def get_mis_file(path_folder, name_file: str | None = None) -> str | None:
     return matches
 
 
+def get_mis_info(path_mis_file: str) -> dict[str, list | str | None]:
+    xml_tree = ET.parse(path_mis_file)
+    root = xml_tree.getroot()
+
+    # get area
+    for child in root:
+        if child.tag == 'Area':
+            break
+    else:
+        raise ValueError('Could not find area')
+    resolution = None
+    points = []
+    for el in child:
+        if el.tag == 'Raster':
+            resolution = el.text
+        elif el.tag == 'Point':
+            points.append(el.text)
+    return dict(Raster=resolution, Point=points)
+
+
 def get_d_folder(path_folder, return_mode='best') -> str | list[str] | None:
     """Get the name of the .d folder inside the .i folder"""
     matches = find_matches(folder=path_folder, file_types='d', return_mode=return_mode)
     if matches is None:
         raise FileNotFoundError('No d folder found inside {path_folder}')
     return matches
+
 
 def search_keys_in_xml(path_mis_file: str, keys: Iterable[str]) -> dict[str, list[str] | str]:
     # iniate list of lists for values
@@ -170,6 +194,7 @@ def search_keys_in_xml(path_mis_file: str, keys: Iterable[str]) -> dict[str, lis
         if len(value) == 1:
             out_dict[key] = value[0]
     return out_dict
+
 
 def get_resolution_msi(path_mis_file: str) -> float:
     """
@@ -220,7 +245,6 @@ def get_rxy(spot_names: Iterable[str]) -> np.ndarray[int]:
 
 
 class ImagingInfoXML:
-
     _feature_table = None
 
     def __init__(
@@ -251,7 +275,7 @@ class ImagingInfoXML:
             xml: str = f.read()
             matches: list[str] = re.findall(rf'<{key}>(.*?)</{key}>', xml)
             return np.array(matches)
-    
+
     @property
     def count(self) -> np.ndarray[int]:
         return self._re_all('count').astype(int)
@@ -259,7 +283,7 @@ class ImagingInfoXML:
     @property
     def indices(self) -> np.ndarray[int]:
         return self.count
-    
+
     @property
     def spotName(self) -> np.ndarray[str]:
         return self._re_all('spotName')
@@ -267,19 +291,19 @@ class ImagingInfoXML:
     @property
     def minutes(self) -> np.ndarray[float]:
         return self._re_all('minutes').astype(float)
-    
+
     @property
     def tic(self) -> np.ndarray[float]:
         return self._re_all('tic').astype(float)
-    
+
     @property
     def maxpeak(self) -> np.ndarray[float]:
         return self._re_all('maxpeak').astype(float)
-    
+
     def set_feature_table(self) -> None:
         RXYs: np.ndarray = get_rxy(self.spotName)
         self._feature_table = pd.DataFrame({
-            'count': self.count, 
+            'count': self.count,
             'spotName': self.spotName,
             'R': RXYs[:, 0],
             'x': RXYs[:, 1],
@@ -313,14 +337,16 @@ def get_spots(path_d_folder: str) -> pd.DataFrame:
         f'Could not find peaks.sqlite or ImagingInfo.xml in {path_d_folder}'
     )
 
-if __name__ == '__main__':
-    substring = 'S0343c'
-    folder = r'D:\Cariaco line scan Xray\uXRF slices\S0343c_490-495cm'
 
-    print(find_matches(
-        [substring, 'Fe'],
-        folder=folder,
-        file_type='txt',
-        return_mode='valid',
-        must_include_substrings=True
-    ))
+if __name__ == '__main__':
+    # substring = 'S0343c'
+    # folder = r'D:\Cariaco line scan Xray\uXRF slices\S0343c_490-495cm'
+    #
+    # print(find_matches(
+    #     [substring, 'Fe'],
+    #     folder=folder,
+    #     file_type='txt',
+    #     return_mode='valid',
+    #     must_include_substrings=True
+    # ))
+    pass
