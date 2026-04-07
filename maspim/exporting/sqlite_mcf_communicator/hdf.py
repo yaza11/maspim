@@ -16,7 +16,7 @@ from maspim.exporting.from_mcf.helper import get_mzs_for_limits, ReaderBaseClass
 logger = logging.getLogger(__name__)
 
 
-class hdf5Handler(ReaderBaseClass):
+class Hdf5Handler(ReaderBaseClass):
     """
     This class allows the interaction and creation of hdf5 files.
 
@@ -26,18 +26,18 @@ class hdf5Handler(ReaderBaseClass):
 
     Example Usage
     -------------
-    >>> from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
+    >>> from maspim.exporting.sqlite_mcf_communicator.hdf import Hdf5Handler
     >>> from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
     >>> brukerReader = ReadBrukerMCF('some/d/folder.d')
     >>> brukerReader._create_reader()
     >>> brukerReader.create_indices()
     >>> brukerReader.set_meta_data()
     >>> brukerReader.set_casi_window()  # very important, otherwise the saved file will be huge
-    >>> hdf = hdf5Handler('some/d/folder.d')
+    >>> hdf = Hdf5Handler('some/d/folder.d')
     This creates the disk file
     >>> hdf.write(brukerReader)
     After that, for the initicailzation it suffices to call
-    >>> hdf = hdf5Handler('some/d/folder.d')
+    >>> hdf = Hdf5Handler('some/d/folder.d')
     and you have the same functionality as for the ReadBrukerMCF reader, e.g.
     >>> hdf.get_spectrum(1000)
     """
@@ -341,7 +341,7 @@ class hdf5Handler(ReaderBaseClass):
 
 
 if __name__ == '__main__':
-    hdf5_reader = hdf5Handler(
+    hdf5_reader = Hdf5Handler(
         r"C:\Users\Yannick Zander\Promotion\Cariaco MSI 2024\490-495cm\2018_08_27 Cariaco 490-495 alkenones.i\2018_08_27 Cariaco 490-495 alkenones.d\Spectra.hdf5"
     )
 

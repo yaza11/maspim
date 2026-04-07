@@ -13,7 +13,7 @@ from maspim.imaging.misc.find_punch_holes import find_holes
 from maspim.imaging.main import Image, ImageSample, ImageROI, ImageClassified
 from maspim.imaging.util.image_plotting import plt_cv2_image
 
-from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
+from maspim.exporting.sqlite_mcf_communicator.hdf import Hdf5Handler
 from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
 from maspim.exporting.legacy.parser import extract_mzs as da_export_extract_mzs
 from maspim.exporting.from_sqlite.parser import extract_mzs as sqlite_extract_mzs

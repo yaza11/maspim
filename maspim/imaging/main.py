@@ -55,6 +55,7 @@ class Image(Convenience):
 
     Can be used on its own for basic functionality, but generally not recommended.
     """
+    _save_in_d_folder: bool = True
     _average_width_yearly_cycle: float | None = None
     _hw: tuple[int, int] | None = None
     _image: np.ndarray[int | float] | None = None

@@ -22,7 +22,7 @@ from scipy.ndimage import minimum_filter, median_filter
 
 from maspim.data.combine_feature_tables import combine_feature_tables
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectrum
-from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
+from maspim.exporting.sqlite_mcf_communicator.hdf import Hdf5Handler
 from maspim.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
 from maspim.exporting.from_mcf.helper import get_mzs_for_limits, find_polycalibration_spectrum
 from maspim.res.calibrants import get_calibrants
@@ -224,7 +224,7 @@ class Spectra(Convenience):
     def __init__(
             self,
             *,
-            reader: ReadBrukerMCF | hdf5Handler | None = None,
+            reader: ReadBrukerMCF | Hdf5Handler | None = None,
             limits: tuple[float, float] | None = None,
             delta_mz: float = 1e-4,
             indices: Iterable[int] | None = None,
@@ -269,7 +269,7 @@ class Spectra(Convenience):
             if limits is not None:
                 self._limits: tuple[float, float] = limits
 
-    def _from_reader(self, reader: ReadBrukerMCF | hdf5Handler) -> None:
+    def _from_reader(self, reader: ReadBrukerMCF | Hdf5Handler) -> None:
         """
         Inherit indices and limits from reader if self does not have them.
 
@@ -296,14 +296,14 @@ class Spectra(Convenience):
 
     def _set_files(
             self,
-            reader: ReadBrukerMCF | hdf5Handler | None,
+            reader: ReadBrukerMCF | Hdf5Handler | None,
             path_d_folder: str | None,
             initiate: bool,
     ) -> bool:
         assert (reader is not None) or (path_d_folder is not None), \
             'Either pass a reader or the corresponding d-folder'
         if reader is not None:
-            assert isinstance(reader, ReadBrukerMCF | hdf5Handler), \
+            assert isinstance(reader, ReadBrukerMCF | Hdf5Handler), \
                 'Reader must be an instance of ReadBrukerMCF or hdf5Handler'
         if path_d_folder is not None:
             assert isinstance(path_d_folder, str), \
@@ -332,7 +332,7 @@ class Spectra(Convenience):
 
     def _initiate(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             indices: Iterable[int] | None,
             limits: tuple[float, float] | None
     ) -> None:
@@ -341,7 +341,7 @@ class Spectra(Convenience):
 
         Parameters
         ----------
-        reader: ReadBrukerMCF | hdf5Handler
+        reader: ReadBrukerMCF | Hdf5Handler
             Reader from which to pull the metadata.
         indices: Iterable[int] | None
             Indices to be used. None defaults to using all of them.
@@ -364,7 +364,7 @@ class Spectra(Convenience):
         type_reader: type = type(reader)
         is_rtms: bool = type_reader is ReadBrukerMCF
 
-        assert is_rtms or (type_reader is hdf5Handler), \
+        assert is_rtms or (type_reader is Hdf5Handler), \
             (f"Reader must be either a hdf5Handler or ReadBrukerMCF instance. "
              f"You provided {type_reader}")
         assert (indices is None) or (len(indices) > 0), \
@@ -473,7 +473,7 @@ class Spectra(Convenience):
 
     def get_spectrum(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             index: int | str,
             only_intensity: bool,
             calibrate: bool = None,
@@ -488,7 +488,7 @@ class Spectra(Convenience):
 
         Parameters
         ----------
-        reader : ReadBrukerMCF | hdf5Handler
+        reader : ReadBrukerMCF | Hdf5Handler
             Reader object from which to obtain the spectrum.
         index : int | str
             Index of the spectrum to obtain (1-based).
@@ -534,7 +534,7 @@ class Spectra(Convenience):
 
     def add_all_spectra(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             show_progress: bool = False
     ) -> None:
         """
@@ -542,7 +542,7 @@ class Spectra(Convenience):
 
         Parameters
         ----------
-        reader : ReadBrukerMCF | hdf5Handler
+        reader : ReadBrukerMCF | Hdf5Handler
             Reader from which to obtain the spectra.
         """
         # inherit indices and limits if not set before
@@ -581,7 +581,7 @@ class Spectra(Convenience):
 
     def add_all_spectra_aligned(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             show_progress: bool = False
     ) -> None:
         """
@@ -590,7 +590,7 @@ class Spectra(Convenience):
         
         Parameters
         ----------
-        reader : ReadBrukerMCF | hdf5Handler
+        reader : ReadBrukerMCF | Hdf5Handler
             Reader from which to obtain the spectra.
         """
         self.reset_intensities()
@@ -871,7 +871,7 @@ class Spectra(Convenience):
 
     def set_calibration_functions(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             calibrants_mz: Iterable[float] = None,
             search_range: float = 5e-3,
             calib_snr_threshold: float = 4,
@@ -982,7 +982,7 @@ class Spectra(Convenience):
                 'has been performed already.'
             )
 
-        assert isinstance(reader, ReadBrukerMCF | hdf5Handler), \
+        assert isinstance(reader, ReadBrukerMCF | Hdf5Handler), \
             f'reader must be a ReadBrukerMCF or hdf5Handler instance, not {type(reader)}'
         assert check_attr(reader, 'indices'), 'call reader.set_indices()'
         assert check_attr(reader, 'mzs') and np.allclose(reader.mzs, self.mzs), \
@@ -1923,7 +1923,7 @@ class Spectra(Convenience):
 
     def bin_spectra(
             self,
-            reader: ReadBrukerMCF | hdf5Handler | None = None,
+            reader: ReadBrukerMCF | Hdf5Handler | None = None,
             profile_spectra: np.ndarray[float] | None = None,
             method: Literal['height', 'max', 'area'] = 'height',
             **_
@@ -2104,7 +2104,7 @@ class Spectra(Convenience):
     def _add_rxys_to_df(
             self,
             df: pd.DataFrame,
-            reader: ReadBrukerMCF | ImagingInfoXML | hdf5Handler | pd.DataFrame | None = None,
+            reader: ReadBrukerMCF | ImagingInfoXML | Hdf5Handler | pd.DataFrame | None = None,
             **_
     ) -> pd.DataFrame:
         """
@@ -2135,7 +2135,7 @@ class Spectra(Convenience):
             )
             names: np.ndarray[str] = reader.spotName
 
-            if isinstance(reader, ImagingInfoXML | ReadBrukerMCF | hdf5Handler):
+            if isinstance(reader, ImagingInfoXML | ReadBrukerMCF | Hdf5Handler):
                 imaging_indices = reader.indices
             else:
                 assert isinstance(reader, pd.DataFrame)
@@ -2313,7 +2313,7 @@ class Spectra(Convenience):
 
     def set_reconstruction_losses(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             indices: list[int] | None = None,
     ) -> None:
         """
@@ -2329,7 +2329,7 @@ class Spectra(Convenience):
 
         Parameters
         ----------
-        reader: ReadBrukerMCF | hdf5Handler
+        reader: ReadBrukerMCF | Hdf5Handler
             Reader to use for getting spectra.
         indices: list[int] | None, optional
             Indices for which to construct the loss. Defaults to all.
@@ -2516,14 +2516,14 @@ class Spectra(Convenience):
         )
         return s_new
 
-    def add_calibrated_spectra(self, reader: ReadBrukerMCF | hdf5Handler, **kwargs: Any):
+    def add_calibrated_spectra(self, reader: ReadBrukerMCF | Hdf5Handler, **kwargs: Any):
         self.add_all_spectra(reader=reader)
         self.subtract_baseline(**kwargs)
         self.require_calibration_functions(reader=reader, **kwargs)
         self.add_all_spectra(reader=reader)
         self.subtract_baseline(**kwargs)
 
-    def full(self, reader: ReadBrukerMCF | hdf5Handler, **kwargs: Any):
+    def full(self, reader: ReadBrukerMCF | Hdf5Handler, **kwargs: Any):
         """Perform all steps with the provided parameters."""
         self.add_calibrated_spectra(reader=reader, **kwargs)
         self.set_peaks(**kwargs)
@@ -2535,7 +2535,7 @@ class Spectra(Convenience):
 
     def full_targeted(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             targets: list[float],
             **kwargs
     ) -> None:
@@ -2630,7 +2630,7 @@ class Spectra(Convenience):
 
     def plot_calibration_functions(
             self,
-            reader: ReadBrukerMCF | hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             indices: Iterable[int] | None = None,
             n_plot: int = 10
     ) -> None:
@@ -2914,7 +2914,7 @@ class MultiSectionSpectra(Spectra):
 
     def __init__(
             self,
-            readers: list[ReadBrukerMCF | hdf5Handler]
+            readers: list[ReadBrukerMCF | Hdf5Handler]
     ) -> None:
         """
         Initialization.
@@ -2923,14 +2923,14 @@ class MultiSectionSpectra(Spectra):
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | hdf5Handler]
+        readers : list[ReadBrukerMCF | Hdf5Handler]
             List of readers from which to create spectra objects
 
         """
         self.specs: list[Spectra | None] = [None] * len(readers)
         self._initiate(readers)
 
-    def _initiate(self, readers: list[ReadBrukerMCF | hdf5Handler]) -> None:
+    def _initiate(self, readers: list[ReadBrukerMCF | Hdf5Handler]) -> None:
         """Set mzs and indices"""
         assert len(readers) > 0, 'pass at least one reader'
         reader = readers[0]
@@ -2953,13 +2953,13 @@ class MultiSectionSpectra(Spectra):
         self.intensities: np.ndarray[float] = np.zeros_like(self.mzs)
         self.indices = np.hstack(indices)
 
-    def add_all_spectra(self, readers: list[ReadBrukerMCF | hdf5Handler]) -> None:
+    def add_all_spectra(self, readers: list[ReadBrukerMCF | Hdf5Handler]) -> None:
         """
         Iterate over spectra by calling the corresponding Spectra method.
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | hdf5Handler]
+        readers : list[ReadBrukerMCF | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -2979,7 +2979,7 @@ class MultiSectionSpectra(Spectra):
     def require_calibration_functions(
             self,
             *,
-            readers: list[ReadBrukerMCF | hdf5Handler] | None = None,
+            readers: list[ReadBrukerMCF | Hdf5Handler] | None = None,
             **kwargs
     ) -> None:
         """
@@ -2987,7 +2987,7 @@ class MultiSectionSpectra(Spectra):
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | hdf5Handler]
+        readers : list[ReadBrukerMCF | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3011,13 +3011,13 @@ class MultiSectionSpectra(Spectra):
             if check_attr(self, 'noise_level'):
                 spec.noise_level = self.noise_level
 
-    def bin_spectra(self, readers: Iterable[ReadBrukerMCF | hdf5Handler], **kwargs):
+    def bin_spectra(self, readers: Iterable[ReadBrukerMCF | Hdf5Handler], **kwargs):
         """
         Iterate over spectra by calling the corresponding Spectra method.
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | hdf5Handler]
+        readers : list[ReadBrukerMCF | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3031,7 +3031,7 @@ class MultiSectionSpectra(Spectra):
 
     def set_feature_table(
             self,
-            readers: Iterable[ReadBrukerMCF | hdf5Handler] | None = None,
+            readers: Iterable[ReadBrukerMCF | Hdf5Handler] | None = None,
             **kwargs: dict
     ) -> pd.DataFrame:
         """
@@ -3039,7 +3039,7 @@ class MultiSectionSpectra(Spectra):
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | hdf5Handler]
+        readers : list[ReadBrukerMCF | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3055,13 +3055,13 @@ class MultiSectionSpectra(Spectra):
         self._feature_table: pd.DataFrame = combine_feature_tables(fts)
         return self._feature_table
 
-    def full(self, readers: list[ReadBrukerMCF | hdf5Handler], **kwargs: dict):
+    def full(self, readers: list[ReadBrukerMCF | Hdf5Handler], **kwargs: dict):
         """
         Perform all steps to process and bin the spectra.
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | hdf5Handler]
+        readers : list[ReadBrukerMCF | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3080,7 +3080,7 @@ class MultiSectionSpectra(Spectra):
 
     def full_targeted(
             self,
-            readers: list[ReadBrukerMCF | hdf5Handler],
+            readers: list[ReadBrukerMCF | Hdf5Handler],
             targets: list[float],
             **kwargs
     ):
@@ -3089,7 +3089,7 @@ class MultiSectionSpectra(Spectra):
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | hdf5Handler]
+        readers : list[ReadBrukerMCF | Hdf5Handler]
             List of readers from which to obtain the spectra.
         targets: list[float]
             Target mzs.
