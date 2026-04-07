@@ -37,7 +37,7 @@ from maspim.util import Convenience
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
 from maspim.exporting.from_mcf.helper import Spectrum, get_mzs_for_limits
 from maspim.exporting.from_mcf.spectrum import Spectra, MultiSectionSpectra
-from maspim.exporting.sqlite_mcf_communicator.hdf import hdf5Handler
+from maspim.exporting.sqlite_mcf_communicator.hdf import Hdf5Handler
 
 from maspim.data.msi import MSI
 from maspim.data.xrf import XRF
@@ -46,7 +46,7 @@ from maspim.data.age_model import AgeModel
 from maspim.project.file_helpers import (
     get_folder_structure, find_files, get_mis_file, get_d_folder,
     search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy,
-    get_spots, get_resolution_msi
+    get_spots, get_resolution_msi, get_mis_info
 )
 
 from maspim.imaging.main import ImageSample, ImageROI, ImageClassified
@@ -94,6 +94,8 @@ class SampleImageHandlerMSI(Convenience):
     i_handler.load()
 
     """
+    _save_in_d_folder: bool = True
+
     path_folder: str | None = None
     d_folder: str | None = None
     image_file: str | None = None
@@ -282,11 +284,12 @@ class SampleImageHandlerMSI(Convenience):
         assert check_attr(self, '_extent_spots'), 'call set_extent_data'
 
         # search the mis file for the point data and image file
-        mis_dict: dict = search_keys_in_xml(self.path_mis_file, ['Point'])
-        assert len(mis_dict) > 0, 'found no region in mis file'
+        mis_info: dict = get_mis_info(self.path_mis_file)
+        assert len(mis_info) > 0, 'found no region in mis file'
 
         # get points specifying the measurement area
-        points_mis: list[str] = mis_dict['Point']
+        #  defined in Area
+        points_mis: list[str] = mis_info['Point']
         # format self.points
         self.points: list[tuple[int, int]] = []
         # get the points of the defined area
@@ -792,7 +795,7 @@ class ProjectBaseClass:
         if (self._age_model is not None) and (not overwrite):
             return self._age_model
         # if an age model save is located in the folder, load it
-        elif check_attr(self, 'AgeModel_file') and (not overwrite):
+        elif ('AgeModel_file' in self.files) and (not overwrite):
             self._age_model: AgeModel = AgeModel(
                 path_file=os.path.join(
                     self.path_d_folder,
@@ -3342,17 +3345,17 @@ class ProjectMSI(ProjectBaseClass):
         # try finding savefiles inside d-folder
         targets_d_folder: list[str] = [
             'Spectra.pickle',
-            'Spectra.hdf5'
+            'Hdf5Handler.hdf5'
             'MSI.pickle',
             'AgeModel.pickle',
-            'TimeSeries.pickle'
-        ]
-        targets_folder: list[str] = [
+            'TimeSeries.pickle',
             'ImageSample.pickle',
             'ImageROI.pickle',
             'ImageClassified.pickle',
             'SampleImageHandlerMSI.pickle',
             'DataAnalysisExport.pickle',
+        ]
+        targets_folder: list[str] = [
             'XRayROI.pickle'
         ]
 
@@ -3373,20 +3376,20 @@ class ProjectMSI(ProjectBaseClass):
         # also try to find the sqlite file
         d = find_files(
             folder_structure['children'][idx],
-            ['peaks.sqlite'],
+            *['peaks.sqlite'],
             match_mode='exact',
             require_unique_matches=False
         )
-        if len(d['peaks.sqlite']) > 0:
-            dict_files_dfolder['peaks.sqlite'] = d['peaks.sqlite']
-
+        if (_n := len(d['peaks.sqlite'])) > 0:
+            assert _n == 1
+            dict_files_dfolder['peaks.sqlite'] = d['peaks.sqlite'][0]
 
         dict_files_folder = find_files(
             folder_structure,
             *targets_folder,
+            match_mode='keyword',
             keyword=os.path.basename(self.path_folder).rstrip('.i')
         )
-
 
         # add as properties
         for k, v in dict_files_dfolder.items():
@@ -3448,7 +3451,7 @@ class ProjectMSI(ProjectBaseClass):
         if (self._image_handler is not None) and (not overwrite):
             return self._image_handler
         # load and set image
-        if check_attr(self, 'SampleImageHandlerMSI_file') and (not overwrite):
+        if ('SampleImageHandlerMSI_file' in self.files) and (not overwrite):
             logger.info(f'loading SampleHandler from {self.path_folder}')
             self._image_handler = SampleImageHandlerMSI(
                 path_folder=self.path_folder,
@@ -3510,7 +3513,7 @@ class ProjectMSI(ProjectBaseClass):
     def set_hdf_file(
             self, reader: ReadBrukerMCF | None = None, **kwargs
     ) -> None:
-        handler = hdf5Handler(self.path_d_folder)
+        handler = Hdf5Handler(self.path_d_folder)
         logger.info(f'creating hdf5 file in {self.path_d_folder}')
 
         if reader is None:
@@ -3521,17 +3524,17 @@ class ProjectMSI(ProjectBaseClass):
         # update files
         self._update_files()
 
-    def get_hdf_reader(self) -> hdf5Handler:
-        reader = hdf5Handler(self.path_d_folder)
+    def get_hdf_reader(self) -> Hdf5Handler:
+        reader = Hdf5Handler(self.path_d_folder)
         return reader
 
-    def require_hdf_reader(self, overwrite: bool = False, **kwargs) -> hdf5Handler:
-        if (not check_attr(self, 'hdf_file')) or overwrite:
+    def require_hdf_reader(self, overwrite: bool = False, **kwargs) -> Hdf5Handler:
+        if (not 'hdf_file' in self.files) or overwrite:
             reader: ReadBrukerMCF = self.get_mcf_reader()
             self.set_hdf_file(reader, **kwargs)
         return self.get_hdf_reader()
 
-    def get_reader(self, prefer_hdf: bool = True) -> ReadBrukerMCF | hdf5Handler:
+    def get_reader(self, prefer_hdf: bool = True) -> ReadBrukerMCF | Hdf5Handler:
         if check_attr(self, 'hdf_file') and prefer_hdf:
             reader = self.get_hdf_reader()
         else:
@@ -3540,7 +3543,7 @@ class ProjectMSI(ProjectBaseClass):
 
     def set_spectra(
             self,
-            reader: ReadBrukerMCF | hdf5Handler = None,
+            reader: ReadBrukerMCF | Hdf5Handler = None,
             full: bool = True,
             spectra: Spectra | None = None,
             SNR_threshold: float = 2,
@@ -3598,7 +3601,7 @@ class ProjectMSI(ProjectBaseClass):
         # load from existing file
         if (
                 (
-                        check_attr(self, 'Spectra_file')
+                        'Spectra_file' in self.files
                         or (tag is not None)
                 ) and (not overwrite)
         ):
@@ -3659,7 +3662,7 @@ class ProjectMSI(ProjectBaseClass):
 
         if (
                 (
-                        check_attr(self, 'DataAnalysisExport_file')
+                        'DataAnalysisExport_file' in self.files
                 ) and (not overwrite)
         ):
             self._da_export: DataAnalysisExport = DataAnalysisExport(
@@ -3713,7 +3716,7 @@ class ProjectMSI(ProjectBaseClass):
             return self._data_object
         # try to load an instance from disk
         if (
-                check_attr(self, f'MSI_file')
+                'MSI_file' in self.files
                 or (tag is not None)
         ) and (not overwrite):
             self._data_object: MSI = MSI(
@@ -3867,9 +3870,9 @@ class IonImagePlotter:
         df_.iloc[:, 1:] = rxys
         return df_
 
-    def _reader_setup(self) -> tuple[ReadBrukerMCF | hdf5Handler, pd.DataFrame]:
+    def _reader_setup(self) -> tuple[ReadBrukerMCF | Hdf5Handler, pd.DataFrame]:
         """Get a reader and the feature table."""
-        reader_: ReadBrukerMCF | hdf5Handler = self._project.get_reader()
+        reader_: ReadBrukerMCF | Hdf5Handler = self._project.get_reader()
         df_: pd.DataFrame = self._pixel_table_from_xml()
         return reader_, df_
 
@@ -3883,8 +3886,8 @@ class IonImagePlotter:
 
     def _spectra_iterator(
             self,
-            obj: Spectra | ReadBrukerMCF | hdf5Handler,
-            reader: ReadBrukerMCF | hdf5Handler,
+            obj: Spectra | ReadBrukerMCF | Hdf5Handler,
+            reader: ReadBrukerMCF | Hdf5Handler,
             df: pd.DataFrame
     ) -> pd.DataFrame:
         """Iterate over spectra and extract intensity of target."""
@@ -3895,7 +3898,7 @@ class IonImagePlotter:
                 desc=f'Fetching intensities from {obj.__class__.__name__}',
                 total=n
         ):
-            if isinstance(obj, (ReadBrukerMCF, hdf5Handler)):
+            if isinstance(obj, (ReadBrukerMCF, Hdf5Handler)):
                 spec: Spectrum = obj.get_spectrum(idx)
             elif isinstance(obj, Spectra):
                 spec: Spectrum = obj.get_spectrum(
@@ -3905,7 +3908,7 @@ class IonImagePlotter:
                 raise NotImplementedError(
                     f'internal error for object of type {type(obj)}, '
                     f'possible types are {type(Spectra)}, '
-                    f'{type(ReadBrukerMCF)}, {type(hdf5Handler)}'
+                    f'{type(ReadBrukerMCF)}, {type(Hdf5Handler)}'
                 )
             # window
             df.loc[it, self._comp] = self._max_window_spec(spec)
@@ -4086,7 +4089,7 @@ class MultiSectionProject:
     def _combine_spectra(self, *projects):
         """Combine spectra using the readers"""
         # TODO: assertions
-        readers: list[ReadBrukerMCF | hdf5Handler] = [
+        readers: list[ReadBrukerMCF | Hdf5Handler] = [
             project.get_reader() for project in projects
         ]
         self.spectra: MultiSectionSpectra = MultiSectionSpectra(readers=readers)
@@ -4106,3 +4109,18 @@ class MultiSectionProject:
             # TODO: this
             ...
             raise NotImplementedError()
+
+
+if __name__ == '__main__':
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    folder = r'D:\noM\0-5cm\2023_05_22_GB5000_noM_1-2.i'
+    d_folder = '2023_05_22_GB5000_noM_310_460Da.d'
+
+    p = ProjectMSI(path_folder=folder, d_folder=d_folder, is_laminated=False)
+    print(p.files)
+    p.require_hdf_reader()
+    # p.require_image_handler()
+    # p.image_handler.plot_overview()
+    # print(p.files)
