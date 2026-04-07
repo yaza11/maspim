@@ -4120,7 +4120,7 @@ if __name__ == '__main__':
 
     p = ProjectMSI(path_folder=folder, d_folder=d_folder, is_laminated=False)
     print(p.files)
-    p.require_hdf_reader()
+    # p.require_hdf_reader()
     # p.require_image_handler()
     # p.image_handler.plot_overview()
     # print(p.files)
