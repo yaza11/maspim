@@ -925,6 +925,7 @@ class ImageSample(Image):
             plts: bool = False,
             interactive: bool = False,
             extent_x: tuple[int, int] | None = None,
+            use_main_contour: bool = True,
             **_
     ) -> None:
         """
@@ -960,25 +961,32 @@ class ImageSample(Image):
             dilate_factor=df,
             plts=plts
         )
-        # set as new image
-        image_sub: ImageSample = ImageSample(
-            image=image_box,
-            obj_color=self.obj_color,
-            mask_foreground=self.mask_foreground[yb:yb+hb, xb:xb+wb]
-        )
-        # set image simplified for contour to use
-        image_sub._mask_foreground = image_sub.image_simplified
-        # find the refined area as the _extent of the simplified binary image
-        _, (xc, yc, wc, hc) = image_sub.get_sample_area_from_contour(
-            method='filter_by_size', plts=plts
-        )
 
-        # stack the offsets of the two defined ROI's since the second ROI is
-        # placed in the first one
-        x = xc + xb
-        y = yc + yb
-        w = wc
-        h = hc
+        if use_main_contour:
+            # set as new image
+            image_sub: ImageSample = ImageSample(
+                image=image_box,
+                obj_color=self.obj_color,
+                mask_foreground=self.mask_foreground[yb:yb+hb, xb:xb+wb]
+            )
+            # set image simplified for contour to use
+            image_sub._mask_foreground = image_sub.image_simplified
+            # find the refined area as the _extent of the simplified binary image
+            _, (xc, yc, wc, hc) = image_sub.get_sample_area_from_contour(
+                method='filter_by_size', plts=plts
+            )
+
+            # stack the offsets of the two defined ROI's since the second ROI is
+            # placed in the first one
+            x = xc + xb
+            y = yc + yb
+            w = wc
+            h = hc
+        else:
+            x = xb
+            y = yb
+            w = wb
+            h = hb
 
         image_roi: np.ndarray = self.image[y: y + h, x: x + w].copy()
 
