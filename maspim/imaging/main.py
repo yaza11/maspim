@@ -49,25 +49,31 @@ from maspim.imaging.util.image_boxes import get_mean_intensity_box, region_in_bo
 logger = logging.getLogger(__name__)
 
 
+IMAGE_TYPES: list[str] = ['cv', 'np', 'pil']
+ImageType = Literal[*IMAGE_TYPES]
+
+OBJECT_COLORS: tuple[str, str] = ('light', 'dark')
+ObjectColor = Literal[*OBJECT_COLORS]
+
+
 class Image(Convenience):
     """
     Base function to get sample images and analyze them.
 
     Can be used on its own for basic functionality, but generally not recommended.
     """
-    _save_in_d_folder: bool = True
-    _average_width_yearly_cycle: float | None = None
-    _hw: tuple[int, int] | None = None
-    _image: np.ndarray[int | float] | None = None
-    _image_simplified: np.ndarray[int] | None = None
-    _main_contour: np.ndarray[int] | None = None
-    _mask_foreground: np.ndarray[bool] | None = None
-    _thr_background: float | int = None
+    _average_width_yearly_cycle: float = None
+    _hw: tuple[int, int] = None
+    _image: np.ndarray[int | float] = None
+    _image_type: ImageType = None
+    _image_simplified: np.ndarray[int] = None
+    _main_contour: np.ndarray[int] = None
+    _mask_foreground: np.ndarray[bool] = None
+    _thr_background: float= None
 
-    age_span: tuple[float, float] | None = None
-    image_file: str | None = None
-    path_folder: str | None = None
-    obj_color: str | None = None
+    age_span: tuple[float, float] = None
+    image_file: str = None
+    obj_color: ObjectColor = None
 
     _save_attrs: set[str] = {
         'age_span',
@@ -80,12 +86,12 @@ class Image(Convenience):
 
     def __init__(
             self,
-            obj_color: Literal['light', 'dark'],
-            path_image_file: str | None = None,
-            image: np.ndarray[float | int] | None = None,
-            mask_foreground: np.ndarray | None = None,
-            image_type: str = 'cv',
-            path_folder: str | None = None
+            obj_color: ObjectColor,
+            path_image_file: str = None,
+            image: np.ndarray[float | int] = None,
+            image_type: ImageType = None,
+            mask_foreground: np.ndarray = None,
+            path_folder: str = None
     ) -> None:
         """Initiator.
 
@@ -113,18 +119,18 @@ class Image(Convenience):
         """
         assert (path_image_file is not None) or (image is not None), \
             "Must provide either path or image"
-        image_types: tuple[str, ...] = ('cv', 'np', 'pil')
-        assert image_type in image_types, (f'valid image types are {image_types},'
-                                           f' depending on the source of the image')
-        obj_colors: tuple[str, str] = ('light', 'dark')
-        assert obj_color in obj_colors, f'valid object colors are {obj_colors}'
+        if image is not None:
+            assert image_type is not None, 'If an image is provided, image type must be provided as well (usually np)'
+            assert image_type in IMAGE_TYPES, (f'valid image types are {IMAGE_TYPES},'
+                                               f' depending on the source of the image')
+        assert obj_color in OBJECT_COLORS, f'valid object colors are {OBJECT_COLORS}'
 
         if path_image_file is not None:
             image = cv2.imread(path_image_file)
+            image_type = 'cv'
             assert image is not None, f"Could not load image from {path_image_file}"
             self.image_file: str = os.path.basename(path_image_file)
-            if path_folder is None:
-                path_folder: str = os.path.dirname(path_image_file)
+            self.path_folder: str = os.path.dirname(path_image_file)
 
         self.obj_color: str = obj_color
 
@@ -143,8 +149,6 @@ class Image(Convenience):
         # set _image_original
         self._from_image(image, image_type)
 
-        self.path_folder: str = path_folder if path_folder is not None else ''
-
     @property
     def path_image_file(self) -> str | None:
         """Compose the path of the image file from folder and image file."""
@@ -156,16 +160,17 @@ class Image(Convenience):
             return
         return os.path.join(self.path_folder, self.image_file)
 
-    def _from_image(self, image: np.ndarray | None, image_type: str) -> None:
+    def _from_image(self, image: np.ndarray, image_type: ImageType) -> None:
         """
         Set attributes from the image and type.
 
         This function ensures that the image is oriented horizontally,
         and sets the original image as a cv image.
         """
-        image: np.ndarray[int | float] = image_convert_types.convert(
-            image_type, 'cv', image.copy()
-        )
+        if image_type != 'cv':
+            image: np.ndarray[int | float] = image_convert_types.convert(
+                image_type, 'cv', image.copy()
+            )
         # make sure image is oriented horizontally
         h, w, *_ = image.shape
         if h > w:
@@ -178,11 +183,12 @@ class Image(Convenience):
         self._image: np.ndarray[int | float] = image
 
     @classmethod
-    def from_disk(cls, path_folder: str, tag: str | None = None) -> Self:
+    def from_disk(cls, path_folder: str, tag: str = None) -> Self:
         """Load an image object from disk."""
         # initiate dummy object that provides all, albeit nonsensical, parameters
         dummy: Self = cls(path_folder=path_folder,
                           image=np.ones((3, 3)),
+                          image_type='cv',
                           obj_color='light')
         dummy.load(tag)
         # load messes with _image, _image_original, the constructor can take care of that
@@ -564,6 +570,9 @@ class ImageSample(Image):
     >>> i.save()
     """
 
+    _image_roi: np.ndarray = None
+    _xywh_ROI: tuple[int, int, int, int] = None
+
     _save_attrs: set[str] = {
         'age_span',
         '_average_width_yearly_cycle',
@@ -621,8 +630,8 @@ class ImageSample(Image):
 
         # overwrite the obj color attribute of the super init method
         if obj_color is not None:
-            assert obj_color in ['light', 'dark'], \
-                'obj_color must be either "light" or "dark"!'
+            assert obj_color in OBJECT_COLORS, \
+                f'obj_color must be in {OBJECT_COLORS}'
             self.obj_color: str = obj_color
         else:
             self.obj_color: str = self._get_obj_color()
@@ -640,6 +649,7 @@ class ImageSample(Image):
             assert check_attr(self, 'path_image_file'), \
                 'loaded corrupted instance with neither image nor image_file'
             self._image = cv2.imread(self.path_image_file)
+            self._image_type = 'cv'
 
     def _get_obj_color(self, region_middleground: float = .8, **_) -> str:
         """
@@ -678,9 +688,9 @@ class ImageSample(Image):
         image_region_mean: float = cv2.mean(image_region)[0]
         image_mean: float = cv2.mean(image_gray)[0]
         if image_region_mean > image_mean:
-            obj_color: str = 'light'
+            obj_color: ObjectColor = 'light'
         else:
-            obj_color: str = 'dark'
+            obj_color: ObjectColor = 'dark'
 
         logger.info(f'obj appears to be {obj_color}')
 

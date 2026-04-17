@@ -46,7 +46,7 @@ class AgeModel(Convenience):
     read_excel, depending on the file type. For a tab separated file with
     column names 'age' and 'depth' the initalization can look like this:
     >>> from maspim import AgeModel
-    >>> age_model = AgeModel(path_file='path/to/file.txt', sep='\t', index_col=False)
+    >>> age_model = AgeModel(path_input_file='path/to/file.txt', sep='\t', index_col=False)
     The class expects the depth data to be in cm below seaflow and the age in
     years. Oftentimes this is not the case. Here, the add_depth_offset and
     convert_depth_scale methods are handy (call order does not matter, but a
@@ -55,7 +55,7 @@ class AgeModel(Convenience):
     >>> age_model.add_depth_offset(500)  # age model starts add 500 cmbsf
     Those parameters can also be provided upon initialization
     >>> age_model = AgeModel(
-    >>>     path_file='path/to/file.txt',
+    >>>     path_input_file='path/to/file.txt',
     >>>     depth_offset=5000,
     >>>     conversion_to_cm=1 / 10,
     >>>     sep='\t',
@@ -71,11 +71,11 @@ class AgeModel(Convenience):
     >>> age_model2 = AgeModel(path2, ...)
     >>> age_model_combined = age_model1 + age_model2
     """
-    path_folder: str | None = None
     _in_file: str | None = None
-    _save_file: str | None = None
-
     _save_in_d_folder: bool = True
+
+    column_depth: str = None
+    column_age: str = None
 
     _save_attrs: set[str] = {
         'df',
@@ -88,7 +88,7 @@ class AgeModel(Convenience):
     def __init__(
             self,
             *,
-            path_file: str | None = None,
+            path_input_file: str | None = None,
             depth: Iterable | None = None,
             age: Iterable | None = None,
             column_depth: str = 'depth',
@@ -106,7 +106,7 @@ class AgeModel(Convenience):
         It is assumed that the age depth column is in cm and is absolute or that the depth_offset and
         the conversion_to_cm parameters are specified.
 
-        :param path_file: file from which to load the age model, see _read_file for more information
+        :param path_input_file: file from which to load the age model, see _read_file for more information
         :param depth: depth vector to be used and
         :param age: age vector to be used for the age model, age and depth must
             have the same length
@@ -116,10 +116,10 @@ class AgeModel(Convenience):
         :param conversion_to_cm: conversion factor to be applied to the depth column
         :param kwargs_read_file: additional keyword arguments passed on to the pandas reader
         """
-        assert (path_file is not None) or ((depth is not None) and (age is not None)), \
+        assert (path_input_file is not None) or ((depth is not None) and (age is not None)), \
             'provide either a file or a depth and age vector'
 
-        self._set_files(path_file)
+        self._set_files(path_input_file)
 
         self.column_depth: str = column_depth
         self.column_age: str = column_age
@@ -131,17 +131,11 @@ class AgeModel(Convenience):
             self._read_file(depth_offset, conversion_to_cm, **kwargs_read_file)
 
     def _set_files(self, path_file: str | None) -> None:
-        self._save_file: None | str = None if path_file is None else os.path.basename(path_file)
         if path_file is None:
             return
 
         # check if file is directory, in that case require an AgeModel.pickle file
-        if os.path.isdir(path_file):
-            assert 'AgeModel.pickle' in os.listdir(path_file), \
-                (f'A folder ({path_file} was provided as input, but no saved '
-                 f'"AgeModel.pickle" file was found')
-            self.path_folder: str = path_file
-            self._in_file: str = 'AgeModel.pickle'
+        assert os.path.isfile(path_file), f'The provided path {path_file} refers to a directory'
 
         # possible file types from which to read age model
         file_types: list[str] = ['txt', 'csv', 'xlsx', 'pickle']
@@ -152,15 +146,13 @@ class AgeModel(Convenience):
         self._in_file: str = os.path.basename(path_file)
 
     @property
-    def path_file(self) -> str:
+    def path_input_file(self) -> str:
         assert (self.path_folder is not None) and (self._save_file is not None)
         return os.path.join(self.path_folder, self._save_file)
 
-    @path_file.setter
-    def path_file(self, path_file: str) -> None:
-        self.path_folder: str = os.path.dirname(path_file)
-        self._save_file: str = os.path.basename(path_file)
-        self._in_file: str = self._save_file
+    @path_input_file.setter
+    def path_input_file(self, path_file: str) -> None:
+        self._set_files(path_file)
 
     def _read_file(self, depth_offset: float | int, conversion_to_cm: float | int, **kwargs) -> None:
         """
@@ -171,13 +163,14 @@ class AgeModel(Convenience):
         This method also handles the depth offset and conversion of the depth scale to cm. The age values are
         assumed to be in yrs b2k.
         """
-        file: str = os.path.join(self.path_folder, self._in_file)
+        file: str = self.path_input_file
 
         if (suffix := os.path.splitext(file)[1]) in ('.csv', '.txt'):
             self.df: pd.DataFrame = pd.read_csv(file, **kwargs)
         elif suffix == '.xlsx':
             self.df: pd.DataFrame = pd.read_excel(file, **kwargs)
         else:  # suffix pickle
+            assert file.endswith('.pickle')
             self.load()
 
         # strip whitespaces

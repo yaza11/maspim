@@ -44,9 +44,10 @@ class MSI(Data):
     Now we are ready to do some analysis, e.g. nonnegative matrix factorization
     >>> msi.plot_nmf(k=5)
     """
-    mis_file: str | None = None
+    mis_file: str = None
 
     _save_in_d_folder: bool = True
+
     _save_attrs: set[str] = {
         'd_folder',
         'mis_file',
@@ -92,10 +93,6 @@ class MSI(Data):
             self.mis_file: str = mis_file
         self.path_folder: str = path_folder1
         self.d_folder: str = d_folder
-
-    @property    
-    def path_d_folder(self) -> str:
-        return os.path.join(self.path_folder, self.d_folder)
 
     @property
     def path_mis_file(self):

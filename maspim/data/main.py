@@ -157,7 +157,7 @@ def PCA_biplot(
 
 
 class DataBaseClass:
-    _feature_table: pd.DataFrame | None
+    _feature_table: pd.DataFrame = None
 
     @property
     def feature_table(self) -> pd.DataFrame:
@@ -247,24 +247,21 @@ class Data(DataBaseClass, Convenience):
     For application take a look at the MSI or XRF class. The Data class is not
     ment to be used directly.
     """
-    path_folder: str | None = None
-    d_folder: str | None = None
-
-    _distance_pixels: int | float | None = None
+    _distance_pixels: int | float = None
 
     tilt_correction_applied: bool = False
 
-    _pca_xy: pd.DataFrame | None = None
+    _pca_xy: pd.DataFrame = None
     _pca: PCA | None = None
-    _pcs: np.ndarray[float] | None = None
-    _pca_columns: pd.Series | None = None
+    _pcs: np.ndarray[float] = None
+    _pca_columns: pd.Series = None
 
-    _nmf_columns: Iterable | None = None
-    _nmf_xy: pd.DataFrame | None = None
-    _W: np.ndarray[float] | None = None
-    _H: np.ndarray[float] | None = None
+    _nmf_columns: Iterable = None
+    _nmf_xy: pd.DataFrame = None
+    _W: np.ndarray[float] = None
+    _H: np.ndarray[float] = None
 
-    _kmeans: KMeans | None = None
+    _kmeans: KMeans = None
 
     _save_attrs: set[str] = {
         'distance_pixels',

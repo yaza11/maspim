@@ -94,14 +94,15 @@ def get_folder_structure(path):
 
 def find_files(
         folder_structure: dict[str, dict | str],
-        *target_names,
+        *target_names: str,
         match_mode: Literal['exact', 'file_type', 'ends_with_name', 'keyword'] = 'exact',
-        keyword=None,
+        keyword: str = None,
         require_unique_matches: bool = True
-):
+) -> dict[str, list[str]] | dict[str, str]:
     # first level entries
-    children = folder_structure['children']
+    children: dict[str, dict | str] = folder_structure['children']
     # initiate dict with matches
+    #  keys are the target names, values a  list of potential matches
     matches: dict[str, list[str]] = {k: [] for k in target_names}
     # iterate over entries
     for child in children:
@@ -127,8 +128,8 @@ def find_files(
     if require_unique_matches:
         out = {}
         for k, v in matches.items():
-            assert (n := len(
-                v)) <= 1, f'found target {n} matches for {k} with {match_mode=} and {keyword=} but was expecting zero or one.'
+            assert (n := len(v)) <= 1, \
+                f'found target {n} matches for {k} with {match_mode=} and {keyword=} but was expecting zero or one.'
             if n == 0:
                 continue
             out[k] = v[0]

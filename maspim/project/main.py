@@ -61,7 +61,7 @@ from maspim.imaging.register.helpers import Mapper
 
 from maspim.time_series.main import TimeSeries
 from maspim.time_series.proxy import UK37
-from maspim.util.convenience import check_attr, object_to_string
+from maspim.util.convenience import check_attr, object_to_string, get_disk_file
 from maspim.util.read_msi_align import get_teaching_points, get_teaching_point_pairings_dict
 
 PIL_Image.MAX_IMAGE_PIXELS = None
@@ -96,15 +96,14 @@ class SampleImageHandlerMSI(Convenience):
     """
     _save_in_d_folder: bool = True
 
-    path_folder: str | None = None
-    d_folder: str | None = None
-    image_file: str | None = None
-    mis_file: str | None = None
+    image_file: str = None
+    mis_file: str = None
 
-    image: PIL_Image.Image | None = None
-    _extent_spots: tuple[int, int, int, int] | None = None
-    _data_roi_xywh: tuple[int, int, int, int] | None = None
-    _photo_roi_xywh: tuple[int, int, int, int] | None = None
+    _image: PIL_Image.Image = None
+    _extent_spots: tuple[int, int, int, int] = None
+    _data_roi_xywh: tuple[int, int, int, int] = None
+    _photo_roi_xywh: tuple[int, int, int, int] = None
+    _image_roi: tuple[int, int, int, int] = None
 
     _save_attrs = {
         '_extent_spots',
@@ -119,8 +118,8 @@ class SampleImageHandlerMSI(Convenience):
     def __init__(
             self,
             path_folder: str,
-            path_d_folder: str | None = None,
-            path_mis_file: str | None = None
+            path_d_folder: str = None,
+            path_mis_file: str = None
     ) -> None:
         """
         Initialize paths for folder, mis file, d folder and ImageSample object.
@@ -140,7 +139,6 @@ class SampleImageHandlerMSI(Convenience):
         Returns
         -------
         None.
-
         """
         self.path_folder: str = path_folder
         if path_mis_file is not None:
@@ -166,13 +164,14 @@ class SampleImageHandlerMSI(Convenience):
     def path_image_file(self):
         return os.path.join(self.path_folder, self.image_file)
 
-    @functools.cached_property
+    @property
     def image(self) -> PIL_Image.Image:
         """
         Set the photo from the determined file as PIL image.
         """
-        image: PIL_Image.Image = PIL_Image.open(self.path_image_file)
-        return image
+        if self._image is None:
+            self._image: PIL_Image.Image = PIL_Image.open(self.path_image_file)
+        return self._image
 
     def set_extent_data(
             self,
@@ -697,9 +696,9 @@ class ProjectBaseClass:
     Abstract base class for ProjectMSI and ProjectXRF.
     """
     # placeholders for objects
-    _age_model: AgeModel  = None
-    depth_span: tuple[float, float]  = None
-    age_span: tuple[float, float]  = None
+    _age_model: AgeModel = None
+    depth_span: tuple[float, float] = None
+    age_span: tuple[float, float] = None
 
     holes_data = None
     holes_xray = None
@@ -709,15 +708,15 @@ class ProjectBaseClass:
     _image_roi: ImageROI = None
     _image_classified: ImageClassified = None
 
-    path_folder: str  = None
-    path_d_folder: str  = None
+    path_folder: str = None
+    path_d_folder: str = None
     files: dict[str, str] = None
 
-    _da_export: DataAnalysisExport  = None
+    _da_export: DataAnalysisExport = None
     _spectra: Spectra = None
     _data_object: MSI | XRF = None
-    _xray_long: XRay  = None
-    _xray: XRayROI  = None
+    _xray_long: XRay = None
+    _xray: XRayROI = None
     _time_series: TimeSeries = None
     # flags
     _is_laminated = None
@@ -755,7 +754,7 @@ class ProjectBaseClass:
 
     def set_age_model(self, path_file: str | None = None, **kwargs_read) -> None:
         self._age_model: AgeModel = AgeModel(
-            path_file=path_file, **kwargs_read
+            path_input_file=path_file, **kwargs_read
         )
         self._age_model.path_folder = self.path_d_folder
         self._age_model.save()
@@ -797,14 +796,14 @@ class ProjectBaseClass:
         # if an age model save is located in the folder, load it
         elif ('AgeModel_file' in self.files) and (not overwrite):
             self._age_model: AgeModel = AgeModel(
-                path_file=os.path.join(
+                path_input_file=os.path.join(
                     self.path_d_folder,
                     self.__getattribute__('AgeModel_file')
                 )
             )
         # if a file is provided, load it from the file provided
         elif (not overwrite) and (path_file is not None):
-            self._age_model: AgeModel = AgeModel(path_file=path_file, **kwargs_read)
+            self._age_model: AgeModel = AgeModel(path_input_file=path_file, **kwargs_read)
         else:  # otherwise create new age model
             self.set_age_model(path_file, **kwargs_read)
         return self._age_model
@@ -3298,7 +3297,7 @@ class ProjectMSI(ProjectBaseClass):
         self._set_files(d_folder, mis_file)
         self._is_laminated: bool = is_laminated
 
-    def _set_files(self, d_folder: str | None = None, mis_file: str | None = None):
+    def _set_files(self, d_folder: str | None = None, mis_file: str | None = None, tag: str = None):
         """
         Find d folder, mis file and saved objects inside the d folder. If
         multiple d folders are inside the .i folder, the d folder must be
@@ -3307,7 +3306,6 @@ class ProjectMSI(ProjectBaseClass):
         Returns
         -------
         None.
-
         """
         folder_structure = get_folder_structure(self.path_folder)
         if d_folder is None:
@@ -3322,7 +3320,8 @@ class ProjectMSI(ProjectBaseClass):
             d_folder: str = d_folders[0]
         else:
             # check that provided d_folder is valid
-            assert os.path.exists(f:= os.path.join(self.path_folder, d_folder)), f'provided d-folder {d_folder} does not exist at {f}'
+            assert os.path.exists(
+                f := os.path.join(self.path_folder, d_folder)), f'provided d-folder {d_folder} does not exist at {f}'
         # best guess for mis file name is that it is the same as the folder
         #  name
         name_mis_file: str = d_folder.split('.')[0] + '.mis'
@@ -3335,44 +3334,72 @@ class ProjectMSI(ProjectBaseClass):
 
         # initiate found files with d-folder and mis file
         dict_files: dict[str, str] = {
-            'd_folder': d_folder,
-            'mis_file': mis_file
+            'd_folder': os.path.join(self.path_folder, d_folder),
+            'mis_file': os.path.join(self.path_folder, mis_file)
         }
 
-        self.d_folder: str = dict_files['d_folder']
-        self.mis_file: str = dict_files['mis_file']
+        self.d_folder: str = d_folder
+        self.mis_file: str = mis_file
 
         # try finding savefiles inside d-folder
-        targets_d_folder: list[str] = [
-            'Spectra.pickle',
-            'Hdf5Handler.hdf5'
-            'MSI.pickle',
-            'AgeModel.pickle',
-            'TimeSeries.pickle',
-            'ImageSample.pickle',
-            'ImageROI.pickle',
-            'ImageClassified.pickle',
-            'SampleImageHandlerMSI.pickle',
-            'DataAnalysisExport.pickle',
+        targets_d_folder: list[object] = [
+            Spectra,
+            Hdf5Handler,
+            MSI,
+            AgeModel,
+            TimeSeries,
+            SampleImageHandlerMSI
         ]
-        targets_folder: list[str] = [
-            'XRayROI.pickle'
+        # this depends on whether the mfe package is installed in the environment
+        if hasattr(DataAnalysisExport, '_save_in_d_folder'):
+            targets_d_folder.append(DataAnalysisExport)
+        targets_d_folder_files_to_names: dict[str, str] = {
+            get_disk_file(o, self.path_d_folder, o.save_in_d_folder, tag=tag): o.__name__ for o in targets_d_folder
+        }
+
+        targets_folder: list[object] = [
+            XRayROI,
+            ImageSample,
+            ImageROI,
+            ImageClassified
         ]
+        targets_folder_files_to_names: dict[str, str] = {
+            get_disk_file(o, self.path_folder, o.save_in_d_folder, tag=tag): o.__name__ for o in targets_folder
+        }
 
         # get d_folder
         idxs = np.where([
-            entry['name'] == dict_files['d_folder']
+            entry['name'] == d_folder
             for entry in folder_structure['children']
         ])
         # assert len(idxs[0]) == 1, 'found no or conflicting files, check folder'
         idx = idxs[0][0]
         # target files inside the d-folder
-        dict_files_dfolder = find_files(
+        dict_files_dfolder: dict[str, str] = find_files(
             folder_structure['children'][idx],
-            *targets_d_folder,
+            *list(targets_d_folder_files_to_names.keys()),
             match_mode='keyword',
-            keyword=self.d_folder.rstrip('.d')
+            keyword=self.d_folder.rstrip('.d')  # require that the name is according to
         )
+
+        dict_files_folder: dict[str, str] = find_files(
+            folder_structure,
+            *list(targets_folder_files_to_names.keys()),
+            match_mode='keyword',
+            keyword=os.path.basename(self.path_folder).rstrip('.i')
+        )
+
+        # add as properties
+        targets_to_file_name = {
+            target: obj_name + '_file' for target, obj_name in (targets_d_folder_files_to_names | targets_folder_files_to_names).items()
+        }
+        for file_name, target_name in dict_files_folder.items():
+            obj_name = targets_to_file_name[target_name]
+            dict_files[obj_name] = os.path.join(self.path_folder, file_name)
+        for file_name, target_name in dict_files_dfolder.items():
+            obj_name = targets_to_file_name[target_name]
+            dict_files[obj_name] = os.path.join(self.path_folder, d_folder, file_name)
+
         # also try to find the sqlite file
         d = find_files(
             folder_structure['children'][idx],
@@ -3382,30 +3409,25 @@ class ProjectMSI(ProjectBaseClass):
         )
         if (_n := len(d['peaks.sqlite'])) > 0:
             assert _n == 1
-            dict_files_dfolder['peaks.sqlite'] = d['peaks.sqlite'][0]
+            dict_files['peaks_file'] = os.path.join(self.path_folder, d_folder, d['peaks.sqlite'][0])
 
-        dict_files_folder = find_files(
-            folder_structure,
-            *targets_folder,
-            match_mode='keyword',
-            keyword=os.path.basename(self.path_folder).rstrip('.i')
-        )
+        if self.files is None:
+            self.files = {}
+        self.files |= dict_files
 
-        # add as properties
-        for k, v in dict_files_dfolder.items():
-            k_new = k.split('.')[0] + '_file'
-            dict_files[k_new] = v
-        for k, v in dict_files_folder.items():
-            k_new = k.split('.')[0] + '_file'
-            dict_files[k_new] = v
-
-        self.files = dict_files
+    def add_path_file(self, obj_name: str, path_file: str) -> None:
+        assert os.path.exists(path_file), f'provided path {path_file} does not exist.'
+        key = obj_name + '_file'
+        self.files[key] = path_file
 
     def _update_files(self):
+        old_files = self.files.copy()
         self._set_files(
             d_folder=os.path.basename(self.path_d_folder),
             mis_file=os.path.basename(self.path_mis_file)
         )
+        # overwrite files but keep manually added ones
+        self.files = old_files | self.files
 
     @property
     def path_d_folder(self):
@@ -4116,7 +4138,7 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO)
     folder = r'D:\noM\0-5cm\2023_05_22_GB5000_noM_1-2.i'
-    d_folder = '2023_05_22_GB5000_noM_310_460Da.d'
+    d_folder = '2023_05_22_GB5000_noM_460_610Da.d'
 
     p = ProjectMSI(path_folder=folder, d_folder=d_folder, is_laminated=False)
     print(p.files)

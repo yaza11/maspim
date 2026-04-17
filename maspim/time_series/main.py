@@ -20,15 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 class TimeSeries(DataBaseClass, Convenience):
-    _save_in_d_folder: bool = True
+    _feature_table_successes: pd.DataFrame = None
+    _feature_table_standard_deviations: pd.DataFrame = None
+    _feature_table_standard_errors: pd.DataFrame = None
+    _contrasts: pd.DataFrame = None
 
-    _feature_table: pd.DataFrame | None = None
-    _feature_table_successes: pd.DataFrame | None = None
-    _feature_table_standard_deviations: pd.DataFrame | None = None
-    _feature_table_standard_errors: pd.DataFrame | None = None
-    _contrasts: pd.DataFrame | None = None
+    _data_columns: list[str] = None
 
-    _data_columns: list[str] | None = None
+    n_successes_required: int = None
 
     _save_attrs = {
         'd_folder',
@@ -40,7 +39,7 @@ class TimeSeries(DataBaseClass, Convenience):
 
     def __init__(
             self,
-            path_folder: str | None = None,
+            path_folder: str = None,
             n_successes_required: int = 10
     ) -> None:
         """Initialize."""
@@ -80,18 +79,15 @@ class TimeSeries(DataBaseClass, Convenience):
             return
 
         # path_folder could be d-folder
-        if path_folder[-2:] == '.d':
+        if path_folder.endswith('.d'):
             logger.info('detected d-folder')
             path_folder, d_folder = os.path.split(path_folder)
             self.d_folder: str = d_folder
+            self._save_in_d_folder = True
         else:
             logger.info('detected no d-folder')
-            self.d_folder = ''
+            self._save_in_d_folder = False
         self.path_folder = path_folder
-
-    @property
-    def path_d_folder(self) -> str:
-        return os.path.join(self.path_folder, self.d_folder)
 
     @property
     def age(self) -> pd.Series:
@@ -108,8 +104,8 @@ class TimeSeries(DataBaseClass, Convenience):
     def set_feature_tables(
             self,
             intensities: pd.DataFrame,
-            successes: pd.DataFrame | None,
-            deviations: pd.DataFrame | None
+            successes: pd.DataFrame = None,
+            deviations: pd.DataFrame = None
     ) -> None:
         if successes is not None:
             assert intensities.shape[0] == successes.shape[0]
@@ -117,8 +113,8 @@ class TimeSeries(DataBaseClass, Convenience):
             assert intensities.shape[0] == deviations.shape[0]
 
         self._feature_table: pd.DataFrame = intensities
-        self._feature_table_successes: pd.DataFrame | None = successes
-        self._feature_table_standard_deviations: pd.DataFrame | None = deviations
+        self._feature_table_successes: pd.DataFrame = successes
+        self._feature_table_standard_deviations: pd.DataFrame = deviations
 
         self._sort_tables()
 

@@ -94,6 +94,8 @@ try:
 
 
     class DataAnalysisExport(Convenience):
+        _save_in_d_folder = True
+
         path_file: str | None = None
         _peak_thr: float | None = None
         _normalization: str | None = None
@@ -147,6 +149,7 @@ try:
         @property
         def normalization(self) -> str:
             return self._normalization
+
 
 except ModuleNotFoundError as _e:
     logger.warning(f'{_e}, some functions are unavailable')

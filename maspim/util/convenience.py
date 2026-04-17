@@ -91,15 +91,17 @@ def object_to_string(obj: object | dict, pad=0) -> str:
     return '\n'.join(out)
 
 
-def get_disk_file(obj: object, path_folder: str, path_d_folder: str = None, tag: str = None) -> str:
-    has_d_folder = check_attr(obj, 'path_d_folder')
-    class_name: str = str(obj.__class__).split('.')[-1][:-2]
+def get_disk_file(obj: object, path_folder: str, save_in_d_folder: bool, tag: str = None) -> str:
+    if hasattr(obj, "__name__"):  # for uninitialized class objects
+        class_name: str = obj.__name__
+    else:  # for initialized class objects
+        class_name: str = obj.__class__.__name__
 
     file_name_prefix = 'maspim_'
-    if has_d_folder:
-        file_name_prefix += os.path.basename(obj.path_d_folder).rstrip('.d')
+    if save_in_d_folder:
+        file_name_prefix += os.path.basename(path_folder).rstrip('.d')
     else:
-        file_name_prefix += os.path.basename(obj.path_folder).rstrip('.i')
+        file_name_prefix += os.path.basename(path_folder).rstrip('.i')
 
     if tag is not None:
         file_name: str = f'{file_name_prefix}_{class_name}_{tag}.pickle'
@@ -109,12 +111,16 @@ def get_disk_file(obj: object, path_folder: str, path_d_folder: str = None, tag:
 
 
 class Convenience:
-    path_d_folder: str | None = None
-    path_folder: str | None = None
+    d_folder: str = None
+    path_folder: str = None
 
-    _save_attrs: set[str] | None = None
+    _save_attrs: set[str] = None
     _save_in_d_folder: bool = False
-    _save_file: str | None = None
+    _save_file: str = None
+
+    @property
+    def save_in_d_folder(self) -> bool:
+        return self._save_in_d_folder
 
     @property
     def feature_table(self) -> pd.DataFrame | None:
@@ -130,24 +136,33 @@ class Convenience:
                 or check_attr(self, 'path_file')), \
             'object does not have a path_folder attribute'
 
-        if tag is None and check_attr(self, '_tag'):
+        if self._save_in_d_folder:
+            assert (check_attr(self, 'd_folder'))
+            path_folder: str = self.path_d_folder
+        else:
+            path_folder = self.path_folder
+
+        if (tag is None) and check_attr(self, '_tag'):
             tag = self.__getattribute__('_tag')
 
         # changed in version 1.5.2: include name of the d folder in file name
         #  this allows having multiple d folders in the same i folder
-        file_name = get_disk_file(self, path_folder=self.path_folder, path_d_folder=self.path_d_folder, tag=tag)
+        file_name = get_disk_file(
+            self,
+            path_folder=path_folder,
+            save_in_d_folder=self._save_in_d_folder,
+            tag=tag
+        )
 
-        if self._save_in_d_folder:
-            assert (check_attr(self, 'd_folder'))
-            folder: str = self.path_d_folder
-        else:
-            assert check_attr(self, 'path_folder'), \
-                'object does not have a path_folder attribute'
-            folder: str = self.path_folder
+        file: str = os.path.join(path_folder, file_name)
 
-        file: str = os.path.join(folder, file_name)
+        return path_folder, file
 
-        return folder, file
+    @property
+    def path_d_folder(self) -> str:
+        if self.d_folder is None:
+            raise AttributeError(f'{self.__class__.__name__} does not have a d_folder attribute')
+        return os.path.join(self.path_folder, self.d_folder)
 
     @property
     def save_file(self):
