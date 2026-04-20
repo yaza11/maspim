@@ -131,6 +131,8 @@ class Image(Convenience):
             assert image is not None, f"Could not load image from {path_image_file}"
             self.image_file: str = os.path.basename(path_image_file)
             self.path_folder: str = os.path.dirname(path_image_file)
+        if path_folder is not None:  # overwrite with provided
+            self.path_folder = path_folder
 
         self.obj_color: str = obj_color
 
