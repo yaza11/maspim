@@ -19,7 +19,7 @@ def find_matches(
         folder: str | None = None,
         file_types: str | list[str] | None = None,
         must_include_substrings: bool = False,
-        return_mode: str = 'best'
+        return_mode: Literal['best', 'valid', 'all'] = 'best'
 ) -> str | list[str] | None:
     assert (files is not None) or (folder is not None), \
         'Provide either the folder or a list of files.'

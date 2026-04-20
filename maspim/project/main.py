@@ -3324,7 +3324,7 @@ class ProjectMSI(ProjectBaseClass):
                 f := os.path.join(self.path_folder, d_folder)), f'provided d-folder {d_folder} does not exist at {f}'
         # best guess for mis file name is that it is the same as the folder
         #  name
-        name_mis_file: str = d_folder.split('.')[0] + '.mis'
+        name_mis_file: str = d_folder.rstrip('d') + 'mis'
         if mis_file is None:
             mis_file: str = get_mis_file(self.path_folder, name_file=name_mis_file)
         else:
