@@ -271,11 +271,6 @@ class Data(DataBaseClass, Convenience):
         'tilt_correction_applied'
     }
 
-    @property
-    def path_d_folder(self):
-        """Overwritten by children"""
-        raise NotImplementedError()
-
     def _get_data_columns_xrf(self) -> np.ndarray[str]:
         """Return columns corresponding to data."""
         columns: pd.Index = self.columns

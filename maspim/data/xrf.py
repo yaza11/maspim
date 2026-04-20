@@ -111,7 +111,11 @@ class XRF(Data):
             self.measurement_name: str = measurement_name
         else:
             self._set_measurement_name()
-            
+
+    @property
+    def path_d_folder(self):
+        raise NotImplementedError()
+
     def _set_measurement_name(self):
         """
         Infer the measurement name from the folder name.
