@@ -407,7 +407,7 @@ class SampleImageHandlerMSI(Convenience):
             fig, ax = plt.subplots()
         else:
             assert ax is not None, "If fig is provided, must also provide ax"
-        plt.imshow(img)
+        ax.imshow(img)
         ax.add_patch(rect_photo)
         if hold:
             return fig, ax
@@ -684,7 +684,7 @@ class SampleImageHandlerXRF(Convenience):
             fig, ax = plt.subplots()
         else:
             assert ax is not None, "If fig is provided, must also provide ax"
-        plt.imshow(img)
+        ax.imshow(img)
         ax.add_patch(rect_photo)
         if hold:
             return fig, ax
