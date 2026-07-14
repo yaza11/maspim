@@ -606,7 +606,7 @@ class Data(DataBaseClass, Convenience):
             self._H: np.ndarray[float] = model.components_
         # store result in dict to be accessible by other functions such as
         # plot_nmf
-        if return_summary and use_repeated_NMF:
+        if return_summary and use_repeated_NMF and mfe_found:
             return self._W, self._H, S
         return self._W, self._H
 
