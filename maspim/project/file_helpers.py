@@ -321,8 +321,9 @@ class ImagingInfoXML:
         return self._feature_table
 
 
-def get_spots(path_d_folder: str) -> pd.DataFrame:
-    if os.path.exists(os.path.join(path_d_folder, 'ImagingInfo.xml')):
+def get_spots(path_d_folder: str, from_peaks: bool = None) -> pd.DataFrame:
+    """Fetch spot info either from ImagingInfo.xml or peaks.sqlite"""
+    if os.path.exists(os.path.join(path_d_folder, 'ImagingInfo.xml')) and (from_peaks is not True):
         ii = ImagingInfoXML(path_d_folder=path_d_folder)
         df = ii.feature_table
         return df.loc[:, ['spotName', 'R', 'x', 'y']]
