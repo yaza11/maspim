@@ -3176,7 +3176,7 @@ class ProjectMSI(ProjectBaseClass):
         if hasattr(DataAnalysisExport, '_save_in_d_folder'):
             targets_d_folder.append(DataAnalysisExport)
         targets_d_folder_files_to_names: dict[str, str] = {
-            get_disk_file(o, self.path_d_folder, o.save_in_d_folder, tag=tag): o.__name__ for o in targets_d_folder
+            get_disk_file(o, self.path_d_folder, tag=tag): o.__name__ for o in targets_d_folder
         }
 
         targets_folder: list[object] = [
@@ -3186,7 +3186,7 @@ class ProjectMSI(ProjectBaseClass):
             ImageClassified
         ]
         targets_folder_files_to_names: dict[str, str] = {
-            get_disk_file(o, self.path_folder, o.save_in_d_folder, tag=tag): o.__name__ for o in targets_folder
+            get_disk_file(o, self.path_folder, tag=tag): o.__name__ for o in targets_folder
         }
         print('targets_folder_files_to_names', targets_folder_files_to_names)
 
@@ -3202,14 +3202,14 @@ class ProjectMSI(ProjectBaseClass):
             folder_structure['children'][idx],
             *list(targets_d_folder_files_to_names.keys()),
             match_mode='keyword',
-            keyword=self.d_folder.rstrip('.d')  # require that the name is according to
+            keyword=self.d_folder[:-2]  # require that the name is according to
         )
 
         dict_files_folder: dict[str, str] = find_files(
             folder_structure,
             *list(targets_folder_files_to_names.keys()),
             match_mode='keyword',
-            keyword=os.path.basename(self.path_folder).rstrip('.i')
+            keyword=os.path.basename(self.path_folder)[:-2]
         )
 
         # add as properties
