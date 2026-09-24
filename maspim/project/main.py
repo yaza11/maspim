@@ -576,13 +576,12 @@ class SampleImageHandlerXRF(Convenience):
         x, y, w, h = self._photo_roi_xywh
         rect_photo = patches.Rectangle((x, y), w, h, fill=False, edgecolor='g')
 
-        if fig is None:
-            assert ax is None, "If ax is provided, must also provide fig"
-            fig, ax = plt.subplots()
-        else:
-            assert ax is not None, "If fig is provided, must also provide ax"
+        if ax is None:
+            _, ax = plt.subplots()
+
         ax.imshow(img)
         ax.add_patch(rect_photo)
+        return ax
 
 
 class ProjectBaseClass:
@@ -597,8 +596,8 @@ class ProjectBaseClass:
     holes_data = None
     holes_xray = None
 
-    _image_handler: SampleImageHandlerMSI | SampleImageHandlerXRF = None
-    _image_sample: ImageSample = None
+    image_handler: SampleImageHandlerMSI | SampleImageHandlerXRF = None
+    image_sample: ImageSample = None
     _image_roi: ImageROI = None
     _image_classified: ImageClassified = None
 
@@ -608,7 +607,7 @@ class ProjectBaseClass:
 
     _da_export: DataAnalysisExport = None
     _spectra: Spectra = None
-    _data_object: MSI | XRF = None
+    data_object: MSI | XRF = None
     _xray_long: XRay = None
     _xray: XRayROI = None
     _time_series: TimeSeries = None
@@ -778,19 +777,8 @@ class ProjectBaseClass:
         """Placeholder for children"""
         raise NotImplementedError()
 
-    def require_image_handler(self, *args, **kwargs):
-        """Placeholder for children"""
-        raise NotImplementedError()
-
-    @property
-    def image_handler(self):
-        return self.require_image_handler()
-
     def set_image_sample(
             self,
-            obj_color: str | None = None,
-            use_extent_from_handler: bool = True,
-            use_extent_from_mis: bool = None,
             **kwargs: Any
     ) -> None:
         """
@@ -815,16 +803,16 @@ class ProjectBaseClass:
         None
 
         """
-        # pass image file from handler if it has it else the image
-        # that way we can save disk space as ImageSample only saves the Image
-        # if it does not know the image file
-        if use_extent_from_mis is True:
-            logger.warning('"use_extent_from_mis" option has been renamed to '
-                           '"use_extent_from_handler" and will be removed in '
-                           'the future')
-            use_extent_from_handler = use_extent_from_mis
+        # TODO: attempt to get image file from mis
 
-        # fetch image from path in handler
+        if self.image_handler is None:
+            logger.warning('Image handler not set, cannot set image in ImageSample')
+            return
+
+        # pass image file from handler if it has it else the image
+        #  that way we can save disk space as ImageSample only saves the Image
+        #  if it does not know the image file
+        #   fetch image from path in handler
         if check_attr(self.image_handler, 'image_file'):
             image_file: str = self.image_handler.image_file
             path_image_file: str = os.path.join(self.path_folder, image_file)
@@ -837,102 +825,26 @@ class ProjectBaseClass:
 
         # if obj color is not provided, attempt to estimate it from region in
         # image handler
-        if check_attr(self, '_image_handler'):
+        if check_attr(self, 'image_handler'):
             logger.info('attempting to estimate obj_color using measurement area in ')
 
-        self._image_sample: ImageSample = ImageSample(path_folder=self.path_folder,
-                                                      obj_color=obj_color,
-                                                      **image_kwargs)
-        # attempt to set photo ROI on image handler
-        if (
-                use_extent_from_handler and
-                (not check_attr(self._image_sample, 'xywh_ROI'))
-        ):
-            try:
-                self.image_handler.set_rois()
-                assert check_attr(self.image_handler, 'photo_roi_xywh'), \
-                    'Need an image handler with photo ROI'
-            except Exception as e:
-                logger.error(e)
-                logger.error(
-                    'Could not set photo ROI, continuing with fitting box'
-                )
-                use_extent_from_handler = False
+        self.image_sample: ImageSample = ImageSample(path_folder=self.path_folder)
+        self.image_sample.set_image(**image_kwargs)
 
-        if use_extent_from_handler:
-            x_start: int = self.image_handler.photo_roi_xywh[0]
-            x_end: int = x_start + self.image_handler.photo_roi_xywh[2]
-            extent_x: tuple[int, int] = (x_start, x_end)
-        else:
-            extent_x: None = None
+    def image_sample_set_roi_using_mis_extend(self, **kwargs):
+        # attempt to set photo ROI on image handler
+        assert self.image_handler is not None, 'Image handler not set'
+        assert check_attr(self.image_handler, 'photo_roi_xywh'), 'ROIs of handler not set'
+
+        x_start: int = self.image_handler.photo_roi_xywh[0]
+        x_end: int = x_start + self.image_handler.photo_roi_xywh[2]
+        extent_x: tuple[int, int] = (x_start, x_end)
 
         thr_method = kwargs.pop('thr_method',
                                 'otsu' if self._is_laminated else 'slic')
         logging.info(f'estimating foreground pixels with method {thr_method}')
-        self._image_sample.set_foreground_mask(
-            measurement_area_xywh=self.image_handler.photo_roi_xywh,
-            thr_method=thr_method,
-            **kwargs
-        )
-        self._image_sample.set_sample_area(extent_x=extent_x, **kwargs)
-        self._image_sample.save(kwargs.get('tag'))
 
-        self._update_files()
-
-    def require_image_sample(
-            self,
-            obj_color: str | None = None,
-            overwrite: bool = False,
-            tag: str | None = None,
-            **kwargs: Any
-    ) -> ImageSample:
-        # return existing
-        if check_attr(self, '_image_sample') and (not overwrite):
-            return self._image_sample
-        # load and return
-        if (
-                check_attr(self, 'ImageSample_file')
-                or (tag is not None)
-        ) and (not overwrite):
-            logger.info('loading ImageSample')
-            self._image_sample: ImageSample = ImageSample(
-                path_folder=self.path_folder,
-                image=self.image_handler.image,
-                image_type='pil',
-                obj_color=obj_color
-            )
-
-            if not os.path.exists(self._image_sample.save_file):
-                logger.warning(f'Could not find ImageSample with {tag=}')
-
-            self._image_sample.load(tag)
-            # overwrite obj_color
-            if obj_color is not None:
-                self._image_sample.obj_color = obj_color
-            if check_attr(self._image_sample, 'xywh_ROI'):
-                return self._image_sample
-
-            logger.warning(
-                'loaded partially initialized ImageSample, overwriting '
-                'loaded ImageSample with fully initialized object'
-            )
-
-        logger.info("Initializing new ImageSample instance")
-        # either overwrite or loaded partially processed obj
-        self.set_image_sample(
-            obj_color=(
-                self._image_sample.obj_color
-                if check_attr(self, '_image_sample') and not overwrite
-                else obj_color),  # try to use stored obj_color
-            tag=tag,
-            **kwargs
-        )
-
-        return self._image_sample
-
-    @property
-    def image_sample(self):
-        return self.require_image_sample()
+        self.image_sample.set_sample_area(extent_x=extent_x, **kwargs)
 
     def set_image_roi_from_ion_image(self, comp: str | int | float, **kwargs) -> None:
         """
@@ -954,9 +866,9 @@ class ProjectBaseClass:
         -------
         None
         """
-        assert check_attr(self, '_data_object'), \
+        assert check_attr(self, 'data_object'), \
             'initialize data object first'
-        assert comp in self._data_object.feature_table.columns, \
+        assert comp in self.data_object.feature_table.columns, \
             f'{comp=} not found in data_object'
 
         image, *_ = get_comp_as_img(data_frame=self.data_object.feature_table,
@@ -980,8 +892,8 @@ class ProjectBaseClass:
         # if image roi is set from an ion image, image_sample and image_handler
         # have to be modified by setting the sample area to the measurement area
         if (
-                check_attr(self, '_image_sample')
-                and check_attr(self, '_image_sample')
+                check_attr(self, 'image_sample')
+                and check_attr(self, 'image_sample')
         ):
             self.image_sample.xywh_ROI = self.image_handler.photo_roi_xywh
             x, y, w, h = self.image_sample.xywh_ROI
@@ -1060,14 +972,14 @@ class ProjectBaseClass:
         # from parent
         if source == 'parent':
             logger.info('Creating new ImageROI instance from parent')
-            assert check_attr(self, '_image_sample'), \
+            assert check_attr(self, 'image_sample'), \
                 'set image_sample first or specify a different source'
             self.set_image_roi_from_parent(**kwargs)
             return self.image_roi
         # from ion image
         if source == 'comp':
             logger.info('Creating new ImageROI instance from ion image')
-            assert check_attr(self, '_data_object'), \
+            assert check_attr(self, 'data_object'), \
                 'set data_object first or specify a different source'
             self.set_image_roi_from_ion_image(**kwargs)
             return self.image_roi
@@ -1229,9 +1141,9 @@ class ProjectBaseClass:
 
         self.add_tic()
 
-        add_or_warn('_image_handler', self.add_pixels_ROI)
-        add_or_warn('_image_sample', self.add_photo, **kwargs)
-        add_or_warn('image_roi', self.add_holes, **kwargs)
+        add_or_warn('image_handler', self.add_pixels_ROI_to_data)
+        add_or_warn('image_sample', self.add_photo_to_data, **kwargs)
+        add_or_warn('image_roi', self.add_sediment_holes_to_data, **kwargs)
         add_or_warn(
             'image_roi', self.add_light_dark_classification, **kwargs
         )
@@ -1254,7 +1166,7 @@ class ProjectBaseClass:
     def add_tic(self, imaging_info_xml: ImagingInfoXML | None = None):
         """Add the total ion count (TIC) for each pixel to the feature table
         of the data obj."""
-        assert self._data_object is not None, "Set data object first with require_data_object"
+        assert self.data_object is not None, "Set data object first with require_data_object"
 
         if imaging_info_xml is None:
             imaging_info_xml: ImagingInfoXML = ImagingInfoXML(
@@ -1270,7 +1182,7 @@ class ProjectBaseClass:
             supress_warnings=True
         )
 
-    def add_pixels_ROI(self) -> None:
+    def add_pixels_ROI_to_data(self) -> None:
         """
         Add image pixels to data points in the feature table of the data_object.
 
@@ -1278,8 +1190,10 @@ class ProjectBaseClass:
         Creates new columns x_ROI and y_ROI for the pixel coordinates in the
         feature table.
         """
-        assert self._image_sample is not None, 'call set_image_sample first'
-        assert self._data_object is not None, 'call set_data_object'
+        assert self.image_handler is not None, 'Image handler not set'
+        assert self.image_sample is not None, 'call set_image_sample first'
+        assert self.image_sample.xywh_ROI is not None, 'set the sample are in the ImageSample instance first.'
+        assert self.data_object is not None, 'call set_data_object'
 
         attrs: tuple[str, ...] = ('image_roi', 'photo_roi_xywh', 'data_roi_xywh')
         if not all([check_attr(self.image_handler, attr) for attr in attrs]):
@@ -1292,7 +1206,7 @@ class ProjectBaseClass:
             data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh
         )
 
-    def add_photo(self, median: bool = False, **_) -> None:
+    def add_photo_to_data(self, median: bool = False, **_) -> None:
         """
         Add the gray-level values of the photo to the feature table of the data_object.
 
@@ -1310,15 +1224,23 @@ class ProjectBaseClass:
         -------
         None
         """
-        assert self._data_object is not None, 'set data object first'
+        assert self.data_object is not None, 'set data object first'
+        assert self.image_sample is not None, 'call set_image_sample first'
+        assert check_attr(self.image_sample, 'xywh_ROI'), 'set the sample are first'
         assert 'x_ROI' in self.data_object.feature_table.columns, \
             'add x_ROI, y_ROI coords with add_pixels_ROI'
-        image = ensure_image_is_gray(
-            self.image_sample.image_sample_area
-        )
-        self.data_object.add_attribute_from_image(image, 'L', median=median)
 
-    def add_holes(self, **kwargs) -> None:
+        if self.image_sample.image_roi is None:
+            image = self.image_sample.get_sample_area_from_xywh()
+        else:
+            image = self.image_sample.image_roi
+        self.data_object.add_attribute_from_image(
+            ensure_image_is_gray(image),
+            'L',
+            median=median
+        )
+
+    def add_sediment_holes_to_data(self, **kwargs) -> None:
         """
         Add classification for holes and sample to the feature table of the
         data_object.
@@ -1335,8 +1257,8 @@ class ProjectBaseClass:
         kwargs_ = kwargs.copy()
         kwargs_['median'] = False
         assert self._image_roi is not None, 'set image_roi first'
-        assert self._data_object is not None, 'set data_object first'
-        assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
+        assert self.data_object is not None, 'set data_object first'
+        assert 'x_ROI' in self.data_object.columns, 'call add_pixels_ROI first'
 
         image = self.image_roi.image_binary
         self.data_object.add_attribute_from_image(image, 'valid', **kwargs_)
@@ -1357,7 +1279,7 @@ class ProjectBaseClass:
         None
         """
         assert self._image_roi is not None, 'call set_image_roi_from_parent'
-        assert self._data_object is not None, 'set data_object first'
+        assert self.data_object is not None, 'set data_object first'
 
         image: np.ndarray[int] = self.image_roi.image_classification
         self.data_object.add_attribute_from_image(image, 'classification', **kwargs)
@@ -1367,9 +1289,9 @@ class ProjectBaseClass:
         ).astype(int)
 
     def data_object_apply_tilt_correction(self, inplace=False) -> Self:
-        assert not self.corrected_tilt, 'tilt has already been corrected'
-        assert self._data_object is not None, 'set data_object.'
-        assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
+        assert not self.is_data_object_tilt_corrected, 'tilt has already been corrected'
+        assert self.data_object is not None, 'set data_object.'
+        assert 'x_ROI' in self.data_object.columns, 'call add_pixels_ROI first'
 
         if inplace:
             new = self
@@ -1417,15 +1339,15 @@ class ProjectBaseClass:
         )
         logger.info('successfully loaded mapper and applied tilt correction')
 
-        new._data_object.tilt_correction_applied = True
+        new.data_object.tilt_correction_applied = True
 
         return new
 
     def data_object_apply_transformation_old(self, mapper: Mapper) -> None:
         """Apply a mapping from a mapper object to the data."""
-        assert not self.corrected_tilt, 'tilt has already been corrected'
-        assert self._data_object is not None, 'set data_object.'
-        assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
+        assert not self.is_data_object_tilt_corrected, 'tilt has already been corrected'
+        assert self.data_object is not None, 'set data_object.'
+        assert 'x_ROI' in self.data_object.columns, 'call add_pixels_ROI first'
 
         # get transformed coordinates
         XT, YT = mapper.get_transformed_coords()
@@ -1515,9 +1437,9 @@ class ProjectBaseClass:
 
             return target_image
 
-        assert self._data_object is not None, 'set data_object.'
-        assert 'x_ROI' in self._data_object.columns, 'call add_pixels_ROI first'
-        assert check_attr(self, '_image_handler'), \
+        assert self.data_object is not None, 'set data_object.'
+        assert 'x_ROI' in self.data_object.columns, 'call add_pixels_ROI first'
+        assert check_attr(self, 'image_handler'), \
             'need image handler to determine image region'
 
         if inplace:
@@ -1725,8 +1647,8 @@ class ProjectBaseClass:
         extent of the sample area. Pixels corresponding to data points outside the convex hull of the point cloud will
         be set to the fillvalue.
         """
-        assert check_attr(self, '_data_object')
-        assert check_attr(self, '_image_sample')
+        assert check_attr(self, 'data_object')
+        assert check_attr(self, 'image_sample')
         assert comp in self.data_object.feature_table.columns, f'{comp} not found in the feature table of {self.data_object}'
         assert 'x_ROI' in self.data_object.feature_table.columns, 'need to set x_ROI, y_ROI before calling this function'
         assert 'y_ROI' in self.data_object.feature_table.columns, 'need to set x_ROI, y_ROI before calling this function'
@@ -1852,8 +1774,8 @@ class ProjectBaseClass:
         ...
 
     @property
-    def corrected_tilt(self) -> bool:
-        return self._data_object.tilt_correction_applied
+    def is_data_object_tilt_corrected(self) -> bool:
+        return self.data_object.tilt_correction_applied
 
     def add_laminae_classification(self, **kwargs) -> None:
         """
@@ -1872,11 +1794,11 @@ class ProjectBaseClass:
         None
         """
         assert self._image_classified is not None, 'call set_image_classified'
-        assert self._data_object is not None, 'set data_object first'
+        assert self.data_object is not None, 'set data_object first'
 
         assert (  # image classified either not tilt corrected or data object transformed
                 (not self._image_classified.use_tilt_correction)
-                or self._data_object.tilt_correction_applied
+                or self.data_object.tilt_correction_applied
         ), (
             'found image_classified but use_tilt_correction is set to True and '
             'data object was not tilt-corrected. Please first '
@@ -1899,7 +1821,7 @@ class ProjectBaseClass:
         will be excluded from the depth calculation (they will be assigned the
         same depth as the last valid depth).
         """
-        assert self._data_object is not None, 'set the data_object first'
+        assert self.data_object is not None, 'set the data_object first'
         assert self.depth_span is not None, 'set the depth_span first'
         if exclude_gaps:
             assert 'valid' in self.data_object.feature_table.columns, \
@@ -1962,7 +1884,7 @@ class ProjectBaseClass:
         None.
         """
         assert self._age_model is not None, 'set age model first'
-        assert self._data_object is not None, f'did not set data_object yet'
+        assert self.data_object is not None, f'did not set data_object yet'
         assert check_attr(self.data_object, 'feature_table'), \
             'must have data_object'
         if use_corrected:
@@ -2240,7 +2162,7 @@ class ProjectBaseClass:
         assert method in methods, \
             f'method {method} is not valid, valid options are {methods}'
         assert self.holes_data is not None, 'call set_punchholes'
-        assert self._data_object is not None, 'set data_object object first'
+        assert self.data_object is not None, 'set data_object object first'
         assert 'depth' in self.data_object.feature_table.columns, 'set depth column'
         assert check_attr(self, 'image_roi'), 'call require_image_roi'
         assert check_attr(self, '_xray'), 'call require_xray'
@@ -2350,7 +2272,7 @@ class ProjectBaseClass:
         -------
 
         """
-        assert self._data_object is not None, 'set data_object object first'
+        assert self.data_object is not None, 'set data_object object first'
         assert 'x_ROI' in self.data_object.feature_table.columns, 'call add_pixels_ROI'
         assert check_attr(self, 'image_roi'), 'call require_image_roi'
         assert check_attr(self, '_xray'), 'call require_xray'
@@ -2669,11 +2591,11 @@ class ProjectBaseClass:
                       'and "data_object_apply_transformation"')
 
         assert check_attr(other, 'image_roi')
-        assert check_attr(other, '_data_object')
+        assert check_attr(other, 'data_object')
         assert 'x_ROI' in other.data_object.columns
 
         assert check_attr(self, 'image_roi')
-        assert check_attr(self, '_data_object')
+        assert check_attr(self, 'data_object')
         assert 'x_ROI' in self.data_object.columns
 
         # by default, apply tilt correction only to laminated sediments
@@ -2696,16 +2618,16 @@ class ProjectBaseClass:
             self_use_tilt_correction = use_tilt_correction
             other_use_tilt_correction = use_tilt_correction
 
-        self_correct_tilt = self_use_tilt_correction and (not self.corrected_tilt)
-        other_correct_tilt = other_use_tilt_correction and (not other.corrected_tilt)
+        self_correct_tilt = self_use_tilt_correction and (not self.is_data_object_tilt_corrected)
+        other_correct_tilt = other_use_tilt_correction and (not other.is_data_object_tilt_corrected)
         logger.info(f'Determined {self_correct_tilt=} and {other_correct_tilt=}')
 
         # warn if corrected even though use_tilt_correction is set to False
-        if self.corrected_tilt and (not self_use_tilt_correction):
+        if self.is_data_object_tilt_corrected and (not self_use_tilt_correction):
             logger.warning('using tilt corrected feature table for this '
                            'project even though '
                            'use_tilt_correction is set to False')
-        if other.corrected_tilt and (not other_use_tilt_correction):
+        if other.is_data_object_tilt_corrected and (not other_use_tilt_correction):
             logger.warning('using tilt corrected feature table for other '
                            'project even though '
                            'use_tilt_correction is set to False')
@@ -2735,7 +2657,7 @@ class ProjectBaseClass:
             is_continuous: bool = False,
             **kwargs
     ) -> None:
-        assert self._data_object is not None, 'call require_data_object'
+        assert self.data_object is not None, 'call require_data_object'
 
         if not is_continuous:
             assert self._image_classified is not None, \
@@ -2897,10 +2819,10 @@ class ProjectBaseClass:
         fig, axs = plt.subplots(
             nrows=5, ncols=2, figsize=(10, 25), frameon=False, layout='constrained'
         )
-        if self._image_handler is not None:
+        if self.image_handler is not None:
             self.image_handler.plot_overview(fig=fig, ax=axs[0, 0], hold=True)
             axs[0, 0].set_title('Measurement region')
-        if self._image_sample is not None:
+        if self.image_sample is not None:
             image = self.image_sample.image
             x, y, w, h = self.image_sample.xywh_ROI
             plt_rect_on_image(
@@ -3352,47 +3274,34 @@ class ProjectMSI(ProjectBaseClass):
         None.
 
         """
-        self._image_handler = SampleImageHandlerMSI(
+        self.image_handler = SampleImageHandlerMSI(
             path_folder=self.path_folder
         )
-        self._image_handler.set_files(
+        self.image_handler.set_files(
             path_d_folder=self.path_d_folder,
             path_mis_file=self.path_mis_file
         )
 
-        self._image_handler.set_extent_spots(
+        self.image_handler.set_extent_spots(
             reader=kwargs.get('reader'),
             spot_info=kwargs.get('spot_info')
         )
-        self._image_handler.set_rois(**kwargs)
-        self._image_handler.save()
+        self.image_handler.set_rois(**kwargs)
+        self.image_handler.save()
         self._update_files()
 
-    def require_image_handler(
-            self,
-            overwrite: bool = False,
-            **kwargs
-    ) -> SampleImageHandlerMSI:
-        # return existing
-        if (self._image_handler is not None) and (not overwrite):
-            return self._image_handler
+    def load_image_handler(self) -> SampleImageHandlerMSI:
         # load and set image
-        if ('SampleImageHandlerMSI_file' in self.files) and (not overwrite):
-            logger.info(f'loading SampleHandler from {self.path_folder}')
-            self._image_handler = SampleImageHandlerMSI(
-                path_folder=self.path_folder,
-                path_d_folder=self.path_d_folder,
-                path_mis_file=self.path_mis_file
-            )
-            self._image_handler.load()
-            # make sure it has extent_spots
-            if check_attr(self._image_handler, 'extent_spots'):
-                return self._image_handler
+        if 'SampleImageHandlerMSI_file' not in self.files:
+            raise ValueError('image handler not found, call set_image_handler first')
+        logger.info(f'loading SampleHandler from {self.path_folder}')
+        self.image_handler = SampleImageHandlerMSI(
+            path_folder=self.path_d_folder
+        ).load()
+        # make sure it has extent_spots
+        if not check_attr(self.image_handler, 'extent_spots'):
             logger.warning('Loaded image handler misses extent_spots')
-
-        logger.info('Initiating new ImageHandler instance')
-        self.set_image_handler(**kwargs)
-        return self._image_handler
+        return self.image_handler
 
     def get_mcf_reader(self, **kwargs) -> ReadBrukerMCF:
         reader = ReadBrukerMCF(self.path_d_folder, **kwargs)
@@ -3892,7 +3801,7 @@ class IonImagePlotter:
 
         self._data_object.inject_feature_table_from(df, supress_warnings=True)
         self._data_object.feature_table.columns = self._data_object.feature_table.columns.astype(str)
-        if not check_attr(self._project, '_data_object'):
+        if not check_attr(self._project, 'data_object'):
             return
 
         if 'x_ROI' in self._project.data_object.columns:

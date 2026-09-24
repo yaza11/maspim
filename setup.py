@@ -7,7 +7,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
     long_description = "\n" + fh.read()
 
-VERSION = '1.5.13'
+VERSION = '1.5.14'
 DESCRIPTION = 'Processing of mass spectrometry imaging and micro X-Ray fluorescence data.'
 NAME = "maspim"
 
@@ -40,7 +40,7 @@ setup(
                       'astropy'],
     extras_require={'dev': 'twine', 'all': ['mfe']},
     keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI',
-              'laminated', 'lamination', 'image registration'],
+              'laminated', 'lamination', 'image registration', 'MSI', 'micro X-ray fluorescence', 'XRF', 'muXRF'],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

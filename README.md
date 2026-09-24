@@ -57,6 +57,7 @@ Generally it is advised to stick to the objects provided at the top level of `ma
 and a few others. `ProjectMSI` and `ProjectXRF` are the core objects of this package, which manage most of the aforementioned objects. So unless you have a very specific application in mind, it is recommended to do everything with the methods provided by `ProjectMSI` and `ProjectXRF`.
 
 Let's look at a short example of how to define the ${U\_{37}^{k}}^\\prime$ proxy, which you can use to check that your installation worked.
+
 ```python
 from maspim import get_project
 from maspim.res.compound_masses import mC37_2, mC37_3
@@ -67,7 +68,7 @@ p.require_images()
 # perform all steps to extract intensities from alkenones
 p.set_spectra(targets=[mC37_2, mC37_3], suppress_warnings=True)
 p.set_data_object()
-p.add_pixels_ROI()
+p.add_pixels_ROI_to_data()
 # we did not provide any ages, so a time series does not make much sense, but 
 # this is just a test, so don't try to interpret the results
 p.set_time_series(average_by_col='x', is_continuous=True)
