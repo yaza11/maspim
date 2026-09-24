@@ -127,7 +127,15 @@ class SampleImageHandlerMSI(DFolderManager, MisFileManager):
         self.set_mis_file(path_mis_file)
         self.set_d_folder(path_d_folder)
         # this does not take any inputs, so it is safe to call it here
-        self.image_file: str = get_mis_image_file(self.path_mis_file)
+        self.set_image_file()
+
+    def set_image_file(self, path_image_file: str = None):
+        if path_image_file is None:
+            if self.mis_file is None:
+                raise ValueError('mis_file not set and no path_image_file provided')
+            else:
+                path_mis_file = self.path_mis_file
+        self.image_file: str = get_mis_image_file(path_mis_file)
 
     @classmethod
     def from_path_d_folder(cls, path_d_folder: str) -> Self:
@@ -3216,7 +3224,9 @@ class ProjectMSI(ProjectBaseClass):
         #  name
         name_mis_file: str = d_folder.rstrip('d') + 'mis'
         if mis_file is None:
-            mis_file: str = get_mis_file(self.path_folder, name_file=name_mis_file)
+            mis_files: str = get_mis_file(self.path_folder, name_file=name_mis_file)
+            if len(mis_files) > 1:
+                raise ValueError('found more than one mis file, please specify the name of the mis file')
         else:
             # check that provided mis file is valid
             assert os.path.exists(
@@ -3343,7 +3353,9 @@ class ProjectMSI(ProjectBaseClass):
 
         """
         self._image_handler = SampleImageHandlerMSI(
-            path_folder=self.path_folder,
+            path_folder=self.path_folder
+        )
+        self._image_handler.set_files(
             path_d_folder=self.path_d_folder,
             path_mis_file=self.path_mis_file
         )
