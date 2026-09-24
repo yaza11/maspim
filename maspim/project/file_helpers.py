@@ -1,11 +1,8 @@
 import os
-import re
-import sqlite3
 import logging
 import xml.etree.ElementTree as ET
 
 import numpy as np
-import pandas as pd
 
 from typing import Iterable, Literal
 from textdistance import damerau_levenshtein as textdistance
@@ -19,8 +16,13 @@ def find_matches(
         folder: str | None = None,
         file_types: str | list[str] | None = None,
         must_include_substrings: bool = False,
-        return_mode: Literal['best', 'valid', 'all'] = 'best'
+        return_mode: Literal['best', 'valid', 'all'] = 'all'
 ) -> str | list[str] | None:
+    """
+    In a folder (or in the specified files), find files mathcing the file type and/or substring(s)
+
+    Either returns all matches or the closest match to the substring
+    """
     assert (files is not None) or (folder is not None), \
         'Provide either the folder or a list of files.'
     assert return_mode in (return_modes := ('best', 'valid', 'all')), \
@@ -137,13 +139,13 @@ def find_files(
     return matches
 
 
-def get_mis_file(path_folder, name_file: str | None = None) -> str | None:
+def get_mis_file(path_folder, name_file: str | None = None, return_mode='all') -> str | None:
     """Find the name of the mis file inside the .i folder"""
     # folder_structure = get_folder_structure(path_folder)
     # return find_files(folder_structure, 'mis', by_suffix=True)['mis']
     if name_file is None:
         name_file = os.path.basename(path_folder).split('.')[0] + '.mis'
-    matches = find_matches(name_file, folder=path_folder, file_types='mis')
+    matches = find_matches(name_file, folder=path_folder, file_types='mis', return_mode=return_mode)
     if matches is None:
         raise FileNotFoundError(f'Could not find mis file inside {path_folder}')
     return matches
@@ -169,16 +171,16 @@ def get_mis_info(path_mis_file: str) -> dict[str, list | str | None]:
     return dict(Raster=resolution, Point=points)
 
 
-def get_d_folder(path_folder, return_mode='best') -> str | list[str] | None:
+def get_d_folder(path_folder, return_mode: str = 'all') -> str | list[str] | None:
     """Get the name of the .d folder inside the .i folder"""
     matches = find_matches(folder=path_folder, file_types='d', return_mode=return_mode)
     if matches is None:
-        raise FileNotFoundError('No d folder found inside {path_folder}')
+        raise FileNotFoundError(f'No d folder found inside {path_folder}')
     return matches
 
 
 def search_keys_in_xml(path_mis_file: str, keys: Iterable[str]) -> dict[str, list[str] | str]:
-    # iniate list of lists for values
+    # initiate list of lists for values
     out_dict = {key: [] for key in keys}
     # open xml
     with open(path_mis_file) as xml:
@@ -216,128 +218,8 @@ def get_resolution_msi(path_mis_file: str) -> float:
     return float(d)
 
 
-def get_image_file(path_folder: str) -> str:
-    try:
-        mis_file: str = get_mis_file(path_folder)
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f'Unable to determine image file from mis file because no mis file '
-            'was found in {path_folder}')
-    path_mis_file: str = os.path.join(path_folder, mis_file)
+def get_mis_image_file(path_mis_file: str) -> str:
     return search_keys_in_xml(path_mis_file, ['ImageFile'])['ImageFile']
-
-
-def get_rxy(spot_names: Iterable[str]) -> np.ndarray[int]:
-    # add R, x, y columns
-    str_prefix: str = r'R(\d+)X'
-    str_x: str = r'R\d+X(.*?)Y'
-    str_y: str = r'Y(.*?)$'
-
-    def rxy(name: str) -> list[int]:
-        """Obtain x, y, and r value from name."""
-        r: int = int(re.findall(str_prefix, name)[0])
-        x: int = int(re.findall(str_x, name)[0])
-        y: int = int(re.findall(str_y, name)[0])
-        return [r, x, y]
-
-    rxys: np.ndarray[int] = np.array([rxy(name) for name in spot_names])
-
-    return rxys
-
-
-class ImagingInfoXML:
-    _feature_table = None
-
-    def __init__(
-            self,
-            path_folder: str | None = None,
-            path_d_folder: str | None = None,
-            path_file: str | None = None
-    ):
-        assert (
-                (path_folder is not None)
-                or (path_d_folder is not None)
-                or (path_file is not None)
-        ), \
-            'specify one of the parameters'
-
-        if path_file is not None:
-            self.path_file = path_file
-        elif (path_folder is not None) and (path_d_folder is None):
-            path_d_folder = os.path.join(path_folder, get_d_folder(path_folder))
-        if path_file is None:
-            self.path_file = os.path.join(path_d_folder, 'ImagingInfo.xml')
-
-        assert os.path.exists(self.path_file), \
-            f'make sure the file is named correctly, could not find {self.path_file}'
-
-    def _re_all(self, key: str) -> np.ndarray[str]:
-        with open(self.path_file, 'r') as f:
-            xml: str = f.read()
-            matches: list[str] = re.findall(rf'<{key}>(.*?)</{key}>', xml)
-            return np.array(matches)
-
-    @property
-    def count(self) -> np.ndarray[int]:
-        return self._re_all('count').astype(int)
-
-    @property
-    def indices(self) -> np.ndarray[int]:
-        return self.count
-
-    @property
-    def spotName(self) -> np.ndarray[str]:
-        return self._re_all('spotName')
-
-    @property
-    def minutes(self) -> np.ndarray[float]:
-        return self._re_all('minutes').astype(float)
-
-    @property
-    def tic(self) -> np.ndarray[float]:
-        return self._re_all('tic').astype(float)
-
-    @property
-    def maxpeak(self) -> np.ndarray[float]:
-        return self._re_all('maxpeak').astype(float)
-
-    def set_feature_table(self) -> None:
-        RXYs: np.ndarray = get_rxy(self.spotName)
-        self._feature_table = pd.DataFrame({
-            'count': self.count,
-            'spotName': self.spotName,
-            'R': RXYs[:, 0],
-            'x': RXYs[:, 1],
-            'y': RXYs[:, 2],
-            'minutes': self.minutes,
-            'tic': self.tic,
-            'maxpeak': self.maxpeak
-        })
-
-    @property
-    def feature_table(self):
-        if self._feature_table is None:
-            self.set_feature_table()
-        return self._feature_table
-
-
-def get_spots(path_d_folder: str, from_peaks: bool = None) -> pd.DataFrame:
-    """Fetch spot info either from ImagingInfo.xml or peaks.sqlite"""
-    if os.path.exists(os.path.join(path_d_folder, 'ImagingInfo.xml')) and (from_peaks is not True):
-        ii = ImagingInfoXML(path_d_folder=path_d_folder)
-        df = ii.feature_table
-        return df.loc[:, ['spotName', 'R', 'x', 'y']]
-    elif os.path.exists(file := os.path.join(path_d_folder, 'peaks.sqlite')):
-        conn = sqlite3.connect(file)
-        df = pd.read_sql_query(
-            "SELECT SpotName,RegionNumber,XIndexPos,YIndexPos from Spectra",
-            conn
-        )
-        df.columns = ['spotName', 'R', 'x', 'y']
-        return df
-    raise FileNotFoundError(
-        f'Could not find peaks.sqlite or ImagingInfo.xml in {path_d_folder}'
-    )
 
 
 if __name__ == '__main__':

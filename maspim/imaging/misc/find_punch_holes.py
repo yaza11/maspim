@@ -79,7 +79,7 @@ def find_holes_side(
     size: int = round(SCALE_HOLE / depth_section * w)
     size_k: int = size * 3
 
-    # fill value used outside the image _extent (same as background)
+    # fill value used outside the image extent_roi_coordinates (same as background)
     fill_value: int = int(np.unique(image)[0])
 
     image_padded = cv2.copyMakeBorder(

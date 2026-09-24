@@ -45,9 +45,9 @@ from maspim.data.age_model import AgeModel
 
 from maspim.project.file_helpers import (
     get_folder_structure, find_files, get_mis_file, get_d_folder,
-    search_keys_in_xml, get_image_file, find_matches, ImagingInfoXML, get_rxy,
-    get_spots, get_resolution_msi, get_mis_info
+    search_keys_in_xml, get_mis_image_file, find_matches, get_resolution_msi, get_mis_info
 )
+from maspim.project.msi_spot_helpers import get_rxy, get_spots, ImagingInfoXML
 
 from maspim.imaging.main import ImageSample, ImageROI, ImageClassified
 from maspim.imaging.util.image_convert_types import (
@@ -61,7 +61,7 @@ from maspim.imaging.register.helpers import Mapper
 
 from maspim.time_series.main import TimeSeries
 from maspim.time_series.proxy import UK37
-from maspim.util.convenience import check_attr, object_to_string, get_disk_file
+from maspim.util.convenience import check_attr, object_to_string, get_disk_file, DFolderManager, MisFileManager
 from maspim.util.read_msi_align import get_teaching_points, get_teaching_point_pairings_dict
 
 PIL_Image.MAX_IMAGE_PIXELS = None
@@ -69,7 +69,7 @@ PIL_Image.MAX_IMAGE_PIXELS = None
 logger = logging.getLogger(__name__)
 
 
-class SampleImageHandlerMSI(Convenience):
+class SampleImageHandlerMSI(DFolderManager, MisFileManager):
     """
     Given the mis file and folder, find image and area (of MSI) of sample.
 
@@ -100,65 +100,44 @@ class SampleImageHandlerMSI(Convenience):
     mis_file: str = None
 
     _image: PIL_Image.Image = None
-    _extent_spots: tuple[int, int, int, int] = None
-    _data_roi_xywh: tuple[int, int, int, int] = None
-    _photo_roi_xywh: tuple[int, int, int, int] = None
-    _image_roi: tuple[int, int, int, int] = None
+    extent_spots: tuple[int, int, int, int] = None
+    points: list[tuple[int, int]] = None
+
+    data_roi_xywh: tuple[int, int, int, int] = None
+    photo_roi_xywh: tuple[int, int, int, int] = None
+    image_roi_data_units: np.ndarray = None
+    image_roi_photo_units: np.ndarray = None
 
     _save_attrs = {
-        '_extent_spots',
+        'extent_spots',
         'd_folder',
         'image_file',
         'mis_file',
-        '_extent_spots'
-        '_data_roi_xywh'
-        '_photo_roi_xywh',
+        'extent_spots'
+        'points'
+        'data_roi_xywh'
+        'photo_roi_xywh',
     }
 
-    def __init__(
-            self,
-            path_folder: str,
-            path_d_folder: str = None,
-            path_mis_file: str = None
-    ) -> None:
+    def set_files(self, path_d_folder: str = None, path_mis_file: str = None):
         """
-        Initialize paths for folder, mis file, d folder and ImageSample object.
-
-        Parameters
-        ----------
-        path_folder : str
-            The folder containing the d folder, mis file and sample photos.
-        path_d_folder : str
-            The d folder inside the folder. If not provided, the folder name
-            is searched inside the path_folder
-            Specifying this is only necessary when multiple d folders are
-            inside the folder.
-        path_mis_file: str, optional
-            Path and name of the mis file to use.
-
-        Returns
-        -------
-        None.
+        Set d folder and mis file. If they are not provided, attempt to find them. This is only possible if there is
+        one d folder/ mis file in the folder. Otherwise this will raise an error.
         """
-        self.path_folder: str = path_folder
-        if path_mis_file is not None:
-            self.mis_file: str = os.path.basename(path_mis_file)
-        else:
-            self.mis_file: str = get_mis_file(self.path_folder)
-        if path_d_folder is not None:
-            self.d_folder = os.path.basename(path_d_folder)
-        else:
-            self.d_folder = get_d_folder(self.path_folder)
+        self.set_mis_file(path_mis_file)
+        self.set_d_folder(path_d_folder)
+        # this does not take any inputs, so it is safe to call it here
+        self.image_file: str = get_mis_image_file(self.path_mis_file)
 
-        self.image_file = get_image_file(self.path_folder)
-
-    @property
-    def path_d_folder(self):
-        return os.path.join(self.path_folder, self.d_folder)
-
-    @property
-    def path_mis_file(self):
-        return os.path.join(self.path_folder, self.mis_file)
+    @classmethod
+    def from_path_d_folder(cls, path_d_folder: str) -> Self:
+        path_folder = os.path.dirname(path_d_folder)
+        new = cls(path_folder)
+        new.set_d_folder(path_d_folder)
+        mis_file = get_mis_file(new.path_folder, return_mode='best', name_file=new.d_folder)
+        new.set_mis_file(os.path.join(new.path_folder, mis_file))
+        new.image_file = get_mis_image_file(new.path_mis_file)
+        return new
 
     @property
     def path_image_file(self):
@@ -173,7 +152,7 @@ class SampleImageHandlerMSI(Convenience):
             self._image: PIL_Image.Image = PIL_Image.open(self.path_image_file)
         return self._image
 
-    def set_extent_data(
+    def set_extent_spots(
             self,
             reader: ReadBrukerMCF | None = None,
             spot_info: ImagingInfoXML | pd.DataFrame | None = None
@@ -222,13 +201,7 @@ class SampleImageHandlerMSI(Convenience):
                 ymax: int = img_y
             if img_y < ymin:
                 ymin: int = img_y
-        self._extent_spots: tuple[int, int, int, int] = (xmin, xmax, ymin, ymax)
-
-    @property
-    def extent_spots(self) -> tuple[int, int, int, int]:
-        if not check_attr(self, '_extent_spots'):
-            self.set_extent_data()
-        return self._extent_spots
+        self.extent_spots: tuple[int, int, int, int] = (xmin, xmax, ymin, ymax)
 
     def _draw_measurement_area(self, canvas: PIL_Image.Image) -> PIL_Image.Image:
         assert check_attr(self, 'points'), 'call set_photo_roi'
@@ -256,12 +229,7 @@ class SampleImageHandlerMSI(Convenience):
             draw.polygon(self.points, outline=(255, 0, 0), width=linewidth)
         return canvas
 
-    def set_photo_roi(
-            self,
-            match_roi_data: bool = True,
-            plts: bool = False,
-            **_
-    ) -> None:
+    def set_rois(self, **_) -> None:
         """
         Match image and data pixels and set extent of the measurement area in
         data and photo pixels.
@@ -280,7 +248,7 @@ class SampleImageHandlerMSI(Convenience):
         None
 
         """
-        assert check_attr(self, '_extent_spots'), 'call set_extent_data'
+        assert check_attr(self, 'extent_spots'), 'call set_extent_data'
 
         # search the mis file for the point data and image file
         mis_info: dict = get_mis_info(self.path_mis_file)
@@ -296,13 +264,6 @@ class SampleImageHandlerMSI(Convenience):
             p: tuple[int, int] = (int(point.split(',')[0]), int(point.split(',')[1]))
             self.points.append(p)
 
-        if plts:
-            canvas = self._draw_measurement_area(self.image)
-            img = np.array(canvas)
-            plt.figure()
-            plt.imshow(img, interpolation='None')
-            plt.show()
-
         # get the _extent of the image
         points_x: list[int] = [p[0] for p in self.points]
         points_y: list[int] = [p[1] for p in self.points]
@@ -317,15 +278,13 @@ class SampleImageHandlerMSI(Convenience):
         x_min_FT, x_max_FT, y_min_FT, y_max_FT = self.extent_spots
 
         # resize region in photo to match data points
-        if match_roi_data:
-            img_resized = self.image.resize(
-                (x_max_FT - x_min_FT + 1, y_max_FT - y_min_FT + 1),  # new number of pixels
-                box=(x_min_area, y_min_area, x_max_area, y_max_area),  # area of photo
-                resample=PIL_Image.Resampling.LANCZOS  # supposed to be best
-            )
-        else:  # crop original image to data region
-            img_resized = self.image.crop(
-                (x_min_area, y_min_area, x_max_area, y_max_area))
+        self.image_roi_data_units: PIL_Image.Image = self.image.resize(
+            (x_max_FT - x_min_FT + 1, y_max_FT - y_min_FT + 1),  # new number of pixels
+            box=(x_min_area, y_min_area, x_max_area, y_max_area),  # area of photo
+            resample=PIL_Image.Resampling.LANCZOS  # supposed to be best
+        )
+        # crop original image to data region
+        self.image_roi_photo_units: PIL_Image.Image = self.image.crop((x_min_area, y_min_area, x_max_area, y_max_area))
         # xywh of data ROI in original image, photo units
         xp: int = x_min_area  # lower left corner
         yp: int = y_min_area  # lower left corner
@@ -337,42 +296,14 @@ class SampleImageHandlerMSI(Convenience):
         wd: int = x_max_FT - x_min_FT
         hd: int = y_max_FT - y_min_FT
 
-        self._photo_roi_xywh: tuple[int, ...] = (xp, yp, wp, hp)  # photo units
-        self._data_roi_xywh: tuple[int, ...] = (xd, yd, wd, hd)  # data units
-        self._image_roi: np.ndarray[int] = img_resized
-
-    @property
-    def photo_roi_xywh(self) -> tuple[int, ...]:
-        if not check_attr(self, '_photo_roi_xywh'):
-            self.set_photo_roi()
-        return self._photo_roi_xywh
-
-    @property
-    def data_roi_xywh(self) -> tuple[int, ...]:
-        if not check_attr(self, '_data_roi_xywh'):
-            self.set_photo_roi()
-        return self._data_roi_xywh
-
-    @property
-    def image_roi(self):
-        """Uses grayscale values resampled at data points."""
-        if check_attr(self, '_image_roi'):
-            return self._image_roi
-        x_min_FT, x_max_FT, y_min_FT, y_max_FT = self.extent_spots
-        x_min_area, y_min_area, wp, hp = self.photo_roi_xywh
-        x_max_area, y_max_area = x_min_area + wp, y_min_area + hp
-
-        self._image_roi = self.image.resize(
-            (x_max_FT - x_min_FT + 1, y_max_FT - y_min_FT + 1),  # new number of pixels
-            box=(x_min_area, y_min_area, x_max_area, y_max_area),  # area of photo
-            resample=PIL_Image.Resampling.LANCZOS  # supposed to be best
-        )
+        self.photo_roi_xywh: tuple[int, ...] = (xp, yp, wp, hp)  # photo units
+        self.data_roi_xywh: tuple[int, ...] = (xd, yd, wd, hd)  # data units
 
     def plot_shots(self, s=.1):
         """Plot positions of measurement points on the sample area."""
         # first, draw bounds of measurement area
         if not check_attr(self, 'points'):
-            self.set_photo_roi()
+            self.set_rois()
         draw = self._draw_measurement_area(self.image)
         img = PIL_to_np(draw)
 
@@ -381,36 +312,30 @@ class SampleImageHandlerMSI(Convenience):
         # convert to pixel coordinates using Data
         data: MSI = MSI(path_d_folder=self.path_d_folder)
         data.inject_feature_table_from(spots_df, supress_warnings=True)
-        data.pixels_get_photo_ROI_to_ROI(data_ROI_xywh=self._data_roi_xywh,
-                                         photo_ROI_xywh=self._photo_roi_xywh,
+        data.pixels_get_photo_ROI_to_ROI(data_ROI_xywh=self.data_roi_xywh,
+                                         photo_ROI_xywh=self.photo_roi_xywh,
                                          image_ROI_xywh=(0, 0, img.shape[1], img.shape[0]))
 
         plt.imshow(img)
-
         plt.scatter(data.feature_table.x_ROI, data.feature_table.y_ROI, s=s)
         plt.show()
 
-    def plot_overview(
-            self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False
-    ) -> None | tuple[plt.Figure, plt.Axes]:
+    def plot_overview(self, ax: plt.Axes = None) -> plt.Axes:
         """Plot the image with identified region of measurement."""
         if not check_attr(self, 'points'):
-            self.set_photo_roi()
+            self.set_rois()
         draw = self._draw_measurement_area(self.image)
         img = PIL_to_np(draw)
 
         x, y, w, h = self.photo_roi_xywh
         rect_photo = patches.Rectangle((x, y), w, h, fill=False, edgecolor='g')
 
-        if fig is None:
-            assert ax is None, "If ax is provided, must also provide fig"
-            fig, ax = plt.subplots()
-        else:
-            assert ax is not None, "If fig is provided, must also provide ax"
+        if ax is None:
+            _, ax = plt.subplots()
+
         ax.imshow(img)
         ax.add_patch(rect_photo)
-        if hold:
-            return fig, ax
+        return ax
 
 
 class SampleImageHandlerXRF(Convenience):
@@ -437,7 +362,7 @@ class SampleImageHandlerXRF(Convenience):
     )
     # make sure to call set_photo before set_extent_data()
     # set the photo of the sample and the ROI
-    # if path_image_roi_file is not specified, image will be the same as _image_roi
+    # if path_image_roi_file is not specified, image will be the same as image_roi
     i_handler.set_photo()
 
     # read the extent of the data
@@ -455,67 +380,45 @@ class SampleImageHandlerXRF(Convenience):
     i_handler = SampleImageHandlerMSI(path_folder='path/to/your/msi/folder')
     i_handler.load()
     """
-    path_folder: str | None = None
-    image_file: str | None = None
-    image_roi_file: str | None = None
-    roi_is_image: bool | None = None
+    image_file: str = None
+    image_roi_file: str = None
 
-    image: PIL_Image.Image | None = None
-    _extent: tuple[int, int, int, int] | None = None
-    _extent_spots: tuple[int, int, int, int] | None = None
-    _data_roi_xywh: tuple[int, int, int, int] | None = None
-    _photo_roi_xywh: tuple[int, int, int, int] | None = None
-    _scale_conversion: float | None = None
+    image: PIL_Image.Image = None
+    image_roi: PIL_Image.Image = None
+    extent_roi_coordinates: tuple[int, int, int, int] = None
+    extent_pixel_coordinates: tuple[int, int, int, int] = None
+    _data_roi_xywh: tuple[int, int, int, int] = None
+    _photo_roi_xywh: tuple[int, int, int, int] = None
+    scale_conversion: float = None
 
     _save_attrs: set[str] = {
         'image_file',
         'image_roi_file',
         'roi_is_image',
-        '_extent',
-        '_extent_spots',
-        '_data_roi_xywh',
-        '_photo_roi_xywh',
-        '_scale_conversion'
+        'extent_roi_coordinates',
+        'extent_pixel_coordinates',
+        'data_roi_xywh',
+        'photo_roi_xywh',
+        'scale_conversion'
     }
 
-    def __init__(
-            self,
-            path_folder: str | None = None,
-            path_image_file: str | None = None,
-            path_image_roi_file: str | None = None
-    ) -> None:
-        """
-        Initialize. Set paths.
-
-        Parameters
-        ----------
-        path_folder : str, optional
-            Folder to load and save the object
-        path_image_file: str
-            The file with the photo of the sample
-        path_image_roi_file: str, optional
-            If not provided, it is assumed that no photo of the sample exists.
-
-        Returns
-        -------
-        None.
-
-        """
-        assert (path_folder is not None) or (path_image_file is not None), \
-            "provide either a folder or the image file"
-
-        if path_folder is not None:
-            self.path_folder: str = path_folder
-        elif path_image_file is not None:
-            self.path_folder: str = os.path.dirname(path_image_file)
-
-        if path_image_roi_file is None:
-            path_image_roi_file: str = path_image_file
-
-        self.roi_is_image: bool = path_image_file == path_image_roi_file
+    def set_image_file(self, path_image_file: str = None, image_file: str = None) -> None:
+        assert (path_image_file is not None) ^ (image_file is not None), \
+            'specify either path_image_file or image_file'
         if path_image_file is not None:
-            self.image_file: str = os.path.basename(path_image_file)
-            self.image_roi_file: str = os.path.basename(path_image_roi_file)
+            image_file = os.path.basename(path_image_file)
+        self.image_file: str = image_file
+
+    def set_image_roi_file(self, path_image_roi_file: str = None, image_roi_file: str = None) -> None:
+        assert (path_image_roi_file is not None) ^ (image_roi_file is not None), \
+            'specify either path_image_roi_file or image_roi_file'
+        if path_image_roi_file is not None:
+            image_roi_file = os.path.basename(path_image_roi_file)
+        self.image_roi_file: str = image_roi_file
+
+    @property
+    def roi_is_image(self):
+        return os.path.samefile(self.image_file, self.image_roi_file)
 
     @property
     def path_image_file(self):
@@ -546,10 +449,10 @@ class SampleImageHandlerXRF(Convenience):
             self.image: PIL_Image.Image = PIL_Image.open(self.path_image_file)
 
         if self.roi_is_image:
-            self._image_roi: PIL_Image.Image = self.image.copy()
+            self.image_roi: PIL_Image.Image = self.image.copy()
         else:
             arr: np.ndarray[np.uint8] = txt2uint8(self.path_image_roi_file)
-            self._image_roi: PIL_Image.Image = PIL_Image.fromarray(arr, 'L')
+            self.image_roi: PIL_Image.Image = PIL_Image.fromarray(arr, 'L')
 
     def set_extent_data(self, **kwargs: dict) -> None:
         """
@@ -573,29 +476,29 @@ class SampleImageHandlerXRF(Convenience):
 
         if self.roi_is_image:
             # xmin, xmax, ymin, ymax
-            self._extent_spots: tuple[int, ...] = (
+            self.extent_pixel_coordinates: tuple[int, ...] = (
                 0, self.image._size[1], 0, self.image._size[0]
             )
         else:
             # function expects arrays, not PIL_Images
             loc, scale = find_ROI_in_image(
                 image=PIL_to_np(self.image),
-                image_roi=PIL_to_np(self._image_roi),
+                image_roi=PIL_to_np(self.image_roi),
                 **kwargs
             )
 
             # convert image_roi resolution to image resolution
-            self._scale_conversion: float = scale
+            self.scale_conversion: float = scale
             # xmin, xmax, ymin, ymax
-            self._extent = (
+            self.extent_roi_coordinates = (
                 loc[0],
-                loc[0] + round(scale * self._image_roi.size[0]),  # size is (width, height)
+                loc[0] + round(scale * self.image_roi.size[0]),  # size is (width, height)
                 loc[1],
-                loc[1] + round(scale * self._image_roi.size[1])
+                loc[1] + round(scale * self.image_roi.size[1])
             )
-            self._extent_spots = tuple(round(p / scale) for p in self._extent)
+            self.extent_pixel_coordinates = tuple(round(p / scale) for p in self.extent_roi_coordinates)
         logger.info(
-            f'found the extent of the data to be {self._extent} (pixel coordinates)'
+            f'found the extent of the data to be {self.extent_roi_coordinates} (pixel coordinates)'
         )
 
     def plot_extent_data(self):
@@ -605,14 +508,14 @@ class SampleImageHandlerXRF(Convenience):
         This function can only be used after set_extent_data
 
         """
-        assert check_attr(self, '_scale_conversion'), 'call set_extent_data'
+        assert check_attr(self, 'scale_conversion'), 'call set_extent_data'
 
-        scale: float = self._scale_conversion
-        loc: tuple[int, int] = (self._extent[0], self._extent[2])
+        scale: float = self.scale_conversion
+        loc: tuple[int, int] = (self.extent_roi_coordinates[0], self.extent_roi_coordinates[2])
 
         plt_match_template_scale(
             image=ensure_image_is_gray(PIL_to_np(self.image)),
-            template=PIL_to_np(self._image_roi),
+            template=PIL_to_np(self.image_roi),
             loc=loc,
             scale=scale
         )
@@ -632,14 +535,14 @@ class SampleImageHandlerXRF(Convenience):
         image_roi : PIL_Image
             The image ROI corresponding to the measurement area.
         """
-        assert check_attr(self, '_extent_spots'), 'call set_extent_data first'
-        # get _extent of data points in txt-file
-        x_min_area, x_max_area, y_min_area, y_max_area = self._extent
-        x_min_meas, x_max_meas, y_min_meas, y_max_meas = self._extent_spots
+        assert check_attr(self, 'extent_pixel_coordinates'), 'call set_extent_data first'
+        # get extent_roi_coordinates of data points in txt-file
+        x_min_area, x_max_area, y_min_area, y_max_area = self.extent_roi_coordinates
+        x_min_meas, x_max_meas, y_min_meas, y_max_meas = self.extent_pixel_coordinates
 
         # resize region in photo to match data points
         if match_pxls:
-            img_resized = self._image_roi
+            img_resized = self.image_roi
         else:
             img_resized = self.image.crop(
                 (x_min_area, y_min_area, x_max_area, y_max_area)
@@ -657,23 +560,9 @@ class SampleImageHandlerXRF(Convenience):
             abs(x_max_meas - x_min_meas),
             abs(y_max_meas - y_min_meas)
         )
-        self._image_roi = img_resized
+        self.image_roi = img_resized
 
-    @property
-    def photo_roi_xywh(self) -> tuple[int, ...]:
-        if not check_attr(self, '_photo_roi_xywh'):
-            self.set_photo_roi()
-        return self._photo_roi_xywh
-
-    @property
-    def data_roi_xywh(self) -> tuple[int, ...]:
-        if not check_attr(self, '_data_roi_xywh'):
-            self.set_photo_roi()
-        return self._data_roi_xywh
-
-    def plot_overview(
-            self, fig: plt.Figure | None = None, ax: plt.Axes | None = None, hold=False
-    ) -> None | tuple[plt.Figure, plt.Axes]:
+    def plot_overview(self, ax: plt.Axes = None) -> plt.Axes:
         img = PIL_to_np(self.image)
 
         x, y, w, h = self._photo_roi_xywh
@@ -686,9 +575,6 @@ class SampleImageHandlerXRF(Convenience):
             assert ax is not None, "If fig is provided, must also provide ax"
         ax.imshow(img)
         ax.add_patch(rect_photo)
-        if hold:
-            return fig, ax
-        plt.show()
 
 
 class ProjectBaseClass:
@@ -955,8 +841,8 @@ class ProjectBaseClass:
                 (not check_attr(self._image_sample, '_xywh_ROI'))
         ):
             try:
-                self.image_handler.set_photo_roi()
-                assert check_attr(self.image_handler, '_photo_roi_xywh'), \
+                self.image_handler.set_rois()
+                assert check_attr(self.image_handler, 'photo_roi_xywh'), \
                     'Need an image handler with photo ROI'
             except Exception as e:
                 logger.error(e)
@@ -975,7 +861,7 @@ class ProjectBaseClass:
         thr_method = kwargs.pop('thr_method',
                                 'otsu' if self._is_laminated else 'slic')
         logging.info(f'estimating foreground pixels with method {thr_method}')
-        self._image_sample.set_foreground_thr_and_pixels(
+        self._image_sample.set_foreground_mask(
             measurement_area_xywh=self.image_handler.photo_roi_xywh,
             thr_method=thr_method,
             **kwargs
@@ -1092,7 +978,7 @@ class ProjectBaseClass:
             self.image_sample._xywh_ROI = self.image_handler.photo_roi_xywh
             x, y, w, h = self.image_sample.xywh_ROI
             # now we can be sure data roi is same as sample roi
-            self.image_handler._data_roi_xywh = (0, 0, w, h)
+            self.image_handler.data_roi_xywh = (0, 0, w, h)
             self.image_sample._image_roi = self.image_sample.image[
                 y: y + h, x: x + w
             ].copy()
@@ -1120,7 +1006,7 @@ class ProjectBaseClass:
 
         This function can only be called after set_image_sample has been called.
         """
-        # create _image_roi using image from image_sample
+        # create image_roi using image from image_sample
         self._image_roi: ImageROI = ImageROI.from_parent(self.image_sample, **kwargs)
         if self.age_span is not None:
             self._image_roi.age_span = self.age_span
@@ -1387,12 +1273,12 @@ class ProjectBaseClass:
         assert self._image_sample is not None, 'call set_image_sample first'
         assert self._data_object is not None, 'call set_data_object'
 
-        attrs: tuple[str, ...] = ('_image_roi', '_photo_roi_xywh', '_data_roi_xywh')
+        attrs: tuple[str, ...] = ('image_roi', 'photo_roi_xywh', 'data_roi_xywh')
         if not all([check_attr(self.image_handler, attr) for attr in attrs]):
-            self.image_handler.set_photo_roi()
+            self.image_handler.set_rois()
         image_ROI_xywh: tuple[int, ...] = self.image_sample.xywh_ROI
-        data_ROI_xywh: tuple[int, ...] = self.image_handler._data_roi_xywh
-        photo_ROI_xywh: tuple[int, ...] = self.image_handler._photo_roi_xywh
+        data_ROI_xywh: tuple[int, ...] = self.image_handler.data_roi_xywh
+        photo_ROI_xywh: tuple[int, ...] = self.image_handler.photo_roi_xywh
 
         self.data_object.pixels_get_photo_ROI_to_ROI(
             data_ROI_xywh, photo_ROI_xywh, image_ROI_xywh
@@ -2458,7 +2344,7 @@ class ProjectBaseClass:
         """
         assert self._data_object is not None, 'set data_object object first'
         assert 'x_ROI' in self.data_object.feature_table.columns, 'call add_pixels_ROI'
-        assert check_attr(self, '_image_roi'), 'call require_image_roi'
+        assert check_attr(self, 'image_roi'), 'call require_image_roi'
         assert check_attr(self, '_xray'), 'call require_xray'
         if method == 'punchholes':
             assert self.holes_data is not None, 'call set_punchholes first'
@@ -3080,7 +2966,8 @@ class ProjectXRF(ProjectBaseClass):
             bcf_file = find_matches(
                 substrings=self.measurement_name,
                 files=files,
-                file_types='bcf'
+                file_types='bcf',
+                return_mode='best'
             )
         else:
             bcf_file = os.path.basename(path_bcf_file)
@@ -3089,7 +2976,8 @@ class ProjectXRF(ProjectBaseClass):
                 substrings='Mosaic',
                 files=files,
                 file_types=['tif', 'bmp', 'png', 'jpg'],
-                must_include_substrings=True
+                must_include_substrings=True,
+                return_mode='best'
             )
             if image_file is None:
                 logger.info(
@@ -3100,7 +2988,8 @@ class ProjectXRF(ProjectBaseClass):
                     substrings='ROI',
                     files=files,
                     file_types=['tif', 'bmp', 'png', 'jpg'],
-                    must_include_substrings=True
+                    must_include_substrings=True,
+                    return_mode='best'
                 )
         else:
             image_file = os.path.basename(path_image_file)
@@ -3110,6 +2999,7 @@ class ProjectXRF(ProjectBaseClass):
                 files=files,
                 file_types='txt',
                 must_include_substrings=True,
+                return_mode='best'
             )
         else:
             image_roi_file = os.path.basename(path_image_roi_file)
@@ -3175,13 +3065,13 @@ class ProjectXRF(ProjectBaseClass):
             path_image_file=self.path_image_file,
             path_image_roi_file=self.path_image_roi_file
         )
-        if not check_attr(self.image_handler, '_extent_spots'):
+        if not check_attr(self.image_handler, 'extent_pixel_coordinates'):
             self._image_handler.set_photo()
             self._image_handler.set_extent_data()
             self._image_handler.save()
         if (
-                (not check_attr(self._image_handler, '_image_roi'))
-                or (not check_attr(self._image_handler, '_data_roi_xywh'))
+                (not check_attr(self._image_handler, 'image_roi'))
+                or (not check_attr(self._image_handler, 'data_roi_xywh'))
         ):
             self._image_handler.set_photo_roi()
             self._image_handler.save()
@@ -3202,7 +3092,7 @@ class ProjectXRF(ProjectBaseClass):
 
             if all([
                 check_attr(self._image_handler, attr)
-                for attr in ('_extent_spots', '_image_roi', '_data_roi_xywh')
+                for attr in ('extent_pixel_coordinates', 'image_roi', 'data_roi_xywh')
             ]):
                 return self._image_handler
             logger.warning(
@@ -3366,6 +3256,7 @@ class ProjectMSI(ProjectBaseClass):
         targets_folder_files_to_names: dict[str, str] = {
             get_disk_file(o, self.path_folder, o.save_in_d_folder, tag=tag): o.__name__ for o in targets_folder
         }
+        print('targets_folder_files_to_names', targets_folder_files_to_names)
 
         # get d_folder
         idxs = np.where([
@@ -3391,7 +3282,8 @@ class ProjectMSI(ProjectBaseClass):
 
         # add as properties
         targets_to_file_name = {
-            target: obj_name + '_file' for target, obj_name in (targets_d_folder_files_to_names | targets_folder_files_to_names).items()
+            target: obj_name + '_file' for target, obj_name in
+            (targets_d_folder_files_to_names | targets_folder_files_to_names).items()
         }
         for file_name, target_name in dict_files_folder.items():
             obj_name = targets_to_file_name[target_name]
@@ -3456,11 +3348,11 @@ class ProjectMSI(ProjectBaseClass):
             path_mis_file=self.path_mis_file
         )
 
-        self._image_handler.set_extent_data(
+        self._image_handler.set_extent_spots(
             reader=kwargs.get('reader'),
             spot_info=kwargs.get('spot_info')
         )
-        self._image_handler.set_photo_roi(**kwargs)
+        self._image_handler.set_rois(**kwargs)
         self._image_handler.save()
         self._update_files()
 
@@ -3481,8 +3373,8 @@ class ProjectMSI(ProjectBaseClass):
                 path_mis_file=self.path_mis_file
             )
             self._image_handler.load()
-            # make sure it has _extent_spots
-            if check_attr(self._image_handler, '_extent_spots'):
+            # make sure it has extent_spots
+            if check_attr(self._image_handler, 'extent_spots'):
                 return self._image_handler
             logger.warning('Loaded image handler misses extent_spots')
 
@@ -4137,8 +4029,8 @@ if __name__ == '__main__':
     import logging
 
     logging.basicConfig(level=logging.INFO)
-    folder = r'D:\noM\0-5cm\2023_05_22_GB5000_noM_1-2.i'
-    d_folder = '2023_05_22_GB5000_noM_460_610Da.d'
+    folder = r'F:\noM\0-5cm\2023_06_12_GB5000_noM_5-6.i'
+    d_folder = '2023_06_12_GB5000_noM_0-5cm_150-300.d'
 
     p = ProjectMSI(path_folder=folder, d_folder=d_folder, is_laminated=False)
     print(p.files)
