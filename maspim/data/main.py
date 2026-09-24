@@ -157,20 +157,14 @@ def PCA_biplot(
 
 
 class DataBaseClass:
-    _feature_table: pd.DataFrame = None
-
-    @property
-    def feature_table(self) -> pd.DataFrame:
-        """Feature table is read-only"""
-        assert check_attr(self, '_feature_table')
-        return self._feature_table
+    feature_table: pd.DataFrame = None
 
     def _get_tic_scales(self,
                         column_tic: str = 'tic_window',
                         method: str = 'median',
                         **_) -> pd.Series:
         assert method in ['median', 'mean', 'portion'], f'{method=} not valid'
-        assert (check_attr(self, '_feature_table')
+        assert (check_attr(self, 'feature_table')
                 and (column_tic in self.feature_table)),\
             f'{column_tic=} not in ft, make sure that ft is defined'
 
@@ -247,7 +241,7 @@ class Data(DataBaseClass, Convenience):
     For application take a look at the MSI or XRF class. The Data class is not
     ment to be used directly.
     """
-    _distance_pixels: int | float = None
+    distance_pixels: int | float = None
 
     tilt_correction_applied: bool = False
 
@@ -265,7 +259,7 @@ class Data(DataBaseClass, Convenience):
 
     _save_attrs: set[str] = {
         'distance_pixels',
-        '_feature_table',  # could be processed, so not necessarily redundant information
+        'feature_table',  # could be processed, so not necessarily redundant information
         'depth_section',
         'age_span',
         'tilt_correction_applied'
@@ -316,8 +310,7 @@ class Data(DataBaseClass, Convenience):
         """Return part of the feature table specified by columns."""
         return self.feature_table.loc[:, columns]
 
-    @property
-    def data_mean(self) -> pd.Series:
+    def get_data_means(self) -> pd.Series:
         """Get the mean values for each feature in the feature table."""
         return self.data.mean(axis=0)
 
@@ -542,12 +535,7 @@ class Data(DataBaseClass, Convenience):
         self._pca_columns: pd.Series = columns
 
     def set_distance_pixels(self, distance_micrometer: float) -> None:
-        self._distance_pixels = distance_micrometer
-
-    @property
-    def distance_pixels(self) -> int | float:
-        assert check_attr(self, '_distance_pixels')
-        return self._distance_pixels
+        self.distance_pixels = distance_micrometer
 
     def estimate_nmf(
             self,
@@ -1230,7 +1218,7 @@ class Data(DataBaseClass, Convenience):
             Additional keywords for plot_comp and get_comp_as_img
         """
         comp = self.get_closest_mz(comp, max_deviation=None)
-        if check_attr(self, '_distance_pixels'):
+        if check_attr(self, 'distance_pixels'):
             kwargs['distance_pixels'] = self.distance_pixels
 
         return plot_comp(

@@ -85,42 +85,47 @@ class Image(Convenience):
 
     def set_image(
             self,
-            obj_color: ObjectColor,
+            obj_color: ObjectColor = None,
             path_image_file: str = None,
             image: np.ndarray[float | int] = None,
             image_type: ImageType = None
     ):
         """Initiator.
 
-                Parameters
-                ----------
-                obj_color : str
-                    The foreground color of the object in the image. Either 'light' or
-                    'dark'. This is required for working with thresholded images is
-                    desired.
-                path_image_file : str, optional
-                    The file path to an image file to be read.
-                image : np.ndarray[float | int], optional
-                    Alternatively, an image can be provided directly.
-                mask_foreground: np.ndarray, optional
-                    Mask specifying foreground pixels. Will be determined automatically
-                    using the obj_color if not provided.
-                image_type: str, optional
-                    If the input image is not a cv image, provide this keyword argument.
-                    Options are 'cv', 'np', 'pil' for images read or processed with
-                    OpenCV, numpy or PILLOW respectively.
-                path_folder : str, optional
-                    Folder in which the image or saved object is located. If not provided,
-                    will be inferred from path_image_file.
-                    If that is also not provided, will be an empty string.
-                """
-        assert (path_image_file is not None) or (image is not None), \
+        Parameters
+        ----------
+        obj_color : str
+            The foreground color of the object in the image. Either 'light' or
+            'dark'. This is required for working with thresholded images is
+            desired.
+        path_image_file : str, optional
+            The file path to an image file to be read.
+        image : np.ndarray[float | int], optional
+            Alternatively, an image can be provided directly.
+        mask_foreground: np.ndarray, optional
+            Mask specifying foreground pixels. Will be determined automatically
+            using the obj_color if not provided.
+        image_type: str, optional
+            If the input image is not a cv image, provide this keyword argument.
+            Options are 'cv', 'np', 'pil' for images read or processed with
+            OpenCV, numpy or PILLOW respectively.
+        path_folder : str, optional
+            Folder in which the image or saved object is located. If not provided,
+            will be inferred from path_image_file.
+            If that is also not provided, will be an empty string.
+        """
+        assert (path_image_file is not None) or (image is not None) or (self.path_image_file is not None), \
             "Must provide either path or image"
         if image is not None:
             assert image_type is not None, 'If an image is provided, image type must be provided as well (usually np)'
             assert image_type in IMAGE_TYPES, (f'valid image types are {IMAGE_TYPES},'
                                                f' depending on the source of the image')
-        assert obj_color in OBJECT_COLORS, f'valid object colors are {OBJECT_COLORS}'
+        if obj_color is not None:
+            assert obj_color in OBJECT_COLORS, f'valid object colors are {OBJECT_COLORS}'
+
+        # after load
+        if (path_image_file is None) and (image is None) and (self.path_image_file is not None):
+            path_image_file = self.path_image_file
 
         if path_image_file is not None:
             image = cv2.imread(path_image_file)
@@ -168,6 +173,7 @@ class Image(Convenience):
             image: np.ndarray[int | float] = image.copy().swapaxes(0, 1)
         self.height_width = h, w
         self.image: np.ndarray[int | float] = image
+        self.image_type: ImageType = 'cv'
 
     @functools.cached_property
     def image_grayscale(self):
@@ -187,7 +193,7 @@ class Image(Convenience):
             self.min_intensity_foreground: int = thr_background
 
     def set_foreground_mask(
-            self, thr_method: str = 'otsu', plts: bool = False, **kwargs
+            self, thr_method: Literal['otsu', 'local-min', 'slic'] = 'otsu', image=None, plts: bool = False, **kwargs
     ) -> None:
         """
         Set threshold for foreground pixels and thresholded binary image.
@@ -205,6 +211,15 @@ class Image(Convenience):
         None
 
         """
+        # if self.obj_color is None:
+        #     raise ValueError('Set object color before setting foreground mask.')
+
+        if image is None:
+            if self.image is None:
+                raise ValueError('Set image before setting foreground mask or provide it directly.')
+            else:
+                image = self.image
+
         logger.debug(f'determining foreground pixels with {thr_method=}.')
 
         self.mask_foreground, self.min_intensity_foreground = get_foreground_pixels_and_threshold(
@@ -514,8 +529,10 @@ class ImageSample(Image):
         'image',
         'obj_color',
         'xywh_ROI',
+        'main_contour'
         'height_width',
-        'mask_foreground'
+        'mask_foreground',
+        'min_intensity_foreground'
     }
 
     def _pre_save(self):
@@ -527,11 +544,9 @@ class ImageSample(Image):
         self._save_attrs.add('image')
 
     def _post_load(self):
-        if not check_attr(self, 'image'):
-            assert check_attr(self, 'path_image_file'), \
-                'loaded corrupted instance with neither image nor image_file'
-            self._image = cv2.imread(self.path_image_file)
-            self._image_type = 'cv'
+        if not check_attr(self, 'image') and check_attr(self, 'path_image_file'):
+            self.image = cv2.imread(self.path_image_file)
+            self.image_type = 'cv'
 
     def infer_obj_color(self, image_grayscale: np.ndarray = None, region_middleground: float = .8, **_) -> ObjectColor:
         """
@@ -576,8 +591,7 @@ class ImageSample(Image):
             obj_color: ObjectColor = 'dark'
 
         logger.info(f'obj appears to be {obj_color}')
-
-        return obj_color
+        self.obj_color = obj_color
 
     def get_sample_area_box(
             self,
@@ -880,6 +894,7 @@ class ImageSample(Image):
             image_sub: ImageSample = ImageSample()
             image_sub.set_image(
                 image=image_box,
+                image_type=self.image_type,
                 obj_color=self.obj_color
             )
             image_sub.set_foreground_mask_from_other(
@@ -983,12 +998,6 @@ class ImageSample(Image):
         """Plot diagnostic images"""
         if self.image is None:
             return
-        # original image
-        image_box, (xb, yb, wb, hb) = self.get_sample_area_box(dilate_factor=0.1)
-        # set as new image
-        image_sub: ImageSample = ImageSample()
-        image_sub.set_image(image=image_box, obj_color=self.obj_color)
-
         fig, axs = plt.subplots(nrows=2, ncols=2, **kwargs)
 
         plt_cv2_image(
@@ -999,32 +1008,43 @@ class ImageSample(Image):
             swap_rb=True,
             no_ticks=True
         )
-        plt_rect_on_image(
-            fig=fig,
-            ax=axs[0, 1],
-            image=self.mask_foreground,
-            title='box dilated by 10 %',
-            no_ticks=True,
-            hold=True,
-            box_params=region_in_box(image=self.mask_foreground, x=xb, y=yb, w=wb, h=hb)
-        )
-        plt_contours(
-            fig=fig,
-            ax=axs[1, 0],
-            image=np.stack([image_sub.image_simplified] * 3, axis=-1) * image_sub.image,
-            contours=image_sub.main_contour,
-            title='contour in simplified sub-region',
-            swap_rb=True,
-            hold=True,
-            no_ticks=True
-        )
-        plt_cv2_image(
-            fig=fig,
-            ax=axs[1, 1],
-            image=self.image_roi,
-            title='final sample region', no_ticks=True,
-            swap_rb=True
-        )
+
+        if self.xywh_ROI is not None:
+            xb, yb, wb, hb = self.xywh_ROI
+            plt_rect_on_image(
+                fig=fig,
+                ax=axs[0, 1],
+                image=self.mask_foreground,
+                title='box',
+                no_ticks=True,
+                hold=True,
+                box_params=region_in_box(image=self.mask_foreground, x=xb, y=yb, w=wb, h=hb)
+            )
+        else:
+            axs[0, 1].axis('off')
+        if self.main_contour is not None:
+            plt_contours(
+                fig=fig,
+                ax=axs[1, 0],
+                image=self.image,
+                contours=self.main_contour,
+                title='contour',
+                swap_rb=True,
+                hold=True,
+                no_ticks=True
+            )
+        else:
+            axs[1, 0].axis('off')
+        if self.image_roi is not None:
+            plt_cv2_image(
+                fig=fig,
+                ax=axs[1, 1],
+                image=self.image_roi,
+                title='final sample region', no_ticks=True,
+                swap_rb=True
+            )
+        else:
+            axs[1, 1].axis('off')
         fig.tight_layout()
         plt.show()
 
@@ -1086,53 +1106,310 @@ class ImageROI(Image):
         'obj_color',
         'xywh_ROI',
         'height_width',
+        'punchholes',
+        'punchhole_size',
+        'mask_foreground'
+    }
+
+    @classmethod
+    def from_parent(cls, parent: ImageSample, **kwargs) -> Self:
+        """
+        Alternative constructor for instantiating an object from a parent
+        ImageSample instance.
+        """
+        if not isinstance(parent, ImageSample):
+            raise TypeError(
+                f'parent must be an instance of ImageSample, not {type(parent)}'
+            )
+        if (not parent.xywh_ROI) or (parent.image is None):
+            raise ValueError(
+                'parent must have image and xywh_ROI attributes set'
+            )
+
+        image = parent.get_sample_area_from_xywh()
+        x, y, w, h = parent.xywh_ROI
+        if (parent.mask_foreground is not None):
+            mask_foreground = parent.mask_foreground[y: y + h, x: x + w]
+        else:
+            mask_foreground = None
+
+        new = cls(path_folder=parent.path_folder)
+        new.set_image(image=image, image_type=parent.image_type, obj_color=parent.obj_color)
+        new.set_foreground_mask_from_other(mask_foreground=mask_foreground)
+
+        if check_attr(parent, 'age_span') and ('age_span' not in kwargs):
+            new.age_span = parent.age_span
+        return new
+
+    def set_punchholes(
+            self,
+            image_binary: np.ndarray = None,
+            remove_gelatine: bool = True,
+            image_simplified: np.ndarray = None,
+            interactive: bool = False,
+            **kwargs
+    ) -> None:
+        """
+        Add punch-holes to the current instance.
+
+        Parameters
+        ----------
+        remove_gelatine: bool
+            Try to remove gelatin residuals by masking foreground values
+            with the simplified image since the simplified
+            image usually does not contain the gelatin.
+            If false, uses the binary image.
+        interactive: bool, optional
+            If this is set to True, will open a window for the user to click
+            on the punch-holes.
+        kwargs: Any, optional
+            Extra keywords to be passed on to find_holes.
+        """
+        if interactive:
+            self._user_punchholes()
+            return
+
+        # need copy, otherwise mask in ImageROI will be modified
+        if image_binary is None:
+            if self.mask_foreground is None:
+                raise ValueError('Foreground mask is required to find punchholes or binary image must be provided.')
+            else:
+                image_binary = self.mask_foreground.copy()
+        else:
+            assert np.unique(image_binary).shape <= 2, 'binary image contains more than two values'
+
+        if remove_gelatine:
+            if image_simplified is None:
+                if self.image_simplified is None:
+                    raise ValueError('Simplified image is required to find punchholes or binary image must be provided.')
+                else:
+                    image_simplified = self.image_simplified.copy()
+            image_binary *= image_simplified
+
+        kwargs_ = kwargs.copy()
+        if 'obj_color' in kwargs_:
+            kwargs_.pop('obj_color')
+
+        self.punchholes, self.punchhole_size = find_holes(
+            image_binary=image_binary,
+            obj_color='light',  # image binary takes object color into account
+            **kwargs_
+        )
+
+    def _user_punchholes(self) -> None:
+        interactive_image: InteractiveImage = InteractiveImage(
+            image_convert_types.swap_RB(self.image), mode='punchholes'
+        )
+        interactive_image.show()
+
+        self.punchholes: tuple[tuple[int, int]] = tuple(
+            zip(interactive_image.y_data, interactive_image.x_data)
+        )
+        self.punchhole_size: int = interactive_image.punchhole_size
+
+    def plot_punchholes(
+            self,
+            image_name: str = 'image_grayscale',
+            fig: plt.Figure | None = None,
+    ) -> None | tuple[plt.Figure, plt.Axes]:
+        if self.punchholes is None:
+            raise ValueError('Punchholes not set yet')
+
+        image = self.__getattribute__(image_name)
+
+        if fig is None:
+            fig, axs = plt.subplots()
+        else:
+            axs = fig.get_axes()
+
+        hole_size: int = round(self.punchhole_size)
+
+        _, ax11 = plt_rect_on_image(
+            fig=fig,
+            ax=axs,
+            image=image,
+            box_params=region_in_box(
+                image=self.mask_foreground,
+                point_topleft=np.array(self.punchholes[0])[::-1] - hole_size / 2,
+                point_bottomright=np.array(self.punchholes[0])[::-1] + hole_size / 2
+            ),
+            no_ticks=True,
+            hold=True
+        )
+        fig, axs = plt_rect_on_image(
+            fig=fig,
+            ax=ax11,
+            image=image,
+            box_params=region_in_box(
+                image=self.mask_foreground,
+                point_topleft=np.array(self.punchholes[1])[::-1] - hole_size / 2,
+                point_bottomright=np.array(self.punchholes[1])[::-1] + hole_size / 2
+            ), no_ticks=True,
+            title='Detected punch-holes',
+            hold=True
+        )
+        return fig
+
+    def plot_overview(
+            self,
+            fig: plt.Figure | None = None
+    ) -> plt.Figure:
+        """Plot the original, preprocessed, classified image and the punchholes."""
+        if fig is None:
+            fig, axs = plt.subplots(nrows=2, ncols=2, layout="constrained")
+        else:
+            axs = fig.get_axes()
+
+        # will plot only the binary image with punch-holes
+        axs = np.array(axs)
+        only_final = axs.shape == (1,)
+
+        if not only_final:
+            plt_cv2_image(fig=fig,
+                          ax=axs[0, 0],
+                          image=self.image,
+                          title="Input image",
+                          no_ticks=True)
+            plt_cv2_image(fig=fig,
+                          ax=axs[0, 1],
+                          image=self._get_preprocessed_for_classification()[0],
+                          title="Preprocessed image",
+                          no_ticks=True)
+            plt_cv2_image(fig=fig,
+                          ax=axs[1, 0],
+                          image=self.image_classification,
+                          title="Classified image",
+                          no_ticks=True)
+
+        if self.punchholes is not None:
+            _, ax11 = plt_rect_on_image(
+                fig=fig,
+                ax=axs[0] if only_final else axs[1, 1],
+                image=self.image_classification if only_final else self.image_binary,
+                box_params=region_in_box(
+                    image=self.image_binary,
+                    point_topleft=np.array(self.punchholes[0])[::-1] - self.punchhole_size / 2,
+                    point_bottomright=np.array(self.punchholes[0])[::-1] + self.punchhole_size / 2
+                ),
+                no_ticks=True,
+                hold=True
+            )
+            plt_rect_on_image(
+                fig=fig,
+                ax=ax11,
+                image=self.image_classification if only_final else self.image_binary,
+                box_params=region_in_box(
+                    image=self.image_binary,
+                    point_topleft=np.array(self.punchholes[1])[::-1] - self.punchhole_size / 2,
+                    point_bottomright=np.array(self.punchholes[1])[::-1] + self.punchhole_size / 2
+                ), no_ticks=True,
+                title='Detected punch-holes'
+            )
+        return fig
+
+
+class ImageClassified(Image):
+    """
+    Characterise and modify the classified layers.
+
+    Example Usage
+    -------------
+    >>> from maspim import ImageClassified, ImageROI
+    initiate from parent object, most common use case.
+    >>> ir = ImageROI.from_disk('path/to/your/folder')
+    >>> ic = ImageClassified.from_parent(ir)
+    >>> ic.set_seeds(peak_prominence=.1,plts=True)
+    >>> ic.set_params_laminae_simplified()
+    >>> ic.set_quality_score()
+    or, doing it all in one step
+    >>> ic.set_laminae_params_table()
+    and save to disk
+    >>> ic.save()
+    which can then be loaded
+    >>> ic = ImageClassified.from_disk('path/to/your/folder')
+    View the results
+    >>> ic.plot_overview()
+    """
+
+    _image_classification: np.ndarray = None
+    _image_classification_corrected: np.ndarray = None
+    _image_corrected: np.ndarray = None
+
+    _seeds_light: np.ndarray[int] = None
+    _seeds_dark: np.ndarray[int] = None
+    _width_light: np.ndarray[float] = None
+    _width_dark: np.ndarray[float] = None
+    _prominences_light: np.ndarray[float] = None
+    _prominences_dark: np.ndarray[float] = None
+
+    _qualities: np.ndarray[float] = None
+
+    image_seeds: np.ndarray[int] = None
+    params_laminae_simplified: pd.DataFrame = None
+
+    _save_attrs: set[str] = {
+        'age_span',
+        'average_width_yearly_cycle',
+        'image_file',
+        'image',
+        'obj_color',
+        'xywh_ROI',
+        'height_width',
         '_image_classification',
-        '_params',
-        '_punchholes',
-        '_punchhole_size',
+        'params_laminae_simplified',
+        'image_seeds',
+        '_image_classification',
         'mask_foreground'
     }
 
     def __init__(
             self,
-            obj_color: str | None = None,
-            path_folder: str | None = None,
-            image: np.ndarray[float | int] | None = None,
-            mask_foreground: np.ndarray | None = None,
+            obj_color: Literal['light', 'dark'] = None,
+            path_folder: str = None,
+            image: np.ndarray[float | int] = None,
+            mask_foreground: np.ndarray = None,
             has_no_holes: bool = False,
+            image_classification: np.ndarray[int] = None,
             image_type: str = 'cv',
-            path_image_file: str | None = None,
-            age_span: tuple[float | int, float | int] | None = None,
+            path_image_file: str = None,
+            age_span: tuple[float | int, float | int] = None,
+            use_tilt_correction: bool = True,
             **_
-    ) -> None:
+    ):
         """Initiator.
 
         Parameters
         ----------
         obj_color : str
-            The foreground color of the object in the image. Either 'light' or 'dark'.
-            This is required for working with thresholded images is desired.
+           The foreground color of the object in the image. Either 'light' or 'dark'.
+           This is required for working with thresholded images is desired.
         path_image_file : str, optional
-            The file path to an image file to be read.
+           The file path to an image file to be read.
         image : np.ndarray[float | int], optional
-            Alternatively, an image can be provided directly.
-            mask_foreground: np.ndarray, optional
+           Alternatively, an image can be provided directly.
+        mask_foreground: np.ndarray, optional
             Mask specifying foreground pixels. Will be determined automatically
             using the obj_color if not provided.
         image_type: str, optional
-            If the input image is not a cv image, provide this keyword argument. Options are 'cv', 'np', 'pil'
-            for images read or processed with OpenCV, numpy or PILLOW respectively.
+           If the input image is not a cv image, provide this keyword argument.
+           Options are 'cv', 'np', 'pil' for images read or processed with
+           OpenCV, numpy or PILLOW respectively.
         path_folder : str, optional
-            Folder in which the image or saved object is located. If not provided,
-            will be inferred from path_image_file.
-            If that is also not provided, will be an empty string.
+           Folder in which the image or saved object is located. If not provided,
+           will be inferred from path_image_file.
+           If that is also not provided, will be an empty string.
         age_span: tuple[float | int, float | int], optional
             The age span covered by the sample.
+        use_tilt_correction: bool, optional
+            If this is set to True, the input images will be transformed such
+            that laminae are roughly distortion free. This allows to define
+            laminae solemnly by their width. The image_seeds is transformed
+            back such that downstream applications remain unaffected by this
+            parameter.
         has_no_holes: bool, optional
             If the sample does not have any holes, specifying the obj_color and
             mask_foreground is not necessary. In this case set this parameter
             to True.
-
         """
         if has_no_holes:
             # define dummies
@@ -1146,11 +1423,11 @@ class ImageROI(Image):
                  'set "has_no_holes=True"')
 
         super().__init__(
-            image=image,
-            image_type=image_type,
-            mask_foreground=mask_foreground,
-            path_image_file=path_image_file,
             path_folder=path_folder,
+            path_image_file=path_image_file,
+            image=image,
+            mask_foreground=mask_foreground,
+            image_type=image_type,
             obj_color=obj_color
         )
 
@@ -1158,28 +1435,35 @@ class ImageROI(Image):
             self._mask_foreground = np.full_like(self.image_grayscale, 1, dtype=np.uint8)
             self._thr_background = 0
 
+        if image_classification is not None:
+            assert image_classification.shape[:2] == self.image.shape[:2], (
+                    'image_classification and image should have the same shape ' +
+                    'along the first two axes' +
+                    f'but have shapes {image_classification.shape[:2]}' +
+                    f' and {self.image.shape[:2]}'
+            )
+            self._image_classification: np.ndarray[int] = image_classification
+
         self.age_span: tuple[float | int, float | int] | None = age_span
+        self.use_tilt_correction: bool = use_tilt_correction
 
     @classmethod
-    def from_parent(cls, parent: ImageSample, **kwargs) -> Self:
+    def from_parent(cls, parent: ImageROI, **kwargs) -> Self:
         """
         Alternative constructor for instantiating an object from a parent
         ImageSample instance.
         """
-        image = parent.image_sample_area.copy()
-        x, y, w, h = parent.xywh_ROI
-        mask_foreground = parent.mask_foreground[y: y + h, x: x + w]
-
         new: Self = cls(
             path_folder=parent.path_folder,
-            image=image,
-            mask_foreground=mask_foreground,
+            image=parent.image,
+            mask_foreground=parent.mask_foreground,
+            image_classification=parent.image_classification,
             path_image_file=None,
             obj_color=parent.obj_color,
             **kwargs
         )
 
-        if check_attr(parent, 'age_span') and ('age_span' not in kwargs):
+        if check_attr(parent, 'age_span'):
             new.age_span = parent.age_span
 
         return new
@@ -1503,371 +1787,6 @@ class ImageROI(Image):
 
         if plts:
             plt_cv2_image(image_classification, title='classified image')
-
-    def require_classification(
-            self, overwrite: bool = False, **kwargs
-    ) -> np.ndarray[np.uint8]:
-        """Create and return the image classification with parameters."""
-        if not check_attr(self, '_image_classification') or overwrite:
-            if not check_attr(self, 'age_span'):
-                logger.warning(
-                    'No age span specified, falling back to more general method'
-                )
-                self.set_classification_varying_kernel_size(**kwargs)
-            else:
-                self.set_classification_adaptive_mean(**kwargs)
-
-        return self._image_classification
-
-    @property
-    def image_classification(self) -> np.ndarray[np.uint8]:
-        """Create and return the image classification with parameters."""
-        return self.require_classification()
-
-    def set_punchholes(
-            self,
-            remove_gelatine: bool = True,
-            interactive: bool = False,
-            **kwargs
-    ) -> None:
-        """
-        Add punch-holes to the current instance.
-
-        Parameters
-        ----------
-        remove_gelatine: bool
-            Try to remove gelatin residuals by masking foreground values
-            with the simplified image since the simplified
-            image usually does not contain the gelatin.
-            If false, uses the binary image.
-        interactive: bool, optional
-            If this is set to True, will open a window for the user to click
-            on the punch-holes.
-        kwargs: Any, optional
-            Extra keywords to be passed on to find_holes.
-        """
-        if interactive:
-            self._user_punchholes()
-            return
-
-        # need copy, otherwise mask in ImageROI will be modified
-        img: np.ndarray[np.uint8] = self.image_binary.copy()
-        if remove_gelatine:
-            img *= self.image_simplified
-
-        kwargs_ = kwargs.copy()
-        if 'obj_color' in kwargs_:
-            kwargs_.pop('obj_color')
-
-        self._punchholes, self._punchhole_size = find_holes(
-            img,
-            obj_color='light',  # image binary takes object color into account
-            **kwargs_
-        )
-
-    def _user_punchholes(self) -> None:
-        interactive_image: InteractiveImage = InteractiveImage(
-            image_convert_types.swap_RB(self.image), mode='punchholes'
-        )
-        interactive_image.show()
-
-        self._punchholes: tuple[tuple[int, int]] = tuple(
-            zip(interactive_image.y_data, interactive_image.x_data)
-        )
-        self._punchhole_size: int = interactive_image._punchhole_size
-
-    def require_punchholes(
-            self, *args, overwrite: bool = False, **kwargs
-    ) -> tuple[list[np.ndarray[int]] | tuple[tuple[int, int]], float]:
-        if (not check_attr(self, "_punchholes")) or overwrite:
-            self.set_punchholes(*args, **kwargs)
-        return self._punchholes, self._punchhole_size
-
-    @property
-    def punchholes(
-            self
-    ) -> list[np.ndarray[int]] | tuple[tuple[int, int]]:
-        if not check_attr(self, '_punchholes'):
-            self.require_punchholes()
-        return self._punchholes
-
-    def plot_punchholes(
-            self,
-            image_name: str = 'image_grayscale',
-            fig: plt.Figure | None = None,
-            axs: Iterable[plt.Axes] | None = None,
-            hold=False
-    ) -> None | tuple[plt.Figure, plt.Axes]:
-        image = self.__getattribute__(image_name)
-
-        if fig is None:
-            assert axs is None, "If ax is provided, must also provide fig"
-            fig, axs = plt.subplots()
-        else:
-            assert axs is not None, "If fig is provided, must also provide ax"
-
-        hole_size: int = round(self._punchhole_size)
-
-        _, ax11 = plt_rect_on_image(
-            fig=fig,
-            ax=axs,
-            image=image,
-            box_params=region_in_box(
-                image=self.image_binary,
-                point_topleft=np.array(self._punchholes[0])[::-1] - hole_size / 2,
-                point_bottomright=np.array(self._punchholes[0])[::-1] + hole_size / 2
-            ),
-            no_ticks=True,
-            hold=True
-        )
-        fig, axs = plt_rect_on_image(
-            fig=fig,
-            ax=ax11,
-            image=image,
-            box_params=region_in_box(
-                image=self.image_binary,
-                point_topleft=np.array(self._punchholes[1])[::-1] - hole_size / 2,
-                point_bottomright=np.array(self._punchholes[1])[::-1] + hole_size / 2
-            ), no_ticks=True,
-            title='Detected punch-holes',
-            hold=True
-        )
-
-        if hold:
-            return fig, axs
-
-        plt.show()
-
-    def plot_overview(
-            self,
-            fig: plt.Figure | None = None,
-            axs: Iterable[plt.Axes] | None = None,
-            hold=False
-    ) -> None | tuple[plt.Figure, Iterable[plt.Axes]]:
-        """Plot the original, preprocessed, classified image and the punchholes."""
-        if not check_attr(self, "_punchholes"):
-            logger.warning(
-                "Punchholes not set with required parameter 'remove_gelatine', "
-                "this may affect performance."
-            )
-        self.require_punchholes(remove_gelatine=True)
-        hole_size: int = round(self._punchhole_size)
-
-        if fig is None:
-            assert axs is None, "If ax is provided, must also provide fig"
-            fig, axs = plt.subplots(nrows=2, ncols=2, layout="constrained")
-        else:
-            assert axs is not None, "If fig is provided, must also provide ax"
-
-        # will plot only the binary image with punch-holes
-        axs = np.array(axs)
-        only_final = axs.shape == (1,)
-
-        if not only_final:
-            plt_cv2_image(fig=fig,
-                          ax=axs[0, 0],
-                          image=self.image,
-                          title="Input image",
-                          no_ticks=True)
-            plt_cv2_image(fig=fig,
-                          ax=axs[0, 1],
-                          image=self._get_preprocessed_for_classification()[0],
-                          title="Preprocessed image",
-                          no_ticks=True)
-            plt_cv2_image(fig=fig,
-                          ax=axs[1, 0],
-                          image=self.image_classification,
-                          title="Classified image",
-                          no_ticks=True)
-
-        _, ax11 = plt_rect_on_image(
-            fig=fig,
-            ax=axs[0] if only_final else axs[1, 1],
-            image=self.image_classification if only_final else self.image_binary,
-            box_params=region_in_box(
-                image=self.image_binary,
-                point_topleft=np.array(self._punchholes[0])[::-1] - hole_size / 2,
-                point_bottomright=np.array(self._punchholes[0])[::-1] + hole_size / 2
-            ),
-            no_ticks=True,
-            hold=True
-        )
-        plt_rect_on_image(
-            fig=fig,
-            ax=ax11,
-            image=self.image_classification if only_final else self.image_binary,
-            box_params=region_in_box(
-                image=self.image_binary,
-                point_topleft=np.array(self._punchholes[1])[::-1] - hole_size / 2,
-                point_bottomright=np.array(self._punchholes[1])[::-1] + hole_size / 2
-            ), no_ticks=True,
-            title='Detected punch-holes'
-        )
-
-        if hold:
-            return fig, axs
-
-        plt.show()
-
-
-class ImageClassified(Image):
-    """
-    Characterise and modify the classified layers.
-
-    Example Usage
-    -------------
-    >>> from maspim import ImageClassified, ImageROI
-    initiate from parent object, most common use case.
-    >>> ir = ImageROI.from_disk('path/to/your/folder')
-    >>> ic = ImageClassified.from_parent(ir)
-    >>> ic.set_seeds(peak_prominence=.1,plts=True)
-    >>> ic.set_params_laminae_simplified()
-    >>> ic.set_quality_score()
-    or, doing it all in one step
-    >>> ic.set_laminae_params_table()
-    and save to disk
-    >>> ic.save()
-    which can then be loaded
-    >>> ic = ImageClassified.from_disk('path/to/your/folder')
-    View the results
-    >>> ic.plot_overview()
-    """
-
-    _image_classification: np.ndarray = None
-    _image_classification_corrected: np.ndarray = None
-    _image_corrected: np.ndarray = None
-
-    _seeds_light: np.ndarray[int] = None
-    _seeds_dark: np.ndarray[int] = None
-    _width_light: np.ndarray[float] = None
-    _width_dark: np.ndarray[float] = None
-    _prominences_light: np.ndarray[float] = None
-    _prominences_dark: np.ndarray[float] = None
-
-    _qualities: np.ndarray[float] = None
-
-    image_seeds: np.ndarray[int] = None
-    params_laminae_simplified: pd.DataFrame = None
-
-    _save_attrs: set[str] = {
-        'age_span',
-        'average_width_yearly_cycle',
-        'image_file',
-        'image',
-        'obj_color',
-        'xywh_ROI',
-        'height_width',
-        'params_laminae_simplified',
-        'image_seeds',
-        '_image_classification',
-        'mask_foreground'
-    }
-
-    def __init__(
-            self,
-            obj_color: Literal['light', 'dark'] = None,
-            path_folder: str = None,
-            image: np.ndarray[float | int] = None,
-            mask_foreground: np.ndarray = None,
-            has_no_holes: bool = False,
-            image_classification: np.ndarray[int] = None,
-            image_type: str = 'cv',
-            path_image_file: str = None,
-            age_span: tuple[float | int, float | int] = None,
-            use_tilt_correction: bool = True,
-            **_
-    ):
-        """Initiator.
-
-        Parameters
-        ----------
-        obj_color : str
-           The foreground color of the object in the image. Either 'light' or 'dark'.
-           This is required for working with thresholded images is desired.
-        path_image_file : str, optional
-           The file path to an image file to be read.
-        image : np.ndarray[float | int], optional
-           Alternatively, an image can be provided directly.
-        mask_foreground: np.ndarray, optional
-            Mask specifying foreground pixels. Will be determined automatically
-            using the obj_color if not provided.
-        image_type: str, optional
-           If the input image is not a cv image, provide this keyword argument.
-           Options are 'cv', 'np', 'pil' for images read or processed with
-           OpenCV, numpy or PILLOW respectively.
-        path_folder : str, optional
-           Folder in which the image or saved object is located. If not provided,
-           will be inferred from path_image_file.
-           If that is also not provided, will be an empty string.
-        age_span: tuple[float | int, float | int], optional
-            The age span covered by the sample.
-        use_tilt_correction: bool, optional
-            If this is set to True, the input images will be transformed such
-            that laminae are roughly distortion free. This allows to define
-            laminae solemnly by their width. The image_seeds is transformed
-            back such that downstream applications remain unaffected by this
-            parameter.
-        has_no_holes: bool, optional
-            If the sample does not have any holes, specifying the obj_color and
-            mask_foreground is not necessary. In this case set this parameter
-            to True.
-        """
-        if has_no_holes:
-            # define dummies
-            if obj_color is None:
-                obj_color = 'light'
-        else:
-            assert obj_color is not None, \
-                ('if the sample has holes, specifying the object color is '
-                 'necessary to determine which areas are the background and '
-                 'which is the sample. If this does not apply to your image, '
-                 'set "has_no_holes=True"')
-
-        super().__init__(
-            path_folder=path_folder,
-            path_image_file=path_image_file,
-            image=image,
-            mask_foreground=mask_foreground,
-            image_type=image_type,
-            obj_color=obj_color
-        )
-
-        if has_no_holes and (mask_foreground is None):
-            self._mask_foreground = np.full_like(self.image_grayscale, 1, dtype=np.uint8)
-            self._thr_background = 0
-
-        if image_classification is not None:
-            assert image_classification.shape[:2] == self.image.shape[:2], (
-                    'image_classification and image should have the same shape ' +
-                    'along the first two axes' +
-                    f'but have shapes {image_classification.shape[:2]}' +
-                    f' and {self.image.shape[:2]}'
-            )
-            self._image_classification: np.ndarray[int] = image_classification
-
-        self.age_span: tuple[float | int, float | int] | None = age_span
-        self.use_tilt_correction: bool = use_tilt_correction
-
-    @classmethod
-    def from_parent(cls, parent: ImageROI, **kwargs) -> Self:
-        """
-        Alternative constructor for instantiating an object from a parent
-        ImageSample instance.
-        """
-        new: Self = cls(
-            path_folder=parent.path_folder,
-            image=parent.image,
-            mask_foreground=parent.mask_foreground,
-            image_classification=parent.image_classification,
-            path_image_file=None,
-            obj_color=parent.obj_color,
-            **kwargs
-        )
-
-        if check_attr(parent, 'age_span'):
-            new.age_span = parent.age_span
-
-        return new
 
     @staticmethod
     def column_wise_average(

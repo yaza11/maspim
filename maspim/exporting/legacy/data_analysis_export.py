@@ -129,7 +129,7 @@ try:
             self._error_table = error_table
 
         def require_feature_table(self) -> pd.DataFrame:
-            if not check_attr(self, '_feature_table'):
+            if not check_attr(self, 'feature_table'):
                 self.set_feature_table()
             return self._feature_table
 

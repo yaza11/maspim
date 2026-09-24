@@ -390,12 +390,13 @@ class MisFileManager(Convenience):
         new.set_mis_file(path_mis_file)
         return new
 
-    def set_mis_file(self, path_mis_file: str = None):
+    def set_mis_file(self, path_mis_file: str = None, name_d_folder: str = None):
         if path_mis_file is not None:
             self.mis_file: str = os.path.basename(path_mis_file)
             return
         # attempt to set mis file from folder
-        mis_files = get_mis_file(self.path_folder)
+        mis_files = get_mis_file(self.path_folder, name_file=name_d_folder)
+
         if len(mis_files) > 1:
             raise ValueError(
                 'Multiple mis files found in folder. Please specify the mis file.'

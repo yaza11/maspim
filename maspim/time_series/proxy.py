@@ -47,7 +47,7 @@ class Proxy(TimeSeries):
     _save_attrs = {
         'd_folder',
         'n_successes_required',
-        '_feature_table',
+        'feature_table',
         '_feature_table_standard_deviations',
         '_feature_table_successes',
         'mzs',

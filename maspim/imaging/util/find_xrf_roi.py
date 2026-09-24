@@ -191,7 +191,7 @@ def find_ROI_in_image(
     :param file_image: image file to be used as the source image in
         case image is not provided.
     :param file_image_roi: image file to be used as the template in
-        case _image_roi is not provided.
+        case image_roi is not provided.
     :param image: the image to be used as source image.
     :param image_roi: the template to be searched in the source image.
     :param kwargs: optional keyword arguments to be passed to match_template_scale
@@ -276,3 +276,13 @@ def feature_matching():
     warped = warp(ROI, tf, output_shape=img.shape)
     
     plt.imshow(warped)
+
+if __name__ == '__main__':
+    # file_image = r"C:\Users\Yannick Zander\Downloads\drive-download-20260616T105441Z-3-001\GRF_RGB.tiff"
+    # file_image_roi = r"C:\Users\Yannick Zander\Downloads\drive-download-20260616T105441Z-3-001\GRF_RGB_U.tiff"
+    file_image = r"C:\Users\Yannick Zander\Downloads\drive-download-20260616T110122Z-3-001\GRF_RGB_revised.tiff"
+    file_image_roi = r"C:\Users\Yannick Zander\Downloads\drive-download-20260616T110122Z-3-001\GRF_RGB_U_revised.tiff"
+
+    image = np.asarray(PIL_Image.open(file_image)).swapaxes(0, 1)
+    image_roi = np.asarray(PIL_Image.open(file_image_roi)).swapaxes(0, 1)
+    find_ROI_in_image(image=image, image_roi=image_roi, plts=True)

@@ -32,7 +32,7 @@ class TimeSeries(DataBaseClass, Convenience):
     _save_attrs = {
         'd_folder',
         'n_successes_required',
-        '_feature_table',
+        'feature_table',
         '_feature_table_standard_deviations',
         '_feature_table_successes'
     }
@@ -58,7 +58,7 @@ class TimeSeries(DataBaseClass, Convenience):
         self._feature_table_standard_deviations: pd.DataFrame = pd.DataFrame()
 
     def _sort_tables(self) -> None:
-        if check_attr(self, '_feature_table'):
+        if check_attr(self, 'feature_table'):
             self._feature_table = self._feature_table \
                 .sort_values(by='x_ROI') \
                 .reset_index(drop=True)

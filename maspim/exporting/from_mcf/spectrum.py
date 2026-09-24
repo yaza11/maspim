@@ -28,7 +28,7 @@ from maspim.exporting.from_mcf.helper import get_mzs_for_limits, find_polycalibr
 from maspim.res.calibrants import get_calibrants
 from maspim.util import Convenience
 from maspim.util.convenience import check_attr
-from maspim.project.file_helpers import ImagingInfoXML, get_rxy, get_spots
+from maspim.project.msi_spot_helpers import get_rxy, get_spots, ImagingInfoXML
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ class Spectra(Convenience):
         '_kernel_params',
         '_kernel_shape',
         '_line_spectra',
-        '_feature_table',
+        'feature_table',
         '_losses',
         '_binning_by',
         '_noise_level',
@@ -224,12 +224,12 @@ class Spectra(Convenience):
     def __init__(
             self,
             *,
-            reader: ReadBrukerMCF | Hdf5Handler | None = None,
-            limits: tuple[float, float] | None = None,
+            reader: ReadBrukerMCF | Hdf5Handler = None,
+            limits: tuple[float, float] = None,
             delta_mz: float = 1e-4,
-            indices: Iterable[int] | None = None,
+            indices: Iterable[int] = None,
             initiate: bool = True,
-            path_d_folder: str | None = None
+            path_d_folder: str = None
     ) -> None:
         """
         Initiate the object.
@@ -326,10 +326,6 @@ class Spectra(Convenience):
 
         return initiate
 
-    @property
-    def path_d_folder(self) -> str:
-        return os.path.join(self.path_folder, self.d_folder)
-
     def _initiate(
             self,
             reader: ReadBrukerMCF | Hdf5Handler,
@@ -389,13 +385,13 @@ class Spectra(Convenience):
     def _pre_save(self):
         # only save line spectra, if both exist
         if (
-                check_attr(self, '_feature_table')
+                check_attr(self, 'feature_table')
                 and check_attr(self, '_line_spectra')
         ):
-            self._save_attrs.remove('_feature_table')
+            self._save_attrs.remove('feature_table')
 
     def _post_save(self):
-        self._save_attrs.add('_feature_table')
+        self._save_attrs.add('feature_table')
 
     @property
     def indices(self) -> np.ndarray[int]:
@@ -710,6 +706,59 @@ class Spectra(Convenience):
             plt.ylabel('Intensity')
             plt.legend()
             plt.show()
+
+    def dataanalysis_like_export(
+            self,
+            path_file_export: str,
+            reader: ReadBrukerMCF | Hdf5Handler,
+            image_info: ImagingInfoXML,
+            min_intensity: int=10_000,
+            min_snr: float=4,  # default value from DataAnalysis, although different meaning
+            pixel_indices: Iterable[int] = None, coordinates: Iterable[str] = None
+    ):
+        """
+        Write a data analysis like export file where the first line is the number of pixels, rows start with the
+        pixel index and mz, int, snr are listed for each peak.
+        Notice that peaks in this file are not aligned.
+        """
+        assert self._noise_level is not None, 'Noise level not set'
+        assert (pixel_indices is None) or (coordinates is None), \
+            'provide pixels either by their indices or the coordinates in the RXY format'
+
+        # create dict mapping pixel indxe to coordinates and vise versa
+        idx_to_coord: dict[int, str] = image_info.feature_table.loc[:, 'spotName'].to_dict()
+        coord_to_idx: dict[str, int] = {v: k for k, v in idx_to_coord.items()}
+
+        if (pixel_indices is None) and (coordinates is None):  # all spectra
+            pixel_indices = image_info.feature_table.index
+
+        if coordinates is not None:
+            pixel_indices = [coord_to_idx[c] for c in coordinates]
+        elif pixel_indices is not None:
+            coordinates = [idx_to_coord[idx] for idx in pixel_indices]
+
+        n_pixels: int = len(pixel_indices)
+        with open(path_file_export, 'w') as f:
+            # first line is the number of pixels
+            f.write(f'{n_pixels}\n')
+            for coord, index in tqdm(zip(coordinates, pixel_indices), desc='Exporting peaks', total=n_pixels):
+                spec: Spectrum = self.get_spectrum(reader=reader, index=index, only_intensity=False, calibrate=False)
+                # pick peaks
+                peak_idcs, *_ = find_peaks(x=spec.intensities, height=min_intensity)
+                # set other properties
+                peak_ints = spec.intensities[peak_idcs]
+                peak_mzs = spec.mzs[peak_idcs]
+                # need to find closest values since spectrum is not resampled
+                snrs = np.array([
+                    peak_int / self._noise_level[np.argmin(np.abs(self.mzs - peak_mz))]
+                    for peak_mz, peak_int in zip(peak_mzs, peak_ints)
+                ])
+                mask_above_snr = snrs >= min_snr
+                n_peaks = mask_above_snr.sum()
+                line = [coord, n_peaks]
+                for peak_mz, peak_int, snr in zip(peak_mzs[mask_above_snr], peak_ints[mask_above_snr], snrs[mask_above_snr]):
+                    line.extend([peak_mz, peak_int, snr])
+                f.write(f'{";".join(map(str, line))}\n')
 
     def require_noise_level(self, overwrite=False, **kwargs) -> np.ndarray[float]:
         if overwrite:
@@ -2209,7 +2258,7 @@ class Spectra(Convenience):
         return self._feature_table
 
     def require_feature_table(self, **kwargs) -> pd.DataFrame:
-        if not check_attr(self, '_feature_table'):
+        if not check_attr(self, 'feature_table'):
             self.set_feature_table(**kwargs)
         return self._feature_table
 
@@ -2429,7 +2478,7 @@ class Spectra(Convenience):
             self.filter_peaks(whitelist=self._peaks[mask_successes].copy())
 
         # update feature table
-        if check_attr(self, '_feature_table'):
+        if check_attr(self, 'feature_table'):
             self.set_feature_table()
 
         return mask

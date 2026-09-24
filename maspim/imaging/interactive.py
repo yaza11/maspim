@@ -18,8 +18,8 @@ class InteractiveImage:
         self.x_data = []
         self.y_data = []
 
-        self.previous_backend = matplotlib.get_backend()
-        matplotlib.use('QtAgg')
+        # self.previous_backend = matplotlib.get_backend()
+        # matplotlib.use('QtAgg')
 
         # short side is 5 units long
         short_side = .5
@@ -93,9 +93,9 @@ class InteractiveImage:
                 self._remove_coords()
                 self.update_rect()
         elif (event.button is MouseButton.MIDDLE) and (len(self.x_pixels) >= 2):
-            self.canvas.close()
+            plt.close(self.fig)
             # restore backend
-            matplotlib.use(self.previous_backend)
+            # matplotlib.use(self.previous_backend)
 
     def on_click_punch(self, event):
         if event.button is MouseButton.LEFT:
@@ -107,9 +107,9 @@ class InteractiveImage:
                 self._remove_coords()
                 self.update_punch()
         elif (event.button is MouseButton.MIDDLE) and (len(self.x_pixels) >= 2):
-            self.canvas.close()
+            plt.close(self.fig)
             # restore backend
-            matplotlib.use(self.previous_backend)
+            # matplotlib.use(self.previous_backend)
 
     def update_line(self):
         # clear ax
@@ -178,10 +178,10 @@ class InteractiveImage:
 
         # add square shaped dots
         scale = 5 / self.image.shape[1]  # assuming image is 5 cm long
-        self._punchhole_size = .2 / scale  # assuming hole is .5 cm wide
+        self.punchhole_size = .2 / scale  # assuming hole is .5 cm wide
 
         [
-            add_square(self.x_data[i], self.y_data[i], self._punchhole_size)
+            add_square(self.x_data[i], self.y_data[i], self.punchhole_size)
             for i in range(len(self.x_data))
         ]
 
@@ -190,9 +190,9 @@ class InteractiveImage:
     def show(self):
         logger.debug('inside show')
         plt.show(block=True)
-        logger.debug('no longer blocked')
-        matplotlib.use(self.previous_backend)
-        logger.debug(f"using backend {self.previous_backend}")
+        # logger.debug('no longer blocked')
+        # matplotlib.use(self.previous_backend)
+        # logger.debug(f"using backend {self.previous_backend}")
 
 
 if __name__ == "__main__":

@@ -89,8 +89,8 @@ class AgeModel(Convenience):
             self,
             *,
             path_input_file: str | None = None,
-            depth: Iterable | None = None,
-            age: Iterable | None = None,
+            depth: Iterable = None,
+            age: Iterable = None,
             column_depth: str = 'depth',
             column_age: str = 'age',
             depth_offset: float | int = 0,
@@ -119,23 +119,20 @@ class AgeModel(Convenience):
         assert (path_input_file is not None) or ((depth is not None) and (age is not None)), \
             'provide either a file or a depth and age vector'
 
-        self._set_files(path_input_file)
-
         self.column_depth: str = column_depth
         self.column_age: str = column_age
-        if (depth is not None) and (age is not None):  # assign depth and age directly
+
+        if path_input_file is not None:  # read from file
+            self._set_files(path_input_file)
+            self._read_file(depth_offset, conversion_to_cm, **kwargs_read_file)
+        else:  # assign depth and age directly
             assert len(depth) == len(age), \
                 'depth and age must have same number of entries'
             self.df: pd.DataFrame = pd.DataFrame({column_depth: depth, column_age: age})
-        else:  # read from file
-            self._read_file(depth_offset, conversion_to_cm, **kwargs_read_file)
 
-    def _set_files(self, path_file: str | None) -> None:
-        if path_file is None:
-            return
-
+    def _set_files(self, path_file: str) -> None:
         # check if file is directory, in that case require an AgeModel.pickle file
-        assert os.path.isfile(path_file), f'The provided path {path_file} refers to a directory'
+        assert os.path.isfile(path_file), f'The provided path {path_file} refers to a directory, but should be a file'
 
         # possible file types from which to read age model
         file_types: list[str] = ['txt', 'csv', 'xlsx', 'pickle']
@@ -147,8 +144,8 @@ class AgeModel(Convenience):
 
     @property
     def path_input_file(self) -> str:
-        assert (self.path_folder is not None) and (self._save_file is not None)
-        return os.path.join(self.path_folder, self._save_file)
+        assert (self.path_folder is not None) and (self._in_file is not None)
+        return os.path.join(self.path_folder, self._in_file)
 
     @path_input_file.setter
     def path_input_file(self, path_file: str) -> None:
@@ -171,7 +168,10 @@ class AgeModel(Convenience):
             self.df: pd.DataFrame = pd.read_excel(file, **kwargs)
         else:  # suffix pickle
             assert file.endswith('.pickle')
-            self.load()
+            self.load(tag=kwargs.pop('tag', None))
+
+        if self.df is None:
+            return
 
         # strip whitespaces
         self.df: pd.DataFrame = self.df.map(
@@ -180,7 +180,7 @@ class AgeModel(Convenience):
 
         self.df.columns = self.df.columns.str.strip()
 
-        # try to infere missing columns
+        # try to infer missing columns
         if self.column_depth not in self.df.columns:
             try_cols = {'depth', 'd', 'mbsf', 'depths'}
             for col in self.df.columns:

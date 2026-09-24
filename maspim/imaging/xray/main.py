@@ -72,12 +72,12 @@ class XRay(ImageSample):
 
     _save_attrs = {
         'age_span',
-        '_average_width_yearly_cycle',
+        'average_width_yearly_cycle',
         'image_file',
-        '_image',
+        'image',
         'obj_color',
-        '_xywh_ROI',
-        '_hw',
+        'xywh_ROI',
+        'height_width',
         'depth_section',
         '_image_ROI',
         '_bars_removed',
@@ -437,9 +437,9 @@ class XRay(ImageSample):
 
         # lin fit
         # center points of sections
-        x_c: np.ndarray = np.linspace(0, self._xywh_ROI[2], n_sections + 2, endpoint=True)[1:-1]
+        x_c: np.ndarray = np.linspace(0, self.xywh_ROI[2], n_sections + 2, endpoint=True)[1:-1]
         # x pixel values in image
-        xs: np.ndarray = np.arange(0, self._xywh_ROI[2])
+        xs: np.ndarray = np.arange(0, self.xywh_ROI[2])
         upper_m, upper_b, *_ = linregress(x_c, upper_bounds)
         # values of line
         upper_bound = upper_b + upper_m * xs
@@ -463,17 +463,17 @@ class XRay(ImageSample):
             fill_val: int = self.image_sample_area.max()
         else:
             fill_val: int = self.image_sample_area.min()
-        _, Y = np.meshgrid(np.arange(0, self._xywh_ROI[2]), np.arange(0, self._xywh_ROI[3]))
+        _, Y = np.meshgrid(np.arange(0, self.xywh_ROI[2]), np.arange(0, self.xywh_ROI[3]))
         mask: np.ndarray[bool] = (Y < upper_bound) | (Y > lower_bound)
         temp_roi = self.image_sample_area.copy()
         temp_roi[mask] = fill_val
         # recast to fit ROI to new sample
-        x, y, w, h = self._xywh_ROI
+        x, y, w, h = self.xywh_ROI
         upper_new = int(np.min(upper_bound))  # floor
         lower_new = int(np.max(lower_bound) + 1)  # ceil
         y_new = y + upper_new
         h_new = lower_new - upper_new
-        # update _extent of ROI
+        # update extent_roi_coordinates of ROI
         self._xywh_ROI = (x, y_new, w, h_new)
         self._image[y:y + h, x:x + w] = temp_roi
         self._bars_removed: bool = True

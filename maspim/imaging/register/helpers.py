@@ -242,9 +242,9 @@ class Mapper(Convenience):
 
     def __init__(
             self,
-            image_shape: tuple[int, ...] | None = None,
-            path_folder: str | None = None,
-            tag: str | None = None
+            image_shape: tuple[int, ...] = None,
+            path_folder: str = None,
+            tag: str = None
     ) -> None:
         """
         Initialize the object
@@ -257,9 +257,7 @@ class Mapper(Convenience):
         path_folder: str, optional
             The path to the folder to load or save an instance to or from disk.
         tag: str, optional
-            Tags specifying the type of transformation. Will be appended to the
-            file name (necessary if multiple transformations are stored in the
-            same folder, as is usually the case).
+            Tags specifying the type of transformation.
         """
         self._image_shape: tuple[int, int] | None = (
             image_shape[:2]
@@ -268,7 +266,7 @@ class Mapper(Convenience):
         )
         self._Us: list[np.ndarray[int]] = []
         self._Vs: list[np.ndarray[int]] = []
-        self.path_folder: str | None = path_folder
+        self.path_folder: str = path_folder
         self._tag: str = tag if tag is not None else ''
 
     def __add__(self, other: Self) -> Self:
@@ -412,7 +410,12 @@ class Mapper(Convenience):
         YT = self.fit(Y.astype(float), preserve_range=True)
         return XT, YT
 
-    def plot_overview(self, ny: int = 50, img=None):
+    def plot_overview(self, ny: int = 50, img=None, axs=None):
+        if axs is None:
+            fig, (ax0, ax1) = plt.subplots(nrows=2, ncols=1)
+        else:
+            ax0, ax1 = axs
+
         if img is None:
             img = resize(checkerboard(), self._image_shape)
         assert img.shape[:2] == self._image_shape, \
@@ -425,12 +428,9 @@ class Mapper(Convenience):
         U, V = self._get_combined_UV()
         X, Y = self.get_XY()
 
-        fig, (ax0, ax1) = plt.subplots(nrows=2, ncols=1)
         ax0.imshow(img)
         ax0.quiver(X[indices], Y[indices], U[indices], V[indices], angles='xy')
         ax0.set_title('original with deformation vectors')
         ax1.imshow(warped)
         ax1.set_title('transformed')
-        plt.show()
-
-
+        return (ax0, ax1),

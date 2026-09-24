@@ -6,7 +6,7 @@ import pandas as pd
 import cv2
 import logging
 
-from typing import Iterable
+from typing import Iterable, Literal
 
 import skimage
 from matplotlib import pyplot as plt
@@ -124,7 +124,7 @@ def min_max_extent_layer(mask_layer: np.ndarray) -> np.ndarray[int]:
 def filter_contours_by_size(
         contours: Iterable[np.ndarray[int]],
         image_shape: tuple[int, ...],
-        threshold_size: float=.1) -> list[np.ndarray[int]]:
+        threshold_size: float = .1) -> list[np.ndarray[int]]:
     """
     Filter out contours that are too small.
 
@@ -241,12 +241,12 @@ def exclude_missing_pixels_in_feature_table(ft: pd.DataFrame) -> np.ndarray[bool
 
 def get_foreground_from_slic(
         image,
-        obj_color: str | tuple[int, int, int] | None = None,
+        obj_color: tuple[int, int, int] | None = None,
         measurement_area_xywh: tuple[int, int, int, int] | None = None,
         n_segments: int = 5,
         compactness: float = 1e-32,
         enforce_connectivity: bool = False,
-        channel_axis: int | None = None,
+        channel_axis: int = -1,
         plts: bool = False,
         **kwargs
 ) -> tuple[np.ndarray, int | float]:
@@ -257,16 +257,10 @@ def get_foreground_from_slic(
       as a tuple).
     - The class that is most centered or in extent closest to the measurement area.
     """
+
     def evaluate_label(av_col_, mask_label_) -> float:
         """lower scores are better"""
-        if col_is_tup:
-            score_color = np.sqrt(np.sum(av_col_ - obj_color) ** 2)
-        else:
-            # convert color to grayscale
-            if av_col_.ndim > 0:
-                R, G, B = av_col_
-                av_col_ = 0.2125 * R + 0.7154 * G + 0.0721 * B
-            score_color = np.abs(av_col_ - obj_color)
+        score_color = np.sqrt(np.sum(av_col_ - obj_color) ** 2)
         if score_color > 1:
             score_color /= 255
         # label mask should cover sample area
@@ -283,24 +277,9 @@ def get_foreground_from_slic(
                                   mask_label_.astype(float),
                                   mask_sample.astype(float))))
             plt.title(f'differences for label {label} with score {score_area=:.2f} '
-                      f'and {score_color=:.0f} (total score: {score_color * score_area:.0f})')
+                      f'and {score_color=:.2f} (total score: {score_color * score_area:.2f})')
 
         return score_area * score_color
-
-    if (is_color := (image.ndim == 3)) and (channel_axis is None):
-        channel_axis = -1
-    # define axes to average over
-    axes = (0, 1) if is_color else None
-
-    # check if iterable was provided
-    if not isinstance(obj_color, str):
-        assert hasattr(obj_color, '__iter__') and len(obj_color) == image.ndim, \
-            ('if the object color is specified as an iterable, it should match '
-             'the images ndim.')
-    else:  # convert to numeric value
-        obj_color = image.min(axis=axes) if obj_color == 'dark' else image.max(axis=axes)
-    # check again after potentially redefining obj_color
-    col_is_tup = not isinstance(obj_color, str)
 
     # create mask for measurement area to evaluate goodness of label masks
     h, w = image.shape[:2]
@@ -309,11 +288,28 @@ def get_foreground_from_slic(
         _x, _y, _w, _h = measurement_area_xywh
     else:  # use heuristic: sample is expected to cover middle quarter of image
         # center
+        cx = w / 2
+        cy = h / 2
         _w = w // 2
         _h = h // 2
-        _x = w - _w // 2
-        _y = h - _h // 2
+
+        _x = round(cx - _w / 2)
+        _y = round(cy - _h / 2)
     mask_sample[_y: _y + _h, _x: _x + _w] = True
+
+    # check if iterable was provided
+    if obj_color is None:  # median in estimated sample region
+        if image.ndim == 3:
+            obj_color = image[mask_sample, ...].mean(axis=0)
+        else:
+            obj_color = image[mask_sample].mean()
+        print(f'estimated object color: {obj_color}')
+    elif isinstance(obj_color, str):
+        raise ValueError('Categorical object color not allowed for slic. Provide it as RGB tuple.')
+    else:
+        assert hasattr(obj_color, '__iter__') and len(obj_color) == image.shape[channel_axis], \
+            ('if the object color is specified as an iterable, it should match '
+             'the images ndim.')
 
     # filter kwargs before passing to slic
     allowed_keys = {'max_num_iter', 'sigma', 'spacing', 'convert2lab',
@@ -324,12 +320,14 @@ def get_foreground_from_slic(
 
     kwargs_filtered = {k: v for k, v in kwargs.items() if k in allowed_keys}
 
-    seg = skimage.segmentation.slic(image,
-                                    n_segments=n_segments,
-                                    compactness=compactness,
-                                    enforce_connectivity=enforce_connectivity,
-                                    channel_axis=channel_axis,
-                                    **kwargs_filtered)
+    seg = skimage.segmentation.slic(
+        image,
+        n_segments=n_segments,
+        compactness=compactness,
+        enforce_connectivity=enforce_connectivity,
+        channel_axis=channel_axis,
+        **kwargs_filtered
+    )
 
     # calculate stats for segments
     labels = np.unique(seg)
@@ -361,8 +359,8 @@ def get_foreground_from_slic(
 
 def get_foreground_pixels_and_threshold(
         image: np.ndarray,
-        obj_color: str,
-        method: str = 'otsu',
+        obj_color: str | None,
+        method: Literal['otsu', 'local-min', 'slic'] = 'otsu',
         **kwargs
 ) -> tuple[np.ndarray, float | int]:
     """
@@ -372,8 +370,6 @@ def get_foreground_pixels_and_threshold(
     ----------
     image:  np.ndarray
         image to be binarized, will be converted to grayscale automatically
-    obj_color: str | tuple[int | int | int]
-        'light' if region of interest is lighter than rest, 'dark' otherwise
     method: str, optional.
         method to be used. Options are 'local-min' and 'otsu'. Default is otsu.
 
@@ -382,9 +378,7 @@ def get_foreground_pixels_and_threshold(
     mask, threshold
     """
     methods: tuple[str, ...] = ('otsu', 'local-min', 'slic')
-    obj_colors: tuple[str, str] = ('light', 'dark')
     assert method in methods, f'Method {method} not {methods}'
-    assert obj_color in obj_colors, f'Color {obj_color} not {obj_colors}'
 
     image_grayscale: np.ndarray = ensure_image_is_gray(image)
     image_grayscale: np.ndarray[np.uint8] = rescale_values(
@@ -410,7 +404,6 @@ def get_foreground_pixels_and_threshold(
     elif method == 'slic':
         mask_foreground, thr_background = get_foreground_from_slic(
             image,
-            obj_color,
             **kwargs
         )
     else:
@@ -418,8 +411,9 @@ def get_foreground_pixels_and_threshold(
     "otsu", "local_min".')
     return mask_foreground, thr_background
 
+
 def get_simplified_image(
-        image: np.ndarray,
+        image_binary: np.ndarray,
         factors: Iterable[int] | None = None,
         plts: bool = False
 ) -> np.ndarray[np.uint8]:
@@ -431,7 +425,7 @@ def get_simplified_image(
 
     Parameters
     ----------
-    image: np.ndarray
+    image_binary: np.ndarray
         image to be simplified. If image is not binary, obj_color is expected to be passed.
     factors : Iterable[int], optional
         factors to be used for the median filter. Values are clipped to 255.
@@ -444,9 +438,10 @@ def get_simplified_image(
         Simplified image.
 
     """
-    assert (len(np.unique(image)) <= 2), \
+    assert (len(np.unique(image_binary)) <= 2), \
         'provide a binary image'
-    image_binary: np.ndarray = ensure_image_is_gray(image)
+    # shrink dimension if image has still multiple channels
+    image_binary: np.ndarray = ensure_image_is_gray(image_binary).astype(np.uint8)
 
     if factors is None:
         factors: list[int] = [1024, 512, 256, 128, 64, 32]

@@ -3,7 +3,7 @@ from maspim.project.main import (
     ProjectXRF, ProjectMSI,
     SampleImageHandlerMSI, SampleImageHandlerXRF
 )
-from maspim.project.file_helpers import ImagingInfoXML
+from maspim.project.msi_spot_helpers import ImagingInfoXML
 
 from maspim.imaging.xray.main import XRay, XRayROI
 from maspim.imaging.register.transformation import Transformation

@@ -61,9 +61,6 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
         self._check_modify_date()
         self._post_init()
 
-    def save(self, *args, **kwargs):
-        raise NotImplementedError()
-
     def _set_files(self, path_file: str) -> None:
         """Infere the file name, d-folder and folder from input."""
         if path_file.split('.')[-1] == 'hdf5':  # hdf 5 file provided
@@ -76,12 +73,13 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
             )
         self.d_folder: str = os.path.basename(path_d_folder)
         self.path_folder: str = os.path.dirname(path_d_folder)
+        self.path_file: str = path_file
 
     def _check_modify_date(self) -> None:
         """Throw warning if mcf file was modified after hdf file."""
-        if not os.path.exists(self.save_file):
+        if not os.path.exists(self.path_file):
             return
-        time_hdf: float = os.path.getmtime(self.save_file)
+        time_hdf: float = os.path.getmtime(self.path_file)
         modify_times = [
             os.path.getmtime(os.path.join(self.path_d_folder, file))
             for file in os.listdir(self.path_d_folder)
@@ -102,11 +100,11 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
 
     def _post_init(self) -> None:
         """Set metadata and limit from hdf5 file."""
-        if not os.path.exists(self.save_file):
+        if not os.path.exists(self.path_file):
             return
 
         # keys: list[str] = ['indices', 'mzs']
-        with h5py.File(self.save_file, 'r') as f:
+        with h5py.File(self.path_file, 'r') as f:
             # for key in keys:
             #     if key in f:
             #         self.__dict__[key] = f[key][:]
@@ -121,7 +119,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
 
         Not necessary to call, but for compatability with ReadBrukerMCF class.
         """
-        with h5py.File(self.save_file, 'r') as f:
+        with h5py.File(self.path_file, 'r') as f:
             self.indices = f['indices'][:]
 
     def create_reader(self):
@@ -135,7 +133,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
         met = reader.metaData
         indices = spots.index.to_numpy()
 
-        with h5py.File(self.save_file, 'a') as f:
+        with h5py.File(self.path_file, 'a') as f:
             if 'indices' not in f.keys():
                 f.create_dataset('indices', data=indices)
             if 'R' not in f.keys():
@@ -145,7 +143,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
             if 'Y' not in f.keys():
                 f.create_dataset('Y', data=reader.ys)
         if 'instrument_settings' not in f.keys():
-            met.to_hdf(self.save_file, key='instrument_settings', mode='a')
+            met.to_hdf(self.path_file, key='instrument_settings', mode='a')
 
     def write(
             self,
@@ -194,7 +192,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
         else:
             logger.info(f'Creating hdf5 file on disk with {size_GB * 1024:.1f} MB')
 
-        with h5py.File(self.save_file, 'w') as f:
+        with h5py.File(self.path_file, 'w') as f:
             # use file name as group name
             # group_name: str = os.path.basename(reader.path_d_folder)
             # f.create_group(group_name)
@@ -251,7 +249,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
             - intensities: a 2D array with shape (N, M) where N is the number of spectra
               and M is the number of mz values.
         """
-        with (h5py.File(self.save_file, 'r') as f):
+        with (h5py.File(self.path_file, 'r') as f):
             indices_hpf5 = np.asarray(f['indices'])
 
             if indices is None:
@@ -278,21 +276,21 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
 
     @property
     def rs(self):
-        with (h5py.File(self.save_file, 'r') as f):
+        with (h5py.File(self.path_file, 'r') as f):
             return np.asarray(f['R'])
 
     @property
     def xs(self):
-        with (h5py.File(self.save_file, 'r') as f):
+        with (h5py.File(self.path_file, 'r') as f):
             return np.asarray(f['X'])
     @property
     def ys(self):
-        with (h5py.File(self.save_file, 'r') as f):
+        with (h5py.File(self.path_file, 'r') as f):
             return np.asarray(f['Y'])
 
     @property
     def instrument_settings(self):
-        return pd.read_hdf(self.save_file, key='instrument_settings')
+        return pd.read_hdf(self.path_file, key='instrument_settings')
 
     def get_intensities_for_array_indices(self, expr) -> np.ndarray[np.float64]:
         """
@@ -300,7 +298,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
 
         Supports every indexing method from numpy arrays.
         """
-        with (h5py.File(self.save_file, 'r') as f):
+        with (h5py.File(self.path_file, 'r') as f):
             return f['intensities'][expr]
 
     def get_spectrum(
@@ -335,6 +333,14 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
             spectrum = apply_calibration(spectrum, poly_coeffs)
 
         return spectrum
+
+    def load(self, *args, **kwargs):
+        raise NotImplementedError()
+
+    def save(self, *args, **kwargs):
+        raise NotImplementedError()
+
+
 
 
 if __name__ == '__main__':

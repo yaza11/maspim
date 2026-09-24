@@ -23,7 +23,7 @@ def get_averaged_tables(
         **kwargs
 ) -> tuple[pd.DataFrame, ...]:
     assert isinstance(data_object, MSI | XRF)
-    assert check_attr(data_object, '_feature_table')
+    assert check_attr(data_object, 'feature_table')
     feature_table = data_object.feature_table
 
     if (

@@ -2,19 +2,21 @@
 from __future__ import annotations
 
 import os
+from typing import Self
+
 import pandas as pd
 import logging
 
 from maspim.exporting.from_mcf.spectrum import Spectra
 from maspim.data.main import Data
 from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
-from maspim.project.file_helpers import search_keys_in_xml, get_resolution_msi
-from maspim.util.convenience import check_attr
+from maspim.project.file_helpers import search_keys_in_xml, get_resolution_msi, get_mis_image_file, get_mis_file
+from maspim.util.convenience import check_attr, DFolderManager, MisFileManager
 
 logger = logging.getLogger(__name__)
 
 
-class MSI(Data):
+class MSI(Data, DFolderManager, MisFileManager):
     """
     Class to wrap and process mass spectrometry imaging data.
 
@@ -22,7 +24,7 @@ class MSI(Data):
     (plus the x and y coordiantes of the data pixels). Each row corresponds to a data pixel. The
     recommended way is to use the set_feature_table_from_spectra method, but it is always possible
     to inject the data by
-    >>> msi._feature_table = ft
+    >>> msi.feature_table = ft
     where msi is the MSI instance and ft is a pandas dataframe with data, x and y columns.
 
     Example Usage
@@ -45,6 +47,7 @@ class MSI(Data):
     >>> msi.plot_nmf(k=5)
     """
     mis_file: str = None
+    image_file: str = None
 
     _save_in_d_folder: bool = True
 
@@ -52,37 +55,32 @@ class MSI(Data):
         'd_folder',
         'mis_file',
         'distance_pixels',
-        '_feature_table',  # could be processed, so not necessarily redundant information
+        'feature_table',  # could be processed, so not necessarily redundant information
         'depth_section',
         'age_span',
+        'image_file'
         'tilt_correction_applied'
     }
 
-    def __init__(
-            self,
-            path_d_folder: str,
-            *,
-            path_mis_file: str | None = None,
-            distance_pixels: int | float | None = None,
-    ) -> None:
-        """
-        Initializer of MSI class.
+    @classmethod
+    def from_path_d_folder(cls, path_d_folder: str) -> Self:
+        path_folder = os.path.dirname(path_d_folder)
+        new = cls(path_folder)
+        new.set_d_folder(path_d_folder)
+        mis_file = get_mis_file(new.path_folder, return_mode='best', name_file=new.d_folder)
+        new.set_mis_file(os.path.join(new.path_folder, mis_file))
+        new.image_file = get_mis_image_file(new.path_mis_file)
+        return new
 
-        Parameters
-        ----------
-        path_d_folder : str
-            path to the d-folder plus the name of the d-folder.
-            Example: 'path/to/your/d_folder.d'.
-        path_mis_file : str, optional
-            path to the mis file as well as its name. Recommended to provide
-            if there are multiple mis files.
-        distance_pixels : int, optional
-            The distance (in micrometer) between data points. Will be looked
-            up in mis file if not provided.
+    def set_files(self, path_d_folder: str = None, path_mis_file: str = None):
         """
-        self._set_files(path_d_folder, path_mis_file)
-
-        self._distance_pixels = distance_pixels
+        Set d folder and mis file. If they are not provided, attempt to find them. This is only possible if there is
+        one d folder/ mis file in the folder. Otherwise this will raise an error.
+        """
+        self.set_mis_file(path_mis_file)
+        self.set_d_folder(path_d_folder)
+        # this does not take any inputs, so it is safe to call it here
+        self.image_file: str = get_mis_image_file(self.path_mis_file)
 
     def _set_files(self, path_d_folder: str, path_mis_file: str) -> None:
         path_folder1, d_folder = os.path.split(path_d_folder)
@@ -99,15 +97,15 @@ class MSI(Data):
         return os.path.join(self.path_folder, self.mis_file)
 
     def set_distance_pixels(
-            self, distance_pixels: float | int | None = None
+            self, distance_pixels: float | int = None
     ):
         """Set distance of pixels in micrometers either directly or from mis."""
         if distance_pixels is not None:
-            self._distance_pixels = distance_pixels
+            self.distance_pixels = distance_pixels
             return
 
         logger.info(f"reading pixel distance from {self.path_mis_file}")
-        self._distance_pixels = get_resolution_msi(self.path_mis_file)
+        self.distance_pixels = get_resolution_msi(self.path_mis_file)
     
     def inject_feature_table_from(
             self,
@@ -136,7 +134,7 @@ class MSI(Data):
                 'object.'
             )
 
-        self._feature_table: pd.DataFrame = (
+        self.feature_table: pd.DataFrame = (
             upstream if is_df else upstream.feature_table.copy()
         )
     

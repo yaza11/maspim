@@ -83,46 +83,29 @@ class XRF(Data):
     Now we are ready to do some analysis, e.g. nonnegative matrix factorization
     >>> xrf.plot_nmf(k=5)
     """
+    measurement_name: str = None
+
     _save_attrs: set[str] = {
         'default_file_type',
         'measurement_name',
-        'prefix_files',
         'distance_pixels',
-        '_feature_table',  # it could be processed, so not necessarily redundant information
+        'feature_table',  # it could be processed, so not necessarily redundant information
         'depth_section',
         'age_span',
         'tilt_correction_applied'
     }
 
-    def __init__(
-            self, 
-            path_folder: str,
-            distance_pixels: int | None = None,
-            measurement_name: str = None
-    ) -> None:
+    def set_measurement_name(self, measurement_name: str | None = None) -> None:
         """
-        Initialize with a folder.
-
-        """
-        self.path_folder: str = path_folder
-        if distance_pixels is not None:
-            self._distance_pixels: int | float = distance_pixels
-        if measurement_name is not None:
-            self.measurement_name: str = measurement_name
-        else:
-            self._set_measurement_name()
-
-    @property
-    def path_d_folder(self):
-        raise NotImplementedError()
-
-    def _set_measurement_name(self):
-        """
-        Infer the measurement name from the folder name.
+        Infer the measurement name from the folder name if it is not provided..
 
         Folder should have measurement name in it --> a capital letter, 4 digits and
         a lower letter. Example: S0343a
         """
+        if measurement_name is not None:
+            self.measurement_name = measurement_name
+            return
+
         folder = os.path.split(self.path_folder)[1]
         pattern = r'^[A-Z]\d{3,4}[a-z]'
         
@@ -184,7 +167,8 @@ class XRF(Data):
             
         closest_match: str = find_matches(
             files=list(set(pres)),
-            substrings=tag
+            substrings=tag,
+            return_mode='best'
         )
         if closest_match is None:
             raise ValueError(f'No matches found for {tag=} in {self.path_folder}')
@@ -207,7 +191,7 @@ class XRF(Data):
         """
         # find all relevant files
         # tuple[str, dict[str, str]]
-        self.prefix_files, files = self._get_element_txts(**kwargs)
+        prefix_files, files = self._get_element_txts(**kwargs)
 
         logging.info(f'using {[os.path.basename(f) for f in files]} '
                      f'to create feature table.')
@@ -227,7 +211,7 @@ class XRF(Data):
                 vecs.append(txt_to_vec(self.path_folder, file))
                 keys.append(element)
         # combine to feature_table
-        self._feature_table = pd.DataFrame(data=np.vstack(vecs).T, columns=keys)
+        self.feature_table = pd.DataFrame(data=np.vstack(vecs).T, columns=keys)
 
     def inject_feature_table_from(
             self,
@@ -250,7 +234,7 @@ class XRF(Data):
                 'object.'
             )
 
-        self._feature_table: pd.DataFrame = (
+        self.feature_table: pd.DataFrame = (
             upstream if is_df else upstream.feature_table.copy()
         )
 

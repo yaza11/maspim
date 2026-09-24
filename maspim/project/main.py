@@ -838,7 +838,7 @@ class ProjectBaseClass:
         # attempt to set photo ROI on image handler
         if (
                 use_extent_from_handler and
-                (not check_attr(self._image_sample, '_xywh_ROI'))
+                (not check_attr(self._image_sample, 'xywh_ROI'))
         ):
             try:
                 self.image_handler.set_rois()
@@ -901,7 +901,7 @@ class ProjectBaseClass:
             # overwrite obj_color
             if obj_color is not None:
                 self._image_sample.obj_color = obj_color
-            if check_attr(self._image_sample, '_xywh_ROI'):
+            if check_attr(self._image_sample, 'xywh_ROI'):
                 return self._image_sample
 
             logger.warning(
@@ -975,11 +975,11 @@ class ProjectBaseClass:
                 check_attr(self, '_image_sample')
                 and check_attr(self, '_image_sample')
         ):
-            self.image_sample._xywh_ROI = self.image_handler.photo_roi_xywh
+            self.image_sample.xywh_ROI = self.image_handler.photo_roi_xywh
             x, y, w, h = self.image_sample.xywh_ROI
             # now we can be sure data roi is same as sample roi
             self.image_handler.data_roi_xywh = (0, 0, w, h)
-            self.image_sample._image_roi = self.image_sample.image[
+            self.image_sample.image_roi = self.image_sample.image[
                 y: y + h, x: x + w
             ].copy()
 
@@ -1069,7 +1069,7 @@ class ProjectBaseClass:
         return self.require_image_roi()
 
     def set_tilt_corrector(self, **kwargs) -> None:
-        assert check_attr(self, '_image_roi'), \
+        assert check_attr(self, 'image_roi'), \
             'need image_roi to initialize tilt corrector'
         if not check_attr(self, '_image_classified'):
             self.require_image_classified(full=False)
@@ -1078,7 +1078,7 @@ class ProjectBaseClass:
         self._update_files()
 
     def require_tilt_corrector(self, overwrite=False, **kwargs) -> Mapper:
-        assert check_attr(self, '_image_roi'), \
+        assert check_attr(self, 'image_roi'), \
             'need image_roi to initialize tilt corrector'
         mapper = Mapper(self.image_roi.image.shape,
                         self.path_folder,
@@ -1223,9 +1223,9 @@ class ProjectBaseClass:
 
         add_or_warn('_image_handler', self.add_pixels_ROI)
         add_or_warn('_image_sample', self.add_photo, **kwargs)
-        add_or_warn('_image_roi', self.add_holes, **kwargs)
+        add_or_warn('image_roi', self.add_holes, **kwargs)
         add_or_warn(
-            '_image_roi', self.add_light_dark_classification, **kwargs
+            'image_roi', self.add_light_dark_classification, **kwargs
         )
         if self._is_laminated:
             add_or_warn(
@@ -2234,7 +2234,7 @@ class ProjectBaseClass:
         assert self.holes_data is not None, 'call set_punchholes'
         assert self._data_object is not None, 'set data_object object first'
         assert 'depth' in self.data_object.feature_table.columns, 'set depth column'
-        assert check_attr(self, '_image_roi'), 'call require_image_roi'
+        assert check_attr(self, 'image_roi'), 'call require_image_roi'
         assert check_attr(self, '_xray'), 'call require_xray'
 
         depth_section: float | int = self.depth_span[1] - self.depth_span[0]
@@ -2319,7 +2319,7 @@ class ProjectBaseClass:
             **_
     ) -> None:
         """
-        This function may only be called if a data, _image_roi and xray object
+        This function may only be called if a data, image_roi and xray object
         have been set, the depth span specified and the punch holes been added
         to the feature table.
 
@@ -2470,7 +2470,7 @@ class ProjectBaseClass:
         Add the X-ray measurement as a new column to the feature table of the
         data object.
         """
-        assert check_attr(self, '_image_roi'), 'call require_image_roi'
+        assert check_attr(self, 'image_roi'), 'call require_image_roi'
         assert check_attr(self, '_xray'), 'call require_xray'
         mapper, loaded = self._get_xray_transform()
         assert loaded, 'Unable to load mapper, call require_xray_transform first'
@@ -2538,7 +2538,7 @@ class ProjectBaseClass:
                 )
             target = self.image_classified.image_corrected
         else:
-            assert check_attr(self, '_image_roi'), \
+            assert check_attr(self, 'image_roi'), \
                 ('need image_roi object when no tilt correction is used in '
                  'set_combine_mapper.')
             target = self.image_roi.image
@@ -2660,11 +2660,11 @@ class ProjectBaseClass:
                       'unexpected results. Instead use "require_combine_mapper" '
                       'and "data_object_apply_transformation"')
 
-        assert check_attr(other, '_image_roi')
+        assert check_attr(other, 'image_roi')
         assert check_attr(other, '_data_object')
         assert 'x_ROI' in other.data_object.columns
 
-        assert check_attr(self, '_image_roi')
+        assert check_attr(self, 'image_roi')
         assert check_attr(self, '_data_object')
         assert 'x_ROI' in self.data_object.columns
 
@@ -2797,7 +2797,7 @@ class ProjectBaseClass:
                 self._time_series.load(tag)
                 if (
                         check_attr(self._time_series,
-                                   '_feature_table',
+                                   'feature_table',
                                    True)
                 ):
                     return self._time_series
@@ -3495,7 +3495,7 @@ class ProjectMSI(ProjectBaseClass):
             logger.info('spectra object does not have binned spectra')
             self._spectra.bin_spectra(reader, **kwargs)
             self._spectra.filter_line_spectra(binned_snr_threshold=SNR_threshold, **kwargs)
-        if not check_attr(self.spectra, '_feature_table'):
+        if not check_attr(self.spectra, 'feature_table'):
             self._spectra.set_feature_table(**kwargs)
 
         if plts:
@@ -3534,7 +3534,7 @@ class ProjectMSI(ProjectBaseClass):
                 logger.info('loaded fully initialized spectra object')
                 self._spectra.set_feature_table()
                 return self._spectra
-            elif check_attr(self._spectra, '_feature_table'):
+            elif check_attr(self._spectra, 'feature_table'):
                 logger.info('loaded fully initialized spectra object')
                 return self._spectra
             # if full is set to False, we can also return
@@ -3638,7 +3638,7 @@ class ProjectMSI(ProjectBaseClass):
             )
             try:
                 self._data_object.load(tag)
-                if check_attr(self.data_object, '_feature_table'):
+                if check_attr(self.data_object, 'feature_table'):
                     # loaded good instance, can return
                     return self._data_object
                 else:
@@ -3861,7 +3861,7 @@ class IonImagePlotter:
         if 'distance_pixels' in kwargs:
             return kwargs
         if not check_attr(
-                self._data_object, '_distance_pixels'
+                self._data_object, 'distance_pixels'
         ):
             return kwargs
         kwargs['distance_pixels'] = self._data_object.distance_pixels
@@ -3968,8 +3968,8 @@ class MultiMassWindowProject(ProjectBaseClass):
             ...
             raise NotImplementedError()
 
-        assert check_attr(p_other, '_image_roi') and check_attr(p_main, '_image_roi'), \
-            'projects must have _image_roi objects'
+        assert check_attr(p_other, 'image_roi') and check_attr(p_main, 'image_roi'), \
+            'projects must have image_roi objects'
         t = Transformation(source=p_other.image_roi, target=p_main.image_roi)
 
         # use bounding box first, image flow second
