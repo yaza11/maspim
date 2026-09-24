@@ -48,12 +48,11 @@ from maspim.imaging.util.image_boxes import get_mean_intensity_box, region_in_bo
 
 logger = logging.getLogger(__name__)
 
-
 IMAGE_TYPES: list[str] = ['cv', 'np', 'pil']
 ImageType = Literal[*IMAGE_TYPES]
 
 OBJECT_COLORS: tuple[str, str] = ('light', 'dark')
-ObjectColor = Literal[*OBJECT_COLORS]
+ObjectColor: type = Literal[*OBJECT_COLORS]
 
 
 class Image(Convenience):
@@ -62,14 +61,14 @@ class Image(Convenience):
 
     Can be used on its own for basic functionality, but generally not recommended.
     """
-    _average_width_yearly_cycle: float = None
-    _hw: tuple[int, int] = None
-    _image: np.ndarray[int | float] = None
-    _image_type: ImageType = None
-    _image_simplified: np.ndarray[int] = None
-    _main_contour: np.ndarray[int] = None
-    _mask_foreground: np.ndarray[bool] = None
-    _thr_background: float= None
+    average_width_yearly_cycle: float = None
+    height_width: tuple[int, int] = None
+    image: np.ndarray[int | float] = None
+    image_type: ImageType = None
+    image_simplified: np.ndarray[int] = None
+    main_contour: np.ndarray[int] = None
+    mask_foreground: np.ndarray[bool] = None
+    min_intensity_foreground: float = None
 
     age_span: tuple[float, float] = None
     image_file: str = None
@@ -77,46 +76,44 @@ class Image(Convenience):
 
     _save_attrs: set[str] = {
         'age_span',
-        '_average_width_yearly_cycle',
+        'average_width_yearly_cycle',
         'image_file',
-        '_image',
+        'image',
         'obj_color',
-        '_mask_foreground'  # TODO: could alternatively save parameters with which to create mask
+        'mask_foreground'
     }
 
-    def __init__(
+    def set_image(
             self,
             obj_color: ObjectColor,
             path_image_file: str = None,
             image: np.ndarray[float | int] = None,
-            image_type: ImageType = None,
-            mask_foreground: np.ndarray = None,
-            path_folder: str = None
-    ) -> None:
+            image_type: ImageType = None
+    ):
         """Initiator.
 
-        Parameters
-        ----------
-        obj_color : str
-            The foreground color of the object in the image. Either 'light' or
-            'dark'. This is required for working with thresholded images is
-            desired.
-        path_image_file : str, optional
-            The file path to an image file to be read.
-        image : np.ndarray[float | int], optional
-            Alternatively, an image can be provided directly.
-        mask_foreground: np.ndarray, optional
-            Mask specifying foreground pixels. Will be determined automatically
-            using the obj_color if not provided.
-        image_type: str, optional
-            If the input image is not a cv image, provide this keyword argument.
-            Options are 'cv', 'np', 'pil' for images read or processed with
-            OpenCV, numpy or PILLOW respectively.
-        path_folder : str, optional
-            Folder in which the image or saved object is located. If not provided,
-            will be inferred from path_image_file.
-            If that is also not provided, will be an empty string.
-        """
+                Parameters
+                ----------
+                obj_color : str
+                    The foreground color of the object in the image. Either 'light' or
+                    'dark'. This is required for working with thresholded images is
+                    desired.
+                path_image_file : str, optional
+                    The file path to an image file to be read.
+                image : np.ndarray[float | int], optional
+                    Alternatively, an image can be provided directly.
+                mask_foreground: np.ndarray, optional
+                    Mask specifying foreground pixels. Will be determined automatically
+                    using the obj_color if not provided.
+                image_type: str, optional
+                    If the input image is not a cv image, provide this keyword argument.
+                    Options are 'cv', 'np', 'pil' for images read or processed with
+                    OpenCV, numpy or PILLOW respectively.
+                path_folder : str, optional
+                    Folder in which the image or saved object is located. If not provided,
+                    will be inferred from path_image_file.
+                    If that is also not provided, will be an empty string.
+                """
         assert (path_image_file is not None) or (image is not None), \
             "Must provide either path or image"
         if image is not None:
@@ -131,22 +128,10 @@ class Image(Convenience):
             assert image is not None, f"Could not load image from {path_image_file}"
             self.image_file: str = os.path.basename(path_image_file)
             self.path_folder: str = os.path.dirname(path_image_file)
-        if path_folder is not None:  # overwrite with provided
-            self.path_folder = path_folder
+        if self.path_folder is not None:  # overwrite with provided
+            self.path_folder = self.path_folder
 
         self.obj_color: str = obj_color
-
-        if mask_foreground is not None:
-            assert mask_foreground.ndim == 2, f'mask must be 2D'
-            assert len(np.unique(mask_foreground)) <= 2, \
-                f'mask should contain at most 2 unique values'
-            assert mask_foreground.shape == image.shape[:2], \
-                (f'mask and image dimensions must match but found mask: '
-                 f'{mask_foreground.shape} and image: {image.shape[:2]}')
-            self._mask_foreground: np.ndarray[np.uint8] = (
-                mask_foreground > 0
-            ).astype(np.uint8) * 255
-            self._thr_background: int = -1
 
         # set _image_original
         self._from_image(image, image_type)
@@ -156,10 +141,10 @@ class Image(Convenience):
         """Compose the path of the image file from folder and image file."""
         # image file was not provided
         if not check_attr(self, 'image_file'):
-            return
+            return None
         # path_folder was not provided
         if not check_attr(self, 'path_folder'):
-            return
+            return None
         return os.path.join(self.path_folder, self.image_file)
 
     def _from_image(self, image: np.ndarray, image_type: ImageType) -> None:
@@ -181,50 +166,27 @@ class Image(Convenience):
             )
             # swapaxes returns a view by default
             image: np.ndarray[int | float] = image.copy().swapaxes(0, 1)
-        self._hw = h, w
-        self._image: np.ndarray[int | float] = image
+        self.height_width = h, w
+        self.image: np.ndarray[int | float] = image
 
-    @classmethod
-    def from_disk(cls, path_folder: str, tag: str = None) -> Self:
-        """Load an image object from disk."""
-        # initiate dummy object that provides all, albeit nonsensical, parameters
-        dummy: Self = cls(path_folder=path_folder,
-                          image=np.ones((3, 3)),
-                          image_type='cv',
-                          obj_color='light')
-        dummy.load(tag)
-        # load messes with _image, _image_original, the constructor can take care of that
-        new: Self = cls(
-            obj_color=dummy.obj_color,
-            path_image_file=dummy.path_image_file,
-            image=dummy.__dict__.get('_image'),
-            image_type='cv',
-            path_folder=path_folder,
-        )
+    @functools.cached_property
+    def image_grayscale(self):
+        if self.image is None:
+            raise ValueError('To set grayscale image, set an image first.')
+        return ensure_image_is_gray(self.image)
 
-        # overwrite attributes
-        dummy.__dict__.update(new.__dict__)
+    def set_foreground_mask_from_other(self, mask_foreground, thr_background=None):
+        if mask_foreground is not None:
+            assert mask_foreground.ndim == 2, f'mask must be 2D'
+            assert len(np.unique(mask_foreground)) <= 2, \
+                f'mask should contain at most 2 unique values'
+            assert mask_foreground.shape == self.image.shape[:2], \
+                (f'mask and image dimensions must match but found mask: '
+                 f'{mask_foreground.shape} and image: {self.image.shape[:2]}')
+            self.mask_foreground: np.ndarray[bool] = mask_foreground > 0
+            self.min_intensity_foreground: int = thr_background
 
-        return dummy
-
-    @property
-    def image(self) -> np.ndarray[int | float]:
-        """Return a copy of the original image"""
-        return self._image.copy()
-
-    def _require_image_grayscale(self):
-        if not check_attr(self, '_image_grayscale'):
-            self._image_grayscale = ensure_image_is_gray(self.image)
-        return self._image_grayscale
-
-    @property
-    def image_grayscale(self) -> np.ndarray:
-        """Return a grayscale version of the original image."""
-        # TODO: check if (and where) copy is necessary
-        # everywhere else the instances themselves are returned
-        return self._require_image_grayscale().copy()
-
-    def set_foreground_thr_and_pixels(
+    def set_foreground_mask(
             self, thr_method: str = 'otsu', plts: bool = False, **kwargs
     ) -> None:
         """
@@ -245,44 +207,20 @@ class Image(Convenience):
         """
         logger.debug(f'determining foreground pixels with {thr_method=}.')
 
-        mask, thr = get_foreground_pixels_and_threshold(
-            image=self._image,
+        self.mask_foreground, self.min_intensity_foreground = get_foreground_pixels_and_threshold(
+            image=self.image,
             obj_color=self.obj_color,
             method=thr_method,
             plts=plts,
             **kwargs
         )
-        self._thr_background: int | float = thr
-        self._mask_foreground: np.ndarray[int] = mask
         if plts:
-            plt_cv2_image(mask, 'Identified foreground pixels')
-
-    def _require_foreground_thr_and_pixels(
-            self, **kwargs
-    ) -> tuple[float | int, np.ndarray[int]]:
-        """Make sure the foreground mask and threshold exists before returning it"""
-        if not check_attr(self, '_mask_foreground'):
-            self.set_foreground_thr_and_pixels(**kwargs)
-        return self._thr_background, self._mask_foreground
-
-    @property
-    def image_binary(self) -> np.ndarray[int]:
-        return self._require_foreground_thr_and_pixels()[1]
-
-    @property
-    def mask_foreground(self) -> np.ndarray[int]:
-        """A mask where foreground pixels are True and background pixels are False."""
-        return self._require_foreground_thr_and_pixels()[1]
-
-    @property
-    def thr_foreground(self) -> int | float:
-        """The global threshold where foreground are separated from background pixels."""
-        return self._require_foreground_thr_and_pixels()[0]
+            plt_cv2_image(self.mask_foreground, 'Identified foreground pixels')
 
     def get_binarisation_of_foreground(
             self,
-            image: np.ndarray | None = None,
-            mask: np.ndarray[int | bool] | None = None,
+            image: np.ndarray = None,
+            mask: np.ndarray[bool] = None,
             plts: bool = False
     ) -> tuple[np.ndarray[np.uint8], np.ndarray[np.uint8]]:
         """
@@ -338,7 +276,7 @@ class Image(Convenience):
 
         return light_pixels, dark_pixels
 
-    def set_simplified_image(self, **kwargs) -> None:
+    def set_simplified_image(self, image_binary=None, **kwargs) -> None:
         """
         Apply median filters and increasing scales to the binary image.
 
@@ -351,24 +289,20 @@ class Image(Convenience):
         -----
         Defines image_simplified.
         """
-        self._image_simplified: np.ndarray[int] = get_simplified_image(
-            self.image_binary, **kwargs
+        if (image_binary is None) and (self.mask_foreground is None):
+            raise ValueError('By default, foreground mask is used as binary image. Either provide a binary image '
+                             'directly or set the foreground.')
+        elif image_binary is None:
+            image_binary = self.mask_foreground
+
+        self.image_simplified: np.ndarray[np.uint8] = get_simplified_image(
+            image_binary, **kwargs
         )
-
-    def _require_simplified_image(self, **kwargs) -> np.ndarray[int]:
-        """Set the simplified image if it does not exist and then return it."""
-        if not check_attr(self, '_image_simplified'):
-            self.set_simplified_image(**kwargs)
-        return self._image_simplified
-
-    @property
-    def image_simplified(self) -> np.ndarray[int]:
-        """Fetch simplified image."""
-        return self._require_simplified_image()
 
     def set_main_contour(
             self,
-            method: str = 'take_largest',
+            image_binary=None,
+            method: Literal['take_largest', 'star_domain', 'filter_by_size', 'convex_hull'] = 'take_largest',
             filter_by_size: float = .3,
             plts: bool = False
     ):
@@ -389,7 +323,7 @@ class Image(Convenience):
 
         Notes
         -----
-        Defines _main_contour
+        Defines main_contour
             The contour surrounding the sample as an array where each row
             describes a point.
         """
@@ -399,7 +333,11 @@ class Image(Convenience):
         assert method in methods, \
             f"{method=} is not an option. Valid options are {methods}"
 
-        image_binary: np.ndarray[int] = self.image_simplified
+        if (image_binary is None) and (self.image_simplified is not None):
+            image_binary: np.ndarray[int] = self.image_simplified
+        elif image_binary is None:
+            raise ValueError(
+                'Image_binary is not defined. Either provide a binary image or set the simplified image first!')
 
         contours, _ = cv2.findContours(
             image_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
@@ -453,18 +391,7 @@ class Image(Convenience):
                 title='main contour'
             )
 
-        self._main_contour: np.ndarray[int] = contour
-
-    def _require_main_contour(self, **kwargs) -> np.ndarray[int]:
-        """Set contour, if necessary and return it."""
-        if not check_attr(self, '_main_contour'):
-            self.set_main_contour(**kwargs)
-        return self._main_contour
-
-    @property
-    def main_contour(self) -> np.ndarray[int]:
-        """Set contour, if necessary and return it."""
-        return self._require_main_contour()
+        self.main_contour: np.ndarray[int] = contour
 
     def set_age_span(self, age_span: tuple[float | int, float | int]) -> None:
         """
@@ -484,7 +411,7 @@ class Image(Convenience):
             'provide an upper and lower value (e.g. age_span=[0, 100])'
         self.age_span: tuple[float | int, float | int] = age_span
 
-    def set_average_width_yearly_cycle(self, pixels: int | None = None) -> None:
+    def set_average_width_yearly_cycle(self, pixels: int = None) -> None:
         """
         Calculate how many cycles are in the interval and their av width.
 
@@ -495,23 +422,14 @@ class Image(Convenience):
             from the age span.
         """
         if pixels is not None:
-            self._average_width_yearly_cycle = pixels
+            self.average_width_yearly_cycle = pixels
             return
         assert check_attr(self, 'age_span'), \
             'call set_age_span'
         pixels_x: int = self.image.shape[1]
         # calculate the number of expected cycles from the age difference for
         # the depth interval of the slice
-        self._average_width_yearly_cycle: float = pixels_x / abs(self.age_span[1] - self.age_span[0])
-
-    @property
-    def average_width_yearly_cycle(self) -> float:
-        """Set and return the average width of a year in pixels."""
-        if not check_attr(self, '_average_width_yearly_cycle'):
-            assert check_attr(self, 'age_span'), \
-                'Define an age span before calculating the average width of annual layers.'
-            self.set_average_width_yearly_cycle()
-        return self._average_width_yearly_cycle
+        self.average_width_yearly_cycle: float = pixels_x / abs(self.age_span[1] - self.age_span[0])
 
     def plot(self, **kwargs) -> None | tuple[plt.Figure, plt.Axes]:
         """
@@ -528,6 +446,20 @@ class Image(Convenience):
             Figure and Axes, if hold is set to True.
         """
         return plt_cv2_image(image=self.image, **kwargs)
+
+    def plot_overview(self, ax: plt.Axes = None) -> plt.Axes:
+        if ax is None:
+            _, ax = plt.subplots()
+
+        if self.image is not None:
+            ax.imshow(self.image)
+        if self.mask_foreground is not None:
+            ax.imshow(self.mask_foreground, cmap='binary', alpha=.2)
+        if self.main_contour is not None:
+            # plt_contours(self.main_contour, self.image, hold=True, ax=ax)
+            ...
+        ...
+        return ax
 
 
 class ImageSample(Image):
@@ -572,88 +504,36 @@ class ImageSample(Image):
     >>> i.save()
     """
 
-    _image_roi: np.ndarray = None
-    _xywh_ROI: tuple[int, int, int, int] = None
+    image_roi: np.ndarray = None
+    xywh_ROI: tuple[int, int, int, int] = None
 
     _save_attrs: set[str] = {
         'age_span',
-        '_average_width_yearly_cycle',
+        'average_width_yearly_cycle',
         'image_file',
-        '_image',
+        'image',
         'obj_color',
-        '_xywh_ROI',
-        '_hw',
-        '_mask_foreground'
+        'xywh_ROI',
+        'height_width',
+        'mask_foreground'
     }
-
-    def __init__(
-            self,
-            *,
-            path_folder: str | None = None,
-            image: np.ndarray[float | int] | None = None,
-            mask_foreground: np.ndarray | None = None,
-            image_type: str = 'cv',
-            path_image_file: str | None = None,
-            obj_color: str | None = None
-    ) -> None:
-        """Initiator.
-
-        Parameters
-        ----------
-        obj_color : str
-           The foreground color of the object in the image. Either 'light' or 'dark'.
-           This is required for working with thresholded images is desired.
-        path_image_file : str, optional
-           The file path to an image file to be read.
-        image : np.ndarray[float | int], optional
-           Alternatively, an image can be provided directly.
-        mask_foreground: np.ndarray, optional
-            Mask specifying foreground pixels. Will be determined automatically
-            using the obj_color if not provided.
-        image_type: str, optional
-           If the input image is not a cv image, provide this keyword argument.
-           Options are 'cv', 'np', 'pil' for images read or processed with
-           OpenCV, numpy or PILLOW respectively.
-        path_folder : str, optional
-           Folder in which the image or saved object is located. If not provided,
-           will be inferred from path_image_file.
-           If that is also not provided, will be an empty string.
-
-        """
-        # super call
-        super().__init__(
-            path_folder=path_folder,
-            path_image_file=path_image_file,
-            image=image,
-            mask_foreground=mask_foreground,
-            image_type=image_type,
-            obj_color='light'  # give a dummy, will be overwritten
-        )
-
-        # overwrite the obj color attribute of the super init method
-        if obj_color is not None:
-            assert obj_color in OBJECT_COLORS, \
-                f'obj_color must be in {OBJECT_COLORS}'
-            self.obj_color: str = obj_color
-        else:
-            self.obj_color: str = self._get_obj_color()
 
     def _pre_save(self):
         # if image_file is defined, we don't need to store the original image
         if check_attr(self, 'path_image_file'):
-            self._save_attrs.remove('_image')
+            self._save_attrs.remove('image')
 
     def _post_save(self):
-        self._save_attrs.add('_image')
+        self._save_attrs.add('image')
 
     def _post_load(self):
-        if not check_attr(self, '_image'):
+        if not check_attr(self, 'image'):
             assert check_attr(self, 'path_image_file'), \
                 'loaded corrupted instance with neither image nor image_file'
             self._image = cv2.imread(self.path_image_file)
             self._image_type = 'cv'
 
-    def _get_obj_color(self, region_middleground: float = .8, **_) -> str:
+    def infer_obj_color(self, image_grayscale: np.ndarray = None, region_middleground: float = .8, **_) -> ObjectColor:
         """
         Determine if middle-ground is light or dark by comparing averages.
 
@@ -672,15 +552,16 @@ class ImageSample(Image):
             and 'dark' otherwise.
 
         """
-        image_gray: np.ndarray[int] = self.image_grayscale
+        if (image_grayscale is None) and (self.image_grayscale is not None):
+            image_grayscale: np.ndarray = self.image_grayscale
 
-        height, width = image_gray.shape[:2]
+        height, width = image_grayscale.shape[:2]
         # determine indizes of box
         idx_height_min: int = round((1 - region_middleground) * height)
         idx_height_max: int = round(region_middleground * height)
         idx_width_min: int = round((1 - region_middleground) * width)
         idx_width_max: int = round(region_middleground * width)
-        image_region: int = image_gray[
+        image_region: np.ndarray = image_grayscale[
             idx_height_min:idx_height_max,
             idx_width_min:idx_width_max
         ]
@@ -688,7 +569,7 @@ class ImageSample(Image):
         # of values for 4 channels take first one
         # (only nonzero for grayscale img)
         image_region_mean: float = cv2.mean(image_region)[0]
-        image_mean: float = cv2.mean(image_gray)[0]
+        image_mean: float = cv2.mean(image_grayscale)[0]
         if image_region_mean > image_mean:
             obj_color: ObjectColor = 'light'
         else:
@@ -700,11 +581,12 @@ class ImageSample(Image):
 
     def get_sample_area_box(
             self,
+            image_binary=None,
             dilate_factor: float = 1,
             plts: bool = False,
             extent_x: tuple[int, int] | None = None,
             **kwargs
-    ) -> tuple[np.ndarray, tuple[int, ...]]:
+    ) -> tuple[np.ndarray, tuple[int, ...]] | tuple[None, tuple[int, ...]]:
         """
         Use optimizer to find sample area in image as a horizontal box..
 
@@ -723,7 +605,7 @@ class ImageSample(Image):
 
         Returns
         -------
-        _image_roi, xywh
+        image_roi, xywh
             The image inside the box and corner as well as width and height of box.
 
         """
@@ -777,7 +659,7 @@ class ImageSample(Image):
             """
             box_ratio_y, center_box_y = x0
             center_box = (
-                np.array([center_box_x, center_box_y]) + .5
+                    np.array([center_box_x, center_box_y]) + .5
             ).astype(int)
             mean_box, mean_rest = get_mean_intensity_box(
                 image_downscaled,
@@ -789,7 +671,11 @@ class ImageSample(Image):
             fraction_area: float = box_ratio_y * box_ratio_x
             return -np.abs(mean_box - mean_rest) * fraction_area
 
-        image_binary: np.ndarray[int] = self.image_binary
+        if image_binary is None:
+            if self.mask_foreground is not None:
+                image_binary: np.ndarray[int] = self.mask_foreground
+            else:
+                raise ValueError('To determine sample area, binary image is required. Either set the mask or provide it directly.')
         image_downscaled, scale_factor = auto_downscaled_image(image_binary)
         # initiate center_box
         middle_y: int = round(image_downscaled.shape[0] / 2)
@@ -874,7 +760,10 @@ class ImageSample(Image):
             w: int = round(w / scale_factor)
             h: int = round(h / scale_factor)
         # select the ROI in the image with original scale
-        image_ROI: np.ndarray = self.image[y:y + h, x:x + w].copy()
+        if self.image is not None:
+            image_ROI: np.ndarray = self.image[y:y + h, x:x + w].copy()
+        else:
+            image_ROI = None
 
         if plts:
             plt_cv2_image(image_ROI, 'detected ROI')
@@ -883,6 +772,8 @@ class ImageSample(Image):
 
     def get_sample_area_from_contour(
             self,
+            contour=None,
+            image=None,
             plts: bool = False,
             **kwargs: Any
     ) -> tuple[np.ndarray, tuple[int, ...]]:
@@ -904,16 +795,26 @@ class ImageSample(Image):
 
         Returns
         -------
-        _image_roi: np.ndarray
+        image_roi: np.ndarray
             The image section inside the ROI.
         x, y, w, h: tuple[int, int, int, int]
             The coordinates of the box.
         """
-        contour = self._require_main_contour(**kwargs)
+        if contour is None:
+            if self.main_contour is not None:
+                contour = self.main_contour
+            else:
+                raise ValueError('To determine sample area, main contour is required. Either set the main contour or provide it directly.')
+
+        if image is None:
+            if self.image is not None:
+                image = self.image
+            else:
+                raise ValueError('To determine sample area, image is required. Either set the image or provide it directly.')
 
         x, y, w, h = cv2.boundingRect(contour)
-
-        image_roi = self.image[y:y + h, x:x + w]
+        # select region from image
+        image_roi = image[y:y + h, x:x + w]
 
         if plts:
             plt_cv2_image(
@@ -924,16 +825,18 @@ class ImageSample(Image):
 
     def set_sample_area(
             self,
+            image=None,
             plts: bool = False,
             interactive: bool = False,
             extent_x: tuple[int, int] | None = None,
-            use_main_contour: bool = True,
+            adjust_with_main_contour: bool = True,
+            dilate_factor_box_result = .1,
             **_
     ) -> None:
         """
         Find the sample area of a sample in multiple steps.
 
-        Firstly, use the get_sample_area_box function  and dilate the result
+        Firstly, use the get_sample_area_box function and dilate the result
         to get a rough estimate that definitely includes the entire sample.
         Then, find the contour of the simplified area and its bounding box.
 
@@ -946,36 +849,49 @@ class ImageSample(Image):
         extent_x : tuple[int, int], optional
             extent of the sample in the x direction (taken from mis file) as a tuple
             where the first value is the left and the second the right bound.
+        adjust_with_main_contour: bool, optional
+            The default is True. If this is set to True, adjust the optimizer result by finding the main contour in the
+            slightly expanded box result.
+        dilate_factor_box_result: float, optional
+            Factor by which w, h of the found box will be expanded. Not used if use_main_contour is False or
+            extend_x is defined.
 
         """
         if interactive:
-            self._user_sample_area()
-            # redefine foreground
-            self.set_foreground_thr_and_pixels()
-            self.set_simplified_image()
+            self._user_sample_area(image=image)
             return
+
+        if not adjust_with_main_contour or extent_x is not None:
+            dilate_factor_box_result = 1
 
         # find the rough region of interest with box
         # if extent_x is defined, skip dilation step
-        df: float = .1 if extent_x is None else 1.
         image_box, (xb, yb, wb, hb) = self.get_sample_area_box(
             extent_x=extent_x,
-            dilate_factor=df,
+            dilate_factor=dilate_factor_box_result,
             plts=plts
         )
 
-        if use_main_contour:
-            # set as new image
-            image_sub: ImageSample = ImageSample(
+        if adjust_with_main_contour:
+            # store previous result
+            contour = self.main_contour.copy()
+            # as input, use the image region from box optimization and get the binarization by using default parameters
+            #  for foreground and simplification
+            image_sub: ImageSample = ImageSample()
+            image_sub.set_image(
                 image=image_box,
-                obj_color=self.obj_color,
-                mask_foreground=self.mask_foreground[yb:yb+hb, xb:xb+wb]
+                obj_color=self.obj_color
             )
-            # set image simplified for contour to use
-            image_sub._mask_foreground = image_sub.image_simplified
-            # find the refined area as the _extent of the simplified binary image
+            image_sub.set_foreground_mask_from_other(
+                mask_foreground=self.mask_foreground[yb:yb + hb, xb:xb + wb]
+            )
+            image_sub.set_simplified_image(image_binary=image_sub.mask_foreground)
+            image_sub.set_main_contour(image_binary=image_sub.image_simplified)
+            # find the refined area as the extent_roi_coordinates of the simplified binary image
             _, (xc, yc, wc, hc) = image_sub.get_sample_area_from_contour(
-                method='filter_by_size', plts=plts
+                image_binary=image_sub.image_simplified,
+                method='filter_by_size',
+                plts=plts
             )
 
             # stack the offsets of the two defined ROI's since the second ROI is
@@ -998,12 +914,18 @@ class ImageSample(Image):
                 'final ROI as defined by get_sample_area'
             )
 
-        self._image_roi: np.ndarray = image_roi
-        self._xywh_ROI: tuple[int, int, int, int] = (x, y, w, h)
+        self.image_roi: np.ndarray = image_roi
+        self.xywh_ROI: tuple[int, int, int, int] = (x, y, w, h)
 
-    def _user_sample_area(self) -> None:
+    def _user_sample_area(self, image: np.ndarray | None) -> None:
         """Set image ROI by points defined by user."""
-        interactive_image: InteractiveImage = InteractiveImage(self.image, mode='rect')
+        if image is None:
+            if self.image is None:
+                raise ValueError('Image is required to define sample area interactively.')
+            else:
+                image = self.image
+
+        interactive_image: InteractiveImage = InteractiveImage(image, mode='rect')
         interactive_image.show()
         if len(interactive_image.x_data) != 2:
             logger.error('Please provide exactly two points')
@@ -1020,62 +942,35 @@ class ImageSample(Image):
         w: int = max(xs) - min(xs)
         h: int = max(ys) - min(ys)
 
-        self._xywh_ROI: tuple[int, int, int, int] = (x, y, w, h)
-        self._image_roi: np.ndarray = self.image[y: y + h, x: x + w].copy()
+        self.xywh_ROI: tuple[int, int, int, int] = (x, y, w, h)
+        self.image_roi: np.ndarray = self.image[y: y + h, x: x + w].copy()
 
-    def get_sample_area_from_xywh(self):
+    def get_sample_area_from_xywh(self, image=None):
         """Get the region of the image corresponding to sample area from xywh."""
-        assert check_attr(self, '_xywh_ROI'), \
+        assert check_attr(self, 'xywh_ROI'), \
             'no roi found, call require_image_sample_area'
-        image: np.ndarray = self.image
-        x, y, w, h = self._xywh_ROI
+        if image is None:
+            if self.image is not None:
+                image = self.image
+            else:
+                raise ValueError('To get sample area, image is required. Either set the image or provide it directly.')
+
+        x, y, w, h = self.xywh_ROI
         return image[y:y + h, x:x + w].copy()
-
-    def require_image_sample_area(
-            self, overwrite: bool = False, **kwargs
-    ) -> tuple[np.ndarray[np.uint8], tuple[int, ...]]:
-        """Set and return area of the sample in the image."""
-        # does has _xywh_ROI and _image_ROI
-        if overwrite:
-            self.set_sample_area(**kwargs)
-            return self._image_roi, self._xywh_ROI
-
-        if (
-                check_attr(self, '_xywh_ROI')
-                and check_attr(self, '_image_roi')
-        ):
-            return self._image_roi, self._xywh_ROI
-
-        if check_attr(self, '_xywh_ROI'):  # only has _xywh_ROI
-            self._image_roi: np.ndarray = self.get_sample_area_from_xywh()
-            return self._image_roi, self._xywh_ROI
-
-        self.set_sample_area(**kwargs)
-        return self._image_roi, self._xywh_ROI
-
-
-    @property
-    def xywh_ROI(self):
-        return self.require_image_sample_area()[1]
-
-    @property
-    def image_sample_area(self) -> np.ndarray:
-        """Return a copy of the sample area."""
-        x, y, w, h = self.require_image_sample_area()[1]
-        return self.image[y:y + h, x:x + w].copy()
 
     def plot_sample_area(self, **kwargs: Any) -> None | tuple[plt.Figure, plt.Axes]:
         """Plot the detected sample area as rectangle on original image."""
-        assert check_attr(self, '_xywh_ROI'), \
+        assert check_attr(self, 'xywh_ROI'), \
             'call require_image_sample_area first'
-        xb, yb, wb, hb = self._xywh_ROI
+        assert self.mask_foreground is not None, 'foreground must be set'
+        xb, yb, wb, hb = self.xywh_ROI
 
         return plt_rect_on_image(
             image=self.image,
             title=kwargs.pop('title', 'Detected sample area'),
             no_ticks=kwargs.pop('no_ticks', True),
             box_params=region_in_box(
-                image=self.image_binary,
+                image=self.mask_foreground,
                 x=xb,
                 y=yb,
                 w=wb,
@@ -1086,10 +981,13 @@ class ImageSample(Image):
 
     def plot_overview(self, **kwargs: Any) -> None:
         """Plot diagnostic images"""
+        if self.image is None:
+            return
         # original image
         image_box, (xb, yb, wb, hb) = self.get_sample_area_box(dilate_factor=0.1)
         # set as new image
-        image_sub: ImageSample = ImageSample(image=image_box, obj_color=self.obj_color)
+        image_sub: ImageSample = ImageSample()
+        image_sub.set_image(image=image_box, obj_color=self.obj_color)
 
         fig, axs = plt.subplots(nrows=2, ncols=2, **kwargs)
 
@@ -1104,11 +1002,11 @@ class ImageSample(Image):
         plt_rect_on_image(
             fig=fig,
             ax=axs[0, 1],
-            image=self.image_binary,
+            image=self.mask_foreground,
             title='box dilated by 10 %',
             no_ticks=True,
             hold=True,
-            box_params=region_in_box(image=self.image_binary, x=xb, y=yb, w=wb, h=hb)
+            box_params=region_in_box(image=self.mask_foreground, x=xb, y=yb, w=wb, h=hb)
         )
         plt_contours(
             fig=fig,
@@ -1123,7 +1021,7 @@ class ImageSample(Image):
         plt_cv2_image(
             fig=fig,
             ax=axs[1, 1],
-            image=self.image_sample_area,
+            image=self.image_roi,
             title='final sample region', no_ticks=True,
             swap_rb=True
         )
@@ -1182,17 +1080,17 @@ class ImageROI(Image):
 
     _save_attrs: set[str] = {
         'age_span',
-        '_average_width_yearly_cycle',
+        'average_width_yearly_cycle',
         'image_file',
-        '_image',
+        'image',
         'obj_color',
-        '_xywh_ROI',
-        '_hw',
+        'xywh_ROI',
+        'height_width',
         '_image_classification',
         '_params',
         '_punchholes',
         '_punchhole_size',
-        '_mask_foreground'
+        'mask_foreground'
     }
 
     def __init__(
@@ -1471,8 +1369,8 @@ class ImageROI(Image):
         image_dark_laminae: np.ndarray[np.uint8] = (
                 mask_foreground & (~image_light)).astype(np.uint8)
         image_classification: np.ndarray[np.uint8] = (
-            image_light_laminae * key_light_pixels +
-            image_dark_laminae * key_dark_pixels
+                image_light_laminae * key_light_pixels +
+                image_dark_laminae * key_dark_pixels
         )
 
         if plts:
@@ -1853,16 +1751,16 @@ class ImageClassified(Image):
 
     _save_attrs: set[str] = {
         'age_span',
-        '_average_width_yearly_cycle',
+        'average_width_yearly_cycle',
         'image_file',
-        '_image',
+        'image',
         'obj_color',
-        '_xywh_ROI',
-        '_hw',
+        'xywh_ROI',
+        'height_width',
         'params_laminae_simplified',
         'image_seeds',
         '_image_classification',
-        '_mask_foreground'
+        'mask_foreground'
     }
 
     def __init__(
@@ -1939,11 +1837,11 @@ class ImageClassified(Image):
             self._thr_background = 0
 
         if image_classification is not None:
-            assert image_classification.shape[:2] == self._image.shape[:2], (
-                'image_classification and image should have the same shape ' +
-                'along the first two axes' +
-                f'but have shapes {image_classification.shape[:2]}' +
-                f' and {self._image.shape[:2]}'
+            assert image_classification.shape[:2] == self.image.shape[:2], (
+                    'image_classification and image should have the same shape ' +
+                    'along the first two axes' +
+                    f'but have shapes {image_classification.shape[:2]}' +
+                    f' and {self.image.shape[:2]}'
             )
             self._image_classification: np.ndarray[int] = image_classification
 
@@ -2012,7 +1910,7 @@ class ImageClassified(Image):
     def _set_corrected_using_mapper(self, mapper: Mapper) -> None:
         """Set the tilt corrected images using a transformation object."""
         self._image_corrected: np.ndarray = mapper.fit(
-            self._image, preserve_range=True)
+            self.image, preserve_range=True)
         ic_corrected: np.ndarray[int] = mapper.fit(
             self._image_classification, preserve_range=True
         )
@@ -2110,14 +2008,14 @@ class ImageClassified(Image):
         assert check_attr(self, '_image_classification'), \
             'image_classification has not been provided'
 
-        mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
+        mapper = Mapper(self.image.shape, self.path_folder, 'tilt_correction')
 
         logger.info('getting new tilt correction transformation')
 
         if descriptor is None:
             descriptor = self.get_descriptor(**kwargs)
 
-        U = descriptor.get_shift_matrix(self._image.shape[:2])
+        U = descriptor.get_shift_matrix(self.image.shape[:2])
         mapper.add_UV(U=U)
         mapper.save()
 
@@ -2127,7 +2025,7 @@ class ImageClassified(Image):
         self._qualities: np.ndarray[float] = mapper.fit(
             skimage.transform.resize(
                 descriptor.vals,
-                (self._image.shape[0], self._image.shape[1])
+                (self.image.shape[0], self.image.shape[1])
             ),
             preserve_range=True
         ).mean(axis=0)
@@ -2153,7 +2051,7 @@ class ImageClassified(Image):
             )
 
         # load a mapping, apply it and return the result
-        mapper = Mapper(self._image.shape, self.path_folder, 'tilt_correction')
+        mapper = Mapper(self.image.shape, self.path_folder, 'tilt_correction')
         if os.path.exists(mapper.save_file) and (not overwrite):
             logger.info('loading tilt correction transformation')
             mapper.load()
@@ -2172,7 +2070,7 @@ class ImageClassified(Image):
 
     @property
     def image_uncorrected(self) -> np.ndarray:
-        return self._image
+        return self.image
 
     @property
     def image_corrected(self) -> np.ndarray:
@@ -2397,6 +2295,7 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
             The default is 1 (no downscaling). Acceptable values have to be
             bigger than or equal to 1.
         """
+
         def set_params_laminae(color: str) -> pd.DataFrame:
             is_light: bool = color == 'light'
 
@@ -2579,8 +2478,8 @@ use_age_model, not {height0_mode}')
             self.image_grayscale, idx
         )
         if any([
-                val not in keys_classification
-                for val in np.unique(region_classification)
+            val not in keys_classification
+            for val in np.unique(region_classification)
         ]):
             raise KeyError(
                 f'values in classification array ({np.unique(region_classification)}) '
@@ -2758,7 +2657,7 @@ use_age_model, not {height0_mode}')
                 self.params_laminae_simplified.quality.sort_values().index,
                 total=N,
                 desc='Setting simplified laminae',
-                smoothing=50/N
+                smoothing=50 / N
         ):
             seed: pd.Series = self.params_laminae_simplified.loc[idx, 'seed']
             layer_region, factor_c, factor_s = self._get_region_from_params(idx)
@@ -2860,7 +2759,8 @@ use_age_model, not {height0_mode}')
         mask_valid = qualities > quality_threshold
         logger.info(f'filtering out {(~mask_valid).sum()} laminae ({(~mask_valid).mean():.0%}) '
                     f'that fall below the quality threshold {quality_threshold}')
-        self.params_laminae_simplified: pd.DataFrame = self.params_laminae_simplified.loc[mask_valid, :].reset_index(drop=True)
+        self.params_laminae_simplified: pd.DataFrame = self.params_laminae_simplified.loc[mask_valid, :].reset_index(
+            drop=True)
 
     def reduce_laminae(
             self, plts: bool = False, n_expected: int | None = None, **kwargs
@@ -2880,6 +2780,7 @@ use_age_model, not {height0_mode}')
         kwargs : dict, optional
             Additional keyword arguments passed on to set_laminae_images
         """
+
         def reduce(df_: pd.DataFrame) -> pd.DataFrame:
             """
             Combine duplicate seed entries.
@@ -2893,9 +2794,9 @@ use_age_model, not {height0_mode}')
             # lowest quality is first so take last
             highest: pd.DataFrame = grouper.tail(1)
 
-            meaned: pd.Series = df_\
-                .drop(columns='color')\
-                .groupby(by='sseed')\
+            meaned: pd.Series = df_ \
+                .drop(columns='color') \
+                .groupby(by='sseed') \
                 .mean()
 
             summed.reset_index(inplace=True, drop=False)
@@ -2908,8 +2809,8 @@ use_age_model, not {height0_mode}')
             return highest
 
         assert check_attr(self, 'age_span') or (n_expected is not None), (
-            'reduce_laminae requires either an age_span ' +
-            'or the number of expected layers, exiting method'
+                'reduce_laminae requires either an age_span ' +
+                'or the number of expected layers, exiting method'
         )
         assert check_attr(self, 'params_laminae_simplified'), \
             'call set_params_laminae_simplified'
@@ -2922,8 +2823,8 @@ use_age_model, not {height0_mode}')
 
         # add number color column
         colors: np.ndarray[int] = np.array([
-                1 if c == 'light' else -1
-                for c in df.color
+            1 if c == 'light' else -1
+            for c in df.color
         ])
         seeds: np.ndarray[int] = df.seed.to_numpy() * colors
 
@@ -2949,19 +2850,19 @@ use_age_model, not {height0_mode}')
             return
 
         logger.info(
-                f'removing the layers with the {n_light_excess} lowest light '
-                f'and the {n_dark_excess} lowest dark qualities'
+            f'removing the layers with the {n_light_excess} lowest light '
+            f'and the {n_dark_excess} lowest dark qualities'
         )
 
         mask_light = df.loc[:, 'sseed'] > 0
         mask_dark = df.loc[:, 'sseed'] < 0
-        indices_light_too_low = df\
-            .loc[mask_light, 'quality']\
-            .nsmallest(n=n_light_excess)\
+        indices_light_too_low = df \
+            .loc[mask_light, 'quality'] \
+            .nsmallest(n=n_light_excess) \
             .index
-        indices_dark_too_low = df\
-            .loc[mask_dark, 'quality']\
-            .nsmallest(n=n_dark_excess)\
+        indices_dark_too_low = df \
+            .loc[mask_dark, 'quality'] \
+            .nsmallest(n=n_dark_excess) \
             .index
         drop_rows = np.concatenate((indices_dark_too_low, indices_light_too_low))
         df.drop(index=drop_rows, inplace=True)
@@ -3129,7 +3030,8 @@ use_age_model, not {height0_mode}')
         self.reduce_laminae(**kwargs)
 
     def require_laminae_params_table(self, overwrite=False, **kwargs):
-        if (self.params_laminae_simplified is not None) and ('homogeneity' not in self.params_laminae_simplified.columns):
+        if (self.params_laminae_simplified is not None) and (
+                'homogeneity' not in self.params_laminae_simplified.columns):
             self.set_quality_score(plts=kwargs.get('plts', False))
         if overwrite or (self.params_laminae_simplified is None):
             self.set_laminae_params_table(**kwargs)
