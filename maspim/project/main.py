@@ -831,7 +831,7 @@ class ProjectBaseClass:
         self.image_sample: ImageSample = ImageSample(path_folder=self.path_folder)
         self.image_sample.set_image(**image_kwargs)
 
-    def image_sample_set_roi_using_mis_extend(self, **kwargs):
+    def set_image_sample_roi_using_mis_extend(self, **kwargs):
         # attempt to set photo ROI on image handler
         assert self.image_handler is not None, 'Image handler not set'
         assert check_attr(self.image_handler, 'photo_roi_xywh'), 'ROIs of handler not set'
@@ -1107,10 +1107,6 @@ class ProjectBaseClass:
 
         return self._image_classified
 
-    @property
-    def image_classified(self) -> ImageClassified:
-        return self.require_image_classified()
-
     def require_images(self, overwrite: bool = False, **kwargs) -> None:
         """Set the image handler, sample and roi, and if the sediment is
         laminated classified.
@@ -1154,14 +1150,6 @@ class ProjectBaseClass:
                 **kwargs
             )
         add_or_warn('_xray', self.add_xray)
-
-    def require_data_object(self, *args, **kwargs):
-        """Overwritten by children"""
-        raise NotImplementedError()
-
-    @property
-    def data_object(self):
-        return self.require_data_object()
 
     def add_tic(self, imaging_info_xml: ImagingInfoXML | None = None):
         """Add the total ion count (TIC) for each pixel to the feature table
