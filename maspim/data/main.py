@@ -325,7 +325,7 @@ class Data(DataBaseClass, Convenience):
         # https://docs.opencv.org/3.4/de/d25/imgproc_color_conversions.html
         if ('L' in self.feature_table.columns) and (not overwrite):
             return
-        self._feature_table['L'] = self.feature_table.apply(
+        self.feature_table['L'] = self.feature_table.apply(
             lambda row:
             round(0.299 * row.R + 0.587 * row.G + 0.114 * row.B),
             axis=1
@@ -372,8 +372,8 @@ class Data(DataBaseClass, Convenience):
         y_ft -= yr
         # append to feature_table, so now each (x, y) has an according
         # (x_ROI, y_ROI) corresponding to pixels in the ROI
-        self._feature_table['x_ROI'] = np.around(x_ft).astype(int)
-        self._feature_table['y_ROI'] = np.around(y_ft).astype(int)
+        self.feature_table['x_ROI'] = np.around(x_ft).astype(int)
+        self.feature_table['y_ROI'] = np.around(y_ft).astype(int)
 
     def add_attribute_from_image(
             self,
@@ -432,7 +432,7 @@ class Data(DataBaseClass, Convenience):
 
         interpolated = interpolator(x_roi_table, y_roi_table, grid=False)
         # for each point in feature table, find closest in image
-        self._feature_table[column_name] = interpolated
+        self.feature_table[column_name] = interpolated
 
         if plts:
             idxs = np.c_[
@@ -498,7 +498,7 @@ class Data(DataBaseClass, Convenience):
             [self_df, other_df],
             axis=0
         ).reset_index(drop=True)
-        self._feature_table = new_df
+        self.feature_table = new_df
 
     def split_at_depth(self, depth: float) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Split feature table at depth [cm] and return upper and lower section."""
@@ -644,7 +644,7 @@ class Data(DataBaseClass, Convenience):
             columns = self.data_columns
         kmeans: KMeans = KMeans(n_clusters=n_clusters, **kwargs) \
             .fit(self.get_data_for_columns(columns))
-        self._feature_table[f'kmeans'] = kmeans.labels_
+        self.feature_table[f'kmeans'] = kmeans.labels_
         self._kmeans: KMeans = kmeans
 
     def get_sparsed(self, th_nonzero: float, plts=False):
@@ -973,7 +973,7 @@ class Data(DataBaseClass, Convenience):
         if zones_key is None:
             zones_key: str = 'zones_row_wise'
             # set zones as x-val starting with 0
-            self._feature_table.loc[:, zones_key] = self.x - self.x.min()
+            self.feature_table.loc[:, zones_key] = self.x - self.x.min()
 
         data_table: pd.DataFrame = (self.get_data_for_columns(columns)
                                     .copy().
@@ -1290,7 +1290,7 @@ class ZoneAnalyzer(DataBaseClass):
     Is inherited by Data class
     """
     def __init__(self, feature_table: pd.DataFrame | None = None):
-        self._feature_table = feature_table
+        self.feature_table = feature_table
 
     def calculate_KL_div(
             self,
