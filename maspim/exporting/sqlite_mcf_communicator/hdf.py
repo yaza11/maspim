@@ -75,7 +75,8 @@ class Hdf5Handler(ReaderBaseClass):
             assert path_file.split('.')[-1] == 'hdf5'
             path_folder: str = os.path.dirname(path_file)
         elif path_folder is not None:
-            path_file: str = get_disk_file(self, path_folder, tag)
+            file: str = get_disk_file(self, path_folder, tag)
+            path_file: str = os.path.join(path_folder, file)
 
         self.path_folder: str = path_folder
         self.path_file: str = path_file

@@ -43,7 +43,7 @@ def get_long_time_series(
         p.set_age_span()
 
         p.set_image_handler()
-        p.set_image_sample()
+        p.set_image_sample_from_image_handler()
         p.set_image_roi_from_parent()
         p.set_image_classified()
 
@@ -79,12 +79,12 @@ def get_long_time_series(
         p.spectra = spec
         p.set_data_object()
 
-        p.add_pixels_ROI_to_data()
+        p.add_pixels_roi_to_data()
         p.add_photo_to_data()
         p.add_sediment_holes_to_data()
         p.add_depth_column()
         p.add_age_column()
-        p.add_light_dark_classification()
+        p.add_light_dark_classification_to_data()
         p.add_laminae_classification()
 
         if SNR_threshold > 0:

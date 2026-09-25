@@ -117,6 +117,10 @@ def get_disk_file(obj: object, path_folder: str, tag: str = None) -> str:
         file_name: str = f'{file_name_prefix}_{folder}_{class_name}_{tag}.pickle'
     else:
         file_name: str = f'{file_name_prefix}_{folder}_{class_name}.pickle'
+
+    if class_name == 'Hdf5Handler':  # stores hdf5, not pickle
+        file_name.replace('.pickle', '.hdf5')
+
     return file_name
 
 
