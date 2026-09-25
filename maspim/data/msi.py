@@ -11,12 +11,12 @@ from maspim.exporting.from_mcf.spectrum import Spectra
 from maspim.data.main import Data
 from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
 from maspim.project.file_helpers import search_keys_in_xml, get_resolution_msi, get_mis_image_file, get_mis_file
-from maspim.util.convenience import check_attr, DFolderManager, MisFileManager
+from maspim.util.convenience import check_attr, DFolderManager, MisFileManager, MzUtility
 
 logger = logging.getLogger(__name__)
 
 
-class MSI(Data, DFolderManager, MisFileManager):
+class MSI(Data, DFolderManager, MisFileManager, MzUtility):
     """
     Class to wrap and process mass spectrometry imaging data.
 

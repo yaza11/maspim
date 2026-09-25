@@ -201,7 +201,7 @@ def search_keys_in_xml(path_mis_file: str, keys: Iterable[str]) -> dict[str, lis
 
 def get_resolution_msi(path_mis_file: str) -> float:
     """
-    Read the spot resolution from the mis file and return the resolution  in micrometer. Assumes that the resolution
+    Read the spot resolution from the mis file and return the resolution in micrometer. Assumes that the resolution
     in the x and y direction is the same."""
     distances: str | list[str] = search_keys_in_xml(
         path_mis_file, ['Raster']

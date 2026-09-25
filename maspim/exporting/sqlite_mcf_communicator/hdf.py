@@ -12,11 +12,12 @@ from tqdm import tqdm
 from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
 from maspim.exporting.from_mcf.helper import get_mzs_for_limits, ReaderBaseClass, Spectrum, apply_calibration
 from maspim.util import Convenience
+from maspim.util.convenience import DFolderManager, get_disk_file
 
 logger = logging.getLogger(__name__)
 
 
-class Hdf5Handler(ReaderBaseClass, Convenience):
+class Hdf5Handler(ReaderBaseClass):
     """
     This class allows the interaction and creation of hdf5 files.
 
@@ -47,7 +48,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
     mzs: np.ndarray[float] = None
     limits: tuple[float | int, float | int] = None
 
-    def __init__(self, path_file: str) -> None:
+    def __init__(self, path_file: str = None, path_folder: str = None, tag: str = None) -> None:
         """
         Initializer.
 
@@ -57,22 +58,24 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
             Path and file name of the hdf5 file (e.g. 'path/to/file.hdf5') or d-folder
             (e.g. 'path/to/d_folder.d')
         """
-        self._set_files(path_file)
+        self._set_files(path_file, path_folder, tag)
         self._check_modify_date()
         self._post_init()
 
-    def _set_files(self, path_file: str) -> None:
-        """Infere the file name, d-folder and folder from input."""
-        if path_file.split('.')[-1] == 'hdf5':  # hdf 5 file provided
-            path_d_folder: str = os.path.dirname(path_file)
-        elif os.path.isdir(path_file) and (path_file.split('.')[-1] == 'd'):  # d folder provided
-            path_d_folder: str = path_file
-        else:
-            raise FileNotFoundError(
-                'provided path must either be the hdf file ending in .hdf5 or the d-folder containing the hdf file'
-            )
-        self.d_folder: str = os.path.basename(path_d_folder)
-        self.path_folder: str = os.path.dirname(path_d_folder)
+    def _set_files(self, path_file: str | None, path_folder: str | None, tag: str | None) -> None:
+        """Infer the file name, d-folder and folder from input."""
+        if (path_file is not None) and (path_folder is not None):
+            logger.warning('If folder and file are provided, only the file will be used, ignoring the folder')
+        if (path_file is not None) and (tag is not None):
+            logger.warning('If file is provided, tag will be ignored.')
+
+        if path_file is not None:  # hdf 5 file provided
+            assert path_file.split('.')[-1] == 'hdf5'
+            path_folder: str = os.path.dirname(path_file)
+        elif path_folder is not None:
+            path_file: str = get_disk_file(self, path_folder, tag)
+
+        self.path_folder: str = path_folder
         self.path_file: str = path_file
 
     def _check_modify_date(self) -> None:
@@ -81,8 +84,8 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
             return
         time_hdf: float = os.path.getmtime(self.path_file)
         modify_times = [
-            os.path.getmtime(os.path.join(self.path_d_folder, file))
-            for file in os.listdir(self.path_d_folder)
+            os.path.getmtime(os.path.join(self.path_folder, file))
+            for file in os.listdir(self.path_folder)
             if ('mcf' in file.split('.')[-1]) and (file != 'Storage.mcf_idx')
         ]
         if len(modify_times) == 0:
@@ -229,10 +232,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
 
         self.add_metadata(reader)
 
-    def read(
-            self,
-            indices: Iterable[int] | None = None,
-    ) -> dict[str, np.ndarray]:
+    def read(self, indices: Iterable[int] | None = None) -> dict[str, np.ndarray]:
         """
         Read spectra with given indices from hdf5 file.
 
@@ -324,7 +324,7 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
         spectrum: Spectrum
             The (calibrated) spectrum.
         """
-        with h5py.File(self.save_file, 'r') as f:
+        with h5py.File(self.path_file, 'r') as f:
             intensities = f['intensities'][index, :]
 
         spectrum = Spectrum((self.mzs, intensities), **kwargs)
@@ -333,14 +333,6 @@ class Hdf5Handler(ReaderBaseClass, Convenience):
             spectrum = apply_calibration(spectrum, poly_coeffs)
 
         return spectrum
-
-    def load(self, *args, **kwargs):
-        raise NotImplementedError()
-
-    def save(self, *args, **kwargs):
-        raise NotImplementedError()
-
-
 
 
 if __name__ == '__main__':
@@ -353,5 +345,3 @@ if __name__ == '__main__':
     )
 
     hdf5_reader.write(reader=reader)
-
-

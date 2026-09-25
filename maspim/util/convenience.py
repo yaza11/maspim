@@ -212,9 +212,13 @@ class Convenience:
 
     def __init__(self, path_folder: str = None):
         self.path_folder = path_folder
+        self.__post_init__()
+
+    def __post_init__(self):
+        pass
 
     @classmethod
-    def from_file(cls, path_folder: str = None, path_file: str = None, tag: str = None) -> Self:
+    def load_from_file(cls, path_folder: str = None, path_file: str = None, tag: str = None) -> Self:
         assert (path_folder is not None) ^ (path_file is not None), 'provide either path_folder or path_file (but not both)'
         if (path_file is not None) and (tag is not None):
             logger.warning('tag is ignored when loading from file')
@@ -235,17 +239,21 @@ class Convenience:
     def get_save_file(self, path_folder: str = None, tag: str = None) -> str:
         """Return the folder and the file name (including the path)"""
         assert (check_attr(self, 'path_folder')
-                or check_attr(self, 'path_file')), \
+                or check_attr(self, 'path_file')) or (path_folder is not None), \
             'object does not have a path_folder attribute'
         if path_folder is not None:
-            path_folder: str = path_folder
             if self._save_in_d_folder:
                 assert path_folder.endswith('.d'), \
                     f'{self.__class__.__name__} is supposed to be stored in d_folder, but specified path_folder {path_folder} does not end with .d'
         elif self._save_in_d_folder:
-            assert (check_attr(self, 'path_d_folder')), \
-                f'{self.__class__.__name__} is supposed to be stored in d_folder, but attribute not set'
-            path_folder: str = self.path_d_folder
+            if self.d_folder is not None:
+                assert (check_attr(self, 'path_d_folder')), \
+                    f'{self.__class__.__name__} is supposed to be stored in d_folder, but attribute not set'
+                path_folder: str = self.path_d_folder
+            else:
+                assert (check_attr(self, 'path_folder')) and (self.path_folder.endswith('.d')), \
+                    'is supposed to be stored in d_folder'
+                path_folder: str = self.path_folder
         else:
             path_folder: str = self.path_folder
 
@@ -275,6 +283,7 @@ class Convenience:
         # check file exists
         if path_file is None:
             path_file: str = self.get_save_file(path_folder=path_folder, tag=tag)
+
         if path_folder is None:
             path_folder = os.path.dirname(path_file)
         if not os.path.exists(path_file):
