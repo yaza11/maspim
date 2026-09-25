@@ -62,6 +62,8 @@ class Hdf5Handler(ReaderBaseClass):
         self._check_modify_date()
         self._post_init()
 
+
+
     def _set_files(self, path_file: str | None, path_folder: str | None, tag: str | None) -> None:
         """Infer the file name, d-folder and folder from input."""
         if (path_file is not None) and (path_folder is not None):
@@ -73,7 +75,7 @@ class Hdf5Handler(ReaderBaseClass):
             assert path_file.split('.')[-1] == 'hdf5'
             path_folder: str = os.path.dirname(path_file)
         elif path_folder is not None:
-            path_file: str = get_disk_file(self, path_folder, tag).replace('.pickle', '.hdf5')
+            path_file: str = get_disk_file(self, path_folder, tag)
 
         self.path_folder: str = path_folder
         self.path_file: str = path_file
