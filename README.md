@@ -68,7 +68,7 @@ p.require_images()
 # perform all steps to extract intensities from alkenones
 p.set_spectra(targets=[mC37_2, mC37_3], suppress_warnings=True)
 p.set_data_object()
-p.add_pixels_ROI_to_data()
+p.add_pixels_roi_to_data()
 # we did not provide any ages, so a time series does not make much sense, but 
 # this is just a test, so don't try to interpret the results
 p.set_time_series(average_by_col='x', is_continuous=True)

@@ -48,7 +48,7 @@ class Hdf5Handler(ReaderBaseClass):
     mzs: np.ndarray[float] = None
     limits: tuple[float | int, float | int] = None
 
-    def __init__(self, path_file: str = None, path_folder: str = None, tag: str = None) -> None:
+    def __init__(self, *, path_file: str = None, path_folder: str = None, tag: str = None) -> None:
         """
         Initializer.
 
@@ -73,7 +73,7 @@ class Hdf5Handler(ReaderBaseClass):
             assert path_file.split('.')[-1] == 'hdf5'
             path_folder: str = os.path.dirname(path_file)
         elif path_folder is not None:
-            path_file: str = get_disk_file(self, path_folder, tag)
+            path_file: str = get_disk_file(self, path_folder, tag).replace('.pickle', '.hdf5')
 
         self.path_folder: str = path_folder
         self.path_file: str = path_file
