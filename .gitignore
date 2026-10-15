@@ -12,6 +12,8 @@ maspim/Notebooks/Demo.ipynb
 Notebooks/
 test_files/
 
+greifensee/
+
 !test.py
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,pycharm,windows,macos

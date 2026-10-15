@@ -615,7 +615,7 @@ class Data(DataBaseClass, Convenience):
             plt.figure()
         for k in k_vec:
             _, _, s = self.estimate_nmf(
-                k, return_summary=True, use_repeated_NMF=True, **kwargs
+                k, return_summary=True, use_repeated_NMF=kwargs.pop('use_repeated_NMF', True), **kwargs
             )
             summary.append(s)
             k_plt.append(k)
