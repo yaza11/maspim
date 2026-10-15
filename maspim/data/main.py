@@ -545,12 +545,8 @@ class Data(DataBaseClass, Convenience):
             hole_column: str = 'valid',
             use_repeated_NMF: bool = False,
             N_rep: int = 30,
-            max_iter: int = 10_000,
-            return_summary: bool = False
-    ) -> (
-            tuple[np.ndarray[float], np.ndarray[float]] |
-            tuple[np.ndarray[float], np.ndarray[float] | type]
-    ):
+            max_iter: int = 10_000
+    ) -> (tuple[np.ndarray[float], np.ndarray[float], object | None]):
         """Perform NMF analysis on the ion images"""
         if columns is None:
             columns: pd.Series = self.data_columns
@@ -582,21 +578,17 @@ class Data(DataBaseClass, Convenience):
             try:
                 from mfe.feature import repeated_nmf
                 mfe_found = True
-                S: type = repeated_nmf(feature_table_scaled, k, N_rep, max_iter=max_iter)
+                S = repeated_nmf(feature_table_scaled, k, N_rep, max_iter=max_iter)
                 self._W: np.ndarray[float] = S.matrix_w_accum
                 self._H: np.ndarray[float] = S.matrix_h_accum
             except ModuleNotFoundError as _e:
                 logger.warning(f'{_e}, not using repeated NMF')
         if (not use_repeated_NMF) or (not mfe_found):
             model: NMF = NMF(n_components=k, max_iter=max_iter, init='nndsvd')
-
             self._W: np.ndarray[float] = model.fit_transform(feature_table_scaled)
             self._H: np.ndarray[float] = model.components_
-        # store result in dict to be accessible by other functions such as
-        # plot_nmf
-        if return_summary and use_repeated_NMF and mfe_found:
-            return self._W, self._H, S
-        return self._W, self._H
+            S = None
+        return self._W, self._H, S
 
     def nmf_find_k(
             self,
@@ -608,14 +600,14 @@ class Data(DataBaseClass, Convenience):
     ) -> list[type]:
         """Helper method to determine the inner dimensions k for the NMF."""
         k_vec: np.ndarray[int] = np.arange(k_min, k_max + dk, dk)
-        summary: list[type] = []
+        summary: list = []
         k_plt: list[int] = []
 
         if plts:
             plt.figure()
         for k in k_vec:
             _, _, s = self.estimate_nmf(
-                k, return_summary=True, use_repeated_NMF=kwargs.pop('use_repeated_NMF', True), **kwargs
+                k, use_repeated_NMF=kwargs.pop('use_repeated_NMF', True), **kwargs
             )
             summary.append(s)
             k_plt.append(k)
