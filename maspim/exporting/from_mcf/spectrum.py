@@ -1590,6 +1590,10 @@ class Spectra(Convenience):
         elif self._kernel_shape == 'gaussian':
             return self._gaussian_from_peak
 
+    @property
+    def kernel_params(self) -> np.ndarray:
+        return self._kernel_params
+
     def set_kernels(
             self,
             use_bigaussian: bool = False,
