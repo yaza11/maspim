@@ -39,6 +39,15 @@ HWHM_PER_SIGMA: float = np.sqrt(2 * np.log(2))
 KERNEL_N_SIGMA: float = 8
 
 
+def _as_limits(limits: Iterable[float]) -> tuple[float, float]:
+    """Return limits as a tuple of two floats with lower < upper."""
+    assert hasattr(limits, '__iter__') and (len(limits) == 2), \
+        f'limits must contain a lower and an upper bound, you provided {limits}'
+    lower, upper = float(limits[0]), float(limits[1])
+    assert lower < upper, f'lower limit must be smaller than upper limit, you provided {limits}'
+    return lower, upper
+
+
 def _pop_deprecated_kwarg(
         kwargs: dict[str, Any], old: str, new: str, value: Any, default: Any
 ) -> Any:
@@ -219,6 +228,9 @@ class Spectra(DFolderManager, MzUtility):
 
     _losses: np.ndarray[float] = None
 
+    # cache for spectrum_idx2array_idx: (indices array the cache was built for, mapping)
+    _index_lookup: tuple[np.ndarray[int], dict[int, int]] = None
+
     _save_in_d_folder: bool = True
     _save_attrs: set[str] = {
         '_delta_mz',
@@ -235,7 +247,7 @@ class Spectra(DFolderManager, MzUtility):
         '_kernel_params',
         '_kernel_shape',
         '_line_spectra',
-        'feature_table',
+        '_feature_table',
         '_losses',
         '_binning_by',
         '_noise_level',
@@ -291,7 +303,7 @@ class Spectra(DFolderManager, MzUtility):
             if indices is not None:
                 self._indices: np.ndarray[int] = np.array(indices)
             if limits is not None:
-                self._limits: tuple[float, float] = limits
+                self._limits: tuple[float, float] = _as_limits(limits)
 
     @classmethod
     def load_from_file(cls, path_folder: str = None, path_file: str = None, tag: str = None):
@@ -328,10 +340,14 @@ class Spectra(DFolderManager, MzUtility):
 
         try_inherit('indices')
         try_inherit('limits')
+        if check_attr(self, '_limits'):
+            self._limits = _as_limits(self._limits)
 
         # set mzs
         if not check_attr(self, '_mzs') and check_attr(self, '_limits'):
-            self._mzs = get_mzs_for_limits(self._limits, self._delta_mz)
+            mzs: np.ndarray[float] = get_mzs_for_limits(self._limits, self._delta_mz)
+            # get_mzs_for_limits may extend beyond the limits, mzs are always within the limits
+            self._mzs = mzs[(mzs >= self._limits[0]) & (mzs <= self._limits[1])]
 
     def _set_files(
             self,
@@ -391,7 +407,8 @@ class Spectra(DFolderManager, MzUtility):
         -----
         This method defines the following attribute(s):
         mzs: np.ndarray[float]
-            Evenly spaced mz values within the limits (limits are guaranteed to be included)
+            mz values of the reader within the limits (not necessarily evenly
+            spaced, e.g. for the native mzs of the pyrtms reader)
         intensities: np.ndarray[float]
             Container for summed up intensities with the same shape as mzs.
         limits : tuple[float, float]
@@ -420,12 +437,28 @@ class Spectra(DFolderManager, MzUtility):
             if not check_attr(reader, 'limits'):
                 reader.set_casi_window()
             limits = reader.limits
-        self._limits = limits
-        # crop using limits
+        self._limits = _as_limits(limits)
+        if (self._limits[0] < reader.mzs[0]) or (self._limits[1] > reader.mzs[-1]):
+            logger.warning(
+                f'limits {self._limits} extend beyond the mzs of the reader '
+                f'({reader.mzs[0]:.4f}, {reader.mzs[-1]:.4f}), mzs will only cover '
+                f'the overlap'
+            )
+        # crop using limits, mzs are always within the limits
         mzs_in_limits = (reader.mzs >= self._limits[0]) & (reader.mzs <= self._limits[1])
+        assert np.any(mzs_in_limits), \
+            f'none of the mzs of the reader are within the limits {self._limits}'
         # copy, reader.mzs may be the read-only array shared with pyrtms
         self._mzs = reader.mzs[mzs_in_limits].copy()
         self._intensities = np.zeros_like(self._mzs)
+        # integrals (TIC, areas) use delta_mz, so it has to match the sampling of the mzs
+        spacing: float = float(np.median(np.diff(self._mzs)))
+        if not np.isclose(spacing, self._delta_mz, rtol=1e-3):
+            logger.info(
+                f'using the sampling interval of the reader ({spacing * 1e3:.2f} mDa) '
+                f'instead of delta_mz={self._delta_mz * 1e3:.2f} mDa'
+            )
+            self._delta_mz = spacing
 
     def _pre_save(self):
         # only save line spectra, if both exist
@@ -439,6 +472,11 @@ class Spectra(DFolderManager, MzUtility):
 
     def _post_save(self):
         self.__dict__.pop('_save_attrs', None)
+
+    def _post_load(self):
+        # older files may store the limits as an array
+        if self._limits is not None:
+            self._limits = _as_limits(self._limits)
 
     @property
     def indices(self) -> np.ndarray[int]:
