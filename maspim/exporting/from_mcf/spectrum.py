@@ -2170,10 +2170,12 @@ class Spectra(Convenience):
             if reader is not None:
                 # TODO: verify that calibration is used correctly
                 spectrum: np.ndarray[float] = self.get_spectrum(
-                    reader=reader, index=idx_spectrum, only_intensity=True
+                    reader=reader, index=idx_spectrum, only_intensity=True, limits=self._limits
                 )
+                print(f'fetched spectrum for limits {self._limits}')
             else:
                 spectrum: np.ndarray[float] = profile_spectra[:, it]
+            print(spectrum.shape)
             _bin_spectrum(spectrum, it)
 
     def _add_rxys_to_df(
