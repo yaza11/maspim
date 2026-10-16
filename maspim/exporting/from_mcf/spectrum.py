@@ -32,6 +32,30 @@ from maspim.project.msi_spot_helpers import get_rxy, get_spots, ImagingInfoXML
 
 logger = logging.getLogger(__name__)
 
+# half width at half maximum of a gaussian in units of its standard deviation
+HWHM_PER_SIGMA: float = np.sqrt(2 * np.log(2))
+# kernels are evaluated within this many standard deviations of their center,
+# outside the window they are treated as 0 (relative value exp(-32) ~ 1e-14)
+KERNEL_N_SIGMA: float = 8
+
+
+def _pop_deprecated_kwarg(
+        kwargs: dict[str, Any], old: str, new: str, value: Any, default: Any
+) -> Any:
+    """
+    Remove a renamed keyword argument from kwargs and return the value to use.
+
+    The value passed with the new name takes precedence, unless it is the default.
+    """
+    if old not in kwargs:
+        return value
+    old_value = kwargs.pop(old)
+    logger.warning(f'{old} is deprecated, use {new} instead')
+    if value != default:
+        logger.warning(f'{old} and {new} were both provided, ignoring {old}={old_value}')
+        return value
+    return old_value
+
 
 def gaussian(x: np.ndarray, x_c: float, H: float, sigma: float) -> np.ndarray:
     """
@@ -333,7 +357,10 @@ class Spectra(DFolderManager, MzUtility):
         if path_d_folder is not None:
             path_folder, d_folder = os.path.split(path_d_folder)
         elif reader is not None:
-            path_folder, d_folder = os.path.split(reader.path_d_folder)
+            # Hdf5Handler has no path_d_folder, but its file is stored in the d-folder
+            path_folder, d_folder = os.path.split(
+                getattr(reader, 'path_d_folder', None) or reader.path_folder
+            )
         else:
             raise NotImplementedError("Internal error, please report.")
         self.path_folder = path_folder
@@ -2669,13 +2696,20 @@ class Spectra(DFolderManager, MzUtility):
         # combine spectra
         s_new.mzs = self.mzs.copy()
         s_new.intensities = np.interp(self.mzs, other.mzs, other.intensities) + self.intensities
+        s_new._tic = np.hstack([self._tic, other._tic])
 
+        # profiles have shape (n_mzs, n_spectra), other has to be put on the mzs of self
         self_profiles: np.ndarray[float] = self.reconstruct_all()
         other_profiles: np.ndarray[float] = other.reconstruct_all()
+        if not np.array_equal(self.mzs, other.mzs):
+            other_profiles = np.stack(
+                [np.interp(self.mzs, other.mzs, p) for p in other_profiles.T],
+                axis=1
+            )
         profiles: np.ndarray[float] = np.hstack([self_profiles, other_profiles])
         # find peaks, bin
-        # summed: np.ndarray[float] = profiles.sum(axis=0)
         s_new.noise_level = (np.interp(self.mzs, other.mzs, other.noise_level) + self.noise_level) / 2
+        s_new._noise_level_subtracted = self._noise_level_subtracted and other._noise_level_subtracted
         kwargs_peak = self._peak_setting_parameters.copy()
         prominence: float = kwargs_peak.pop('prominence')
         prominence *= 2  # assume both summed spectra have roughly the same prominences
@@ -2683,7 +2717,7 @@ class Spectra(DFolderManager, MzUtility):
         s_new.set_kernels(use_bigaussian=self._kernel_shape == 'bigaussian')
         s_new.bin_spectra(
             profile_spectra=profiles,
-            integrate_peaks=self._binning_by == 'area'
+            method=self._binning_by
         )
         return s_new
 
