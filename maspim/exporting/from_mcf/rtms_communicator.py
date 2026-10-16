@@ -198,7 +198,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         for i in np.random.choice(self.indices, min(100, self.indices.shape[0]), replace=False):
             assert np.allclose(self.reader.get_spectrum(i)[:, 0], self.mzs), \
                 ("Encountered spectra with non-equally sampled mz values. "
-                 "This is unsupported behavior. Please contact the developers")
+                 "This is unsupported behavior.")
 
     def get_spectrum_by_spot(self, spot: str) -> Spectrum:
         """
