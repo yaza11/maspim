@@ -119,8 +119,7 @@ def get_disk_file(obj: object, path_folder: str, tag: str = None) -> str:
         file_name: str = f'{file_name_prefix}_{folder}_{class_name}.pickle'
 
     if class_name == 'Hdf5Handler':  # stores hdf5, not pickle
-        file_name.replace('.pickle', '.hdf5')
-
+        return file_name.replace('.pickle', '.hdf5')
     return file_name
 
 
@@ -227,10 +226,12 @@ class Convenience:
         if (path_file is not None) and (tag is not None):
             logger.warning('tag is ignored when loading from file')
 
-        new = cls(path_folder)
+        new = cls(path_folder=path_folder)
+        new._pre_load()
         if path_folder is not None:
             path_file = new.get_save_file(path_folder=path_folder, tag=tag)
         new.load(path_file=path_file, tag=tag)
+        new._post_load()
         return new
 
     def __repr__(self) -> str:
@@ -280,7 +281,7 @@ class Convenience:
     def _post_load(self):
         pass
 
-    def load(self, path_folder: str = None, path_file: str = None, tag: str = None) -> Self:
+    def load(self, path_folder: str = None, path_file: str = None, tag: str = None, filter_custom_attrs: bool = True) -> Self:
         """Load maspim pickle object from file."""
         self._pre_load()
 
@@ -303,7 +304,7 @@ class Convenience:
             if type(obj) is not dict:  # legacy support
                 obj: dict[str, Any] = obj.__dict__
             # filter out attributes that are not supposed to be saved
-            if has_save_attr := check_attr(self, '_save_attrs'):
+            if has_save_attr := check_attr(self, '_save_attrs') and filter_custom_attrs:
                 load_attr: set[str] = self._save_attrs & set(obj.keys())
             else:  # load everything
                 load_attr: set[str] = set(obj.keys())

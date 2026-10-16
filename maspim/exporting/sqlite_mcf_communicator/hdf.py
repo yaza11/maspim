@@ -45,8 +45,10 @@ class Hdf5Handler(ReaderBaseClass):
     _save_in_d_folder: bool = True
 
     indices: np.ndarray[int] = None
-    mzs: np.ndarray[float] = None
     limits: tuple[float | int, float | int] = None
+
+    path_folder: str = None
+    path_file: str = None
 
     def __init__(self, *, path_file: str = None, path_folder: str = None, tag: str = None) -> None:
         """
@@ -62,10 +64,10 @@ class Hdf5Handler(ReaderBaseClass):
         self._check_modify_date()
         self._post_init()
 
-
-
     def _set_files(self, path_file: str | None, path_folder: str | None, tag: str | None) -> None:
         """Infer the file name, d-folder and folder from input."""
+        if (path_folder is None) and (path_file is None):
+            path_folder = ''
         if (path_file is not None) and (path_folder is not None):
             logger.warning('If folder and file are provided, only the file will be used, ignoring the folder')
         if (path_file is not None) and (tag is not None):

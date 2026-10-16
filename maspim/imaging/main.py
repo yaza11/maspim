@@ -887,8 +887,6 @@ class ImageSample(Image):
         )
 
         if adjust_with_main_contour:
-            # store previous result
-            contour = self.main_contour.copy()
             # as input, use the image region from box optimization and get the binarization by using default parameters
             #  for foreground and simplification
             image_sub: ImageSample = ImageSample()
@@ -1270,16 +1268,16 @@ class ImageROI(Image):
                           image=self.image,
                           title="Input image",
                           no_ticks=True)
-            plt_cv2_image(fig=fig,
-                          ax=axs[0, 1],
-                          image=self._get_preprocessed_for_classification()[0],
-                          title="Preprocessed image",
-                          no_ticks=True)
-            plt_cv2_image(fig=fig,
-                          ax=axs[1, 0],
-                          image=self.image_classification,
-                          title="Classified image",
-                          no_ticks=True)
+            # plt_cv2_image(fig=fig,
+            #               ax=axs[0, 1],
+            #               image=self._get_preprocessed_for_classification()[0],
+            #               title="Preprocessed image",
+            #               no_ticks=True)
+            # plt_cv2_image(fig=fig,
+            #               ax=axs[1, 0],
+            #               image=self.image_classification,
+            #               title="Classified image",
+            #               no_ticks=True)
 
         if self.punchholes is not None:
             _, ax11 = plt_rect_on_image(
