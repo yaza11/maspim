@@ -402,14 +402,16 @@ class Spectra(DFolderManager, MzUtility):
 
     def _pre_save(self):
         # only save line spectra, if both exist
+        # shadow the class attribute on the instance, so that the set shared by
+        # all instances is not modified
         if (
                 check_attr(self, '_feature_table')
                 and check_attr(self, '_line_spectra')
         ):
-            self._save_attrs.remove('_feature_table')
+            self._save_attrs = self._save_attrs - {'_feature_table'}
 
     def _post_save(self):
-        self._save_attrs.add('_feature_table')
+        self.__dict__.pop('_save_attrs', None)
 
     @property
     def indices(self) -> np.ndarray[int]:
