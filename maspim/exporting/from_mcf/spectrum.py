@@ -2520,12 +2520,8 @@ class Spectra(DFolderManager, MzUtility):
 
         if not check_attr(self, '_losses'):
             self._losses: np.ndarray[float] = np.zeros((self._n_spectra, len(self.mzs)))
-        # get sigmas
-        sigma_ls: np.ndarray[float] = self.kernel_params[:, 2]
-        if self._kernel_shape == 'bigaussian':
-            sigma_rs: np.ndarray[float] = self.kernel_params[:, 3]
-        else:
-            sigma_rs: None = None
+        # heights of kernels in each spectrum (independent of binning method)
+        heights: np.ndarray[float] = self.get_heights()
         # precompute kernel functions
         kernels: np.ndarray[float] = self._get_kernels(norm_mode='height')
         # loop over spectra
@@ -2540,14 +2536,9 @@ class Spectra(DFolderManager, MzUtility):
                 reader=reader, index=index, only_intensity=True
             )
 
-            Hs: np.ndarray[float] = self.H_from_area(
-                self._line_spectra[array_idx, :],
-                sigma_ls,
-                sigma_rs
-            )
-            y_rec: np.ndarray[float] = kernels @ Hs
-            tic = self._tic[c]
-            self._losses[c, :] = np.abs(y_rec - spec) / tic if tic else 0
+            y_rec: np.ndarray[float] = kernels @ heights[array_idx, :]
+            tic = self._tic[array_idx]
+            self._losses[array_idx, :] = np.abs(y_rec - spec) / tic if tic else 0
 
     def filter_line_spectra(
             self,
@@ -2604,7 +2595,7 @@ class Spectra(DFolderManager, MzUtility):
         if success_rate_threshold > 0:
             mask_successes = ((self._line_spectra > 0).mean(axis=0)
                               > success_rate_threshold)
-            self._line_spectra = self._line_spectra[:, mask_successes]
+            # also removes the corresponding columns from the line spectra
             self.filter_peaks(whitelist=self._peaks[mask_successes].copy())
 
         # update feature table
