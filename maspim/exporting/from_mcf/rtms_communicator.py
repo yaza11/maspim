@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import os
 import logging
+from functools import cached_property
 from pyrtms.rtmsBrukerMCFReader import newBrukerMCFReader, getBrukerMCFIndices, getBrukerMCFAllMetadata, \
     getBrukerMCFSpots, getBrukerMCFSpectrum, RtmsBrukerMCFReader, BatchProcessor
 
@@ -77,7 +78,7 @@ class ReadBrukerMCF(ReaderBaseClass):
         # get indices from reader
         return self.reader.spotTable.index
 
-    @property
+    @cached_property
     def spots(self):
         return self.reader.get_spots()
 
@@ -96,8 +97,8 @@ class ReadBrukerMCF(ReaderBaseClass):
     @property
     def metaData(self):
         """Fetch metadata for measurement from mcf file and turn into df."""
-        # arbitrary index, metaData should be the same for all spectra
-        return self.reader.get_metadata(index=1)
+        # metaData should be the same for all spectra, cached by pyrtms
+        return self.reader.metadataDF
 
     def set_casi_window(self):
         """Set mass window limits from CASI values in metadata.
@@ -189,16 +190,19 @@ class ReadBrukerMCF(ReaderBaseClass):
         return spectrum
 
     def set_mzs(self, check_mzs=True):
-        """Set the mz values for other classes to use to resample spectra"""
-        self.mzs: np.ndarray[float] = self.reader.get_spectrum(0)[:, 0]
+        """Set the mz values for other classes to use to resample spectra.
+
+        The mz array is shared with the pyrtms reader and read-only, copy it
+        before modifying it.
+        """
+        self.mzs: np.ndarray[float] = self.reader.get_spectrum(0)[0]
         if not check_mzs:
             return
-        # check for a few spectra if they all have the same mzs
-        # so far, this has always been the case
-        for i in np.random.choice(self.indices, min(100, self.indices.shape[0]), replace=False):
-            assert np.allclose(self.reader.get_spectrum(i)[:, 0], self.mzs), \
-                ("Encountered spectra with non-equally sampled mz values. "
-                 "This is unsupported behavior.")
+        # all spectra share the same m/z axis if their calibration parameters are identical
+        cols = ["frequencyHigh", "frequencyWidth", "size", "alpha", "beta"]
+        assert len(self.reader.spotTable[cols].drop_duplicates()) == 1, \
+            ("Encountered spectra with non-equally sampled mz values. "
+             "This is unsupported behavior.")
 
     def get_spectrum_by_spot(self, spot: str) -> Spectrum:
         """
@@ -233,20 +237,19 @@ class ReadBrukerMCF(ReaderBaseClass):
 
     def get_intensities_for_array_indices(self, expr) -> np.ndarray[np.float64]:
         """
-        Obtain intensities for the specified intensities.
+        Obtain intensities for the specified indices as a 2D array
+        (n_spectra, n_mzs).
 
         Supports every indexing method from numpy arrays.
         """
         indices = self.indices[expr]
-        if len(indices < 100):
-            kwargs = dict(n_jobs=1)
-        else:
-            kwargs = {}
+        res = BatchProcessor(reader=self.reader, show_progress=False).get_mul_spectra(
+            indices=indices, intensities_only=True)
+        return np.stack([intensities for _, intensities in res]).astype(np.float64)
 
-        bp = BatchProcessor(reader=self.reader, **kwargs)
-
-        res = bp.get_mul_spectra(indices=indices, intensities_only=True)
-        return res
+    def close(self) -> None:
+        """Close the reader and release the file handle on the mcf file."""
+        self.reader.close()
 
 
 if __name__ == '__main__':

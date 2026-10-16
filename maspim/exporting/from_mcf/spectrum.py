@@ -394,7 +394,8 @@ class Spectra(DFolderManager, MzUtility):
                 reader.set_casi_window()
             limits = reader.limits
         self._limits = limits
-        self._mzs = reader.mzs
+        # copy, reader.mzs may be the read-only array shared with pyrtms
+        self._mzs = np.array(reader.mzs)
         self._intensities = np.zeros_like(self._mzs)
 
     def _pre_save(self):
@@ -567,7 +568,7 @@ class Spectra(DFolderManager, MzUtility):
              'either the instance with limits or the reader')
 
         if not check_attr(reader, 'mzs'):
-            reader.set_mzs(self.mzs)
+            reader.mzs = np.array(self.mzs)
 
         self.reset_intensities()
 
@@ -627,9 +628,10 @@ class Spectra(DFolderManager, MzUtility):
                 # shift according to number of spectra
                 weight: float = 1 / (it + 1)
                 self._mzs += shift * weight
-                spectrum.mzs -= shift * (1 - weight)
+                # don't modify in place, mzs may be shared with the reader or self._mzs
+                spectrum.mzs = spectrum.mzs - shift * (1 - weight)
             self.add_spectrum(spectrum.intensities)
-            self._tic[it] = np.trapezoid(spectrum, dx=self.delta_mz)
+            self._tic[it] = np.trapezoid(spectrum.intensities, dx=self.delta_mz)
 
         self._intensities[self._intensities < 0] = 0
 
