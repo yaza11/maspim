@@ -1999,10 +1999,9 @@ class Spectra(Convenience):
 
     def bin_spectra(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler | None = None,
-            profile_spectra: np.ndarray[float] | None = None,
-            method: Literal['height', 'max', 'area'] = 'height',
-            **_
+            reader: ReadBrukerMCF | Hdf5Handler = None,
+            profile_spectra: np.ndarray[float] = None,
+            method: Literal['height', 'max', 'area'] = 'height'
     ) -> None:
         """
         For each spectrum find overlap between kernels and signal.
