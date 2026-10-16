@@ -269,6 +269,21 @@ class Spectra(Convenience):
             if limits is not None:
                 self._limits: tuple[float, float] = limits
 
+    @classmethod
+    def load_from_file(cls, path_folder: str = None, path_file: str = None, tag: str = None):
+        assert (path_folder is not None) ^ (
+                    path_file is not None), 'provide either path_folder or path_file (but not both)'
+        if (path_file is not None) and (tag is not None):
+            logger.warning('tag is ignored when loading from file')
+
+        new = cls(path_d_folder=path_folder, initiate=False)
+        new._pre_load()
+        if path_folder is not None:
+            path_file = new.get_save_file(path_folder=path_folder, tag=tag)
+        new.load(path_file=path_file, tag=tag)
+        new._post_load()
+        return new
+
     def _from_reader(self, reader: ReadBrukerMCF | Hdf5Handler) -> None:
         """
         Inherit indices and limits from reader if self does not have them.
