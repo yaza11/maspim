@@ -1,17 +1,11 @@
 """This module allows the usage of functions from the R rtms package in python."""
-import warnings
-
 import pandas as pd
 import numpy as np
-import os
 import logging
 from functools import cached_property
-from pyrtms.rtmsBrukerMCFReader import newBrukerMCFReader, getBrukerMCFIndices, getBrukerMCFAllMetadata, \
-    getBrukerMCFSpots, getBrukerMCFSpectrum, RtmsBrukerMCFReader, BatchProcessor
+from pyrtms.rtmsBrukerMCFReader import RtmsBrukerMCFReader, BatchProcessor
 
-from typing import Iterable
-
-from maspim.exporting.from_mcf.helper import ReaderBaseClass, Spots, Spectrum, \
+from maspim.exporting.from_mcf.helper import ReaderBaseClass, Spectrum, \
     apply_calibration, split_spot
 from maspim.util.convenience import check_attr
 
@@ -47,8 +41,7 @@ class ReadBrukerMCF(ReaderBaseClass):
     def __init__(
             self,
             path_d_folder: str,
-            limits: tuple[float, float] | None = None,
-            check_mzs_are_equal: bool = True
+            limits: tuple[float, float] | None = None
     ) -> None:
         """
         Initializer
@@ -62,12 +55,12 @@ class ReadBrukerMCF(ReaderBaseClass):
         self.limits: tuple[float, float] | None = limits
 
         self._create_reader()
-        self.set_mzs(check_mzs_are_equal)
+        self.set_mzs()
 
     def _create_reader(self):
         """Create a new BrukerMCFReader object."""
         logger.warning('creating BrukerMCF reader, this may take a while ...')
-        self.reader: RtmsBrukerMCFReader = newBrukerMCFReader(self.path_d_folder)
+        self.reader: RtmsBrukerMCFReader = RtmsBrukerMCFReader.from_dir(self.path_d_folder)
         logger.info('done creating reader')
 
     @property
@@ -189,20 +182,18 @@ class ReadBrukerMCF(ReaderBaseClass):
 
         return spectrum
 
-    def set_mzs(self, check_mzs=True):
+    def set_mzs(self):
         """Set the mz values for other classes to use to resample spectra.
 
         The mz array is shared with the pyrtms reader and read-only, copy it
         before modifying it.
         """
-        self.mzs: np.ndarray[float] = self.reader.get_spectrum(0)[0]
-        if not check_mzs:
-            return
-        # all spectra share the same m/z axis if their calibration parameters are identical
         cols = ["frequencyHigh", "frequencyWidth", "size", "alpha", "beta"]
-        assert len(self.reader.spotTable[cols].drop_duplicates()) == 1, \
-            ("Encountered spectra with non-equally sampled mz values. "
-             "This is unsupported behavior.")
+        if len(self.reader.spotTable[cols].drop_duplicates()) > 1:
+            # check if all calibration parameters are the same, if not mz values will not be the same
+            raise ValueError("Encountered spectra with non-equally sampled mz values.")
+
+        self.mzs: np.ndarray[float] = self.reader.mzs
 
     def get_spectrum_by_spot(self, spot: str) -> Spectrum:
         """

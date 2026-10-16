@@ -401,13 +401,13 @@ class Spectra(DFolderManager, MzUtility):
     def _pre_save(self):
         # only save line spectra, if both exist
         if (
-                check_attr(self, 'feature_table')
+                check_attr(self, '_feature_table')
                 and check_attr(self, '_line_spectra')
         ):
-            self._save_attrs.remove('feature_table')
+            self._save_attrs.remove('_feature_table')
 
     def _post_save(self):
-        self._save_attrs.add('feature_table')
+        self._save_attrs.add('_feature_table')
 
     @property
     def indices(self) -> np.ndarray[int]:
@@ -683,7 +683,7 @@ class Spectra(DFolderManager, MzUtility):
             widths, *_ = peak_widths(self.intensities, peaks=peaks, rel_height=.8)
             return int(np.max(widths))
 
-        assert check_attr(self, 'intensities', True), \
+        assert check_attr(self, '_intensities', True), \
             'call add_all_spectra before setting the noise level'
 
         n_spectra: int = self._n_spectra
@@ -1051,7 +1051,7 @@ class Spectra(DFolderManager, MzUtility):
             ('Make sure the mzs of the reader match that of the spectra object '
              '(consider calling reader.set_mzs(spec.mzs))')
         if calib_snr_threshold > 0:
-            assert check_attr(self, 'noise_level'), \
+            assert check_attr(self, '_noise_level'), \
                 ('This step has to be performed after subtracting the baseline '
                  'to have access to the noise_level, unless you set the '
                  'calib_snr_threshold to 0.')
@@ -1237,7 +1237,7 @@ class Spectra(DFolderManager, MzUtility):
         peaks_SNR: np.ndarray[float]
             The noise level for each mz value.
         """
-        assert check_attr(self, 'noise_level'), 'call subtract_baseline'
+        assert check_attr(self, '_noise_level'), 'call subtract_baseline'
         N_spec: int = len(self.indices)
         av_intensities: np.ndarray[float] = self.intensities[self._peaks] / N_spec
         self._peaks_SNR: np.ndarray[float] = \
@@ -1696,7 +1696,7 @@ class Spectra(DFolderManager, MzUtility):
             tolerances: Iterable[float] | float | None
     ) -> np.ndarray[float]:
         if tolerances is None:
-            assert check_attr(self, 'intensities', True), \
+            assert check_attr(self, '_intensities', True), \
                 'estimating the tolerance requires that the spectra have been summed up'
 
         if tolerances is None:
@@ -2390,7 +2390,7 @@ class Spectra(DFolderManager, MzUtility):
         if indices is None:
             indices: np.ndarray[int] = self.indices
 
-        if not check_attr(self, 'losses'):
+        if not check_attr(self, '_losses'):
             self._losses: np.ndarray[float] = np.zeros((self._n_spectra, len(self.mzs)))
         # get sigmas
         sigma_ls: np.ndarray[float] = self.kernel_params[:, 2]
@@ -2480,7 +2480,7 @@ class Spectra(DFolderManager, MzUtility):
             self.filter_peaks(whitelist=self._peaks[mask_successes].copy())
 
         # update feature table
-        if check_attr(self, 'feature_table'):
+        if check_attr(self, '_feature_table'):
             self.set_feature_table()
 
         return mask
@@ -2518,7 +2518,7 @@ class Spectra(DFolderManager, MzUtility):
             Spectra object with combined properties.
         """
         assert type(other) is type(self), '"+" is only defined for Spectra objects'
-        assert check_attr(self, 'noise_level') and check_attr(other, 'noise_level'), \
+        assert check_attr(self, '_noise_level') and check_attr(other, '_noise_level'), \
             'make sure both objects have the baseline removed'
         assert check_attr(self, '_kernel_params') and check_attr(other, '_kernel_params')
         assert check_attr(self, '_binning_by') and check_attr(other, '_binning_by')
@@ -3059,7 +3059,7 @@ class MultiSectionSpectra(Spectra):
             spec.peak_setting_parameters['notes'] = 'peak properties set in MultiSectionSpectra'
             spec.kernel_params = self.kernel_params.copy()
             spec.kernel_shape = self.kernel_shape
-            if check_attr(self, 'noise_level'):
+            if check_attr(self, '_noise_level'):
                 spec.noise_level = self.noise_level
 
     def bin_spectra(self, readers: Iterable[ReadBrukerMCF | Hdf5Handler], **kwargs):
