@@ -709,7 +709,7 @@ class Spectra(DFolderManager, MzUtility):
                 total=self._n_spectra,
                 disable=not show_progress
         ):
-            spectrum: np.ndarray[float] = self.get_spectrum(
+            spectrum: Spectrum = self.get_spectrum(
                 reader=reader, index=index, only_intensity=False
             )
             if it > 0:
