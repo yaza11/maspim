@@ -1535,19 +1535,23 @@ class Spectra(DFolderManager, MzUtility):
         mz_idx: float = self._peaks[peak_idx]  # mz index of center
 
         H: float = self.intensities[mz_idx]  # corresponding height
-        # width of peak at half maximum
-        FWHM_l: float = self.mzs[
-            (self._peak_properties["left_ips"][peak_idx] + .5).astype(int)
-        ]
-        FWHM_r: float = self.mzs[
-            (self._peak_properties["right_ips"][peak_idx] + .5).astype(int)
-        ]
+        FWHM_l, FWHM_r = self._half_max_mzs(peak_idx)
         mz_c: float = (FWHM_l + FWHM_r) / 2
-        # convert FWHM to standard deviation
-        sigma_l: float = -(FWHM_l - mz_c) / (2 * np.log(2))
-        sigma_r: float = (FWHM_r - mz_c) / (2 * np.log(2))
-        sigma: float = (sigma_l + sigma_r) / 2
+        # convert half width at half maximum to standard deviation
+        sigma: float = (FWHM_r - FWHM_l) / 2 / HWHM_PER_SIGMA
         return mz_c, H, sigma
+
+    def _half_max_mzs(self, peak_idx: int) -> tuple[float, float]:
+        """
+        Return the mz values at the left and right interpolated positions of
+        the width of the peak at half maximum (sub-sample precision).
+        """
+        ips: np.ndarray[float] = np.array([
+            self._peak_properties["left_ips"][peak_idx],
+            self._peak_properties["right_ips"][peak_idx]
+        ])
+        mz_l, mz_r = np.interp(ips, np.arange(len(self.mzs)), self.mzs)
+        return mz_l, mz_r
 
     def _bigaussian_from_peak(self, peak_idx: int) -> tuple[float, ...]:
         """
@@ -1575,16 +1579,10 @@ class Spectra(DFolderManager, MzUtility):
         mz_c: float = self.mzs[mz_idx]  # center of gaussian
         # height at center of peak - prominence
         H: float = self.intensities[mz_idx]  # corresponding height
-        # width of peak at half maximum
-        FWHM_l: float = self.mzs[
-            (self._peak_properties["left_ips"][peak_idx] + .5).astype(int)
-        ]
-        FWHM_r: float = self.mzs[
-            (self._peak_properties["right_ips"][peak_idx] + .5).astype(int)
-        ]
-        # convert FWHM to standard deviation
-        sigma_l = -(FWHM_l - mz_c) / (2 * np.log(2))
-        sigma_r = (FWHM_r - mz_c) / (2 * np.log(2))
+        FWHM_l, FWHM_r = self._half_max_mzs(peak_idx)
+        # convert half widths at half maximum to standard deviations
+        sigma_l = (mz_c - FWHM_l) / HWHM_PER_SIGMA
+        sigma_r = (FWHM_r - mz_c) / HWHM_PER_SIGMA
         return mz_c, H, sigma_l, sigma_r
 
     def _kernel_fit_from_peak(
@@ -1766,6 +1764,9 @@ class Spectra(DFolderManager, MzUtility):
         """
         assert check_attr(self, '_peaks'), 'call set peaks first'
 
+        # binned intensities refer to previous kernels
+        self.reset_binning()
+
         y: np.ndarray[float] = self.intensities.copy()
 
         if use_bigaussian:
@@ -1824,7 +1825,8 @@ class Spectra(DFolderManager, MzUtility):
     def _find_tolerances(
             self,
             targets: np.ndarray[float],
-            tolerances: Iterable[float] | float | None
+            tolerances: Iterable[float] | float | None,
+            **kwargs_peaks
     ) -> np.ndarray[float]:
         if tolerances is None:
             assert check_attr(self, '_intensities', True), \
@@ -1832,8 +1834,8 @@ class Spectra(DFolderManager, MzUtility):
 
         if tolerances is None:
             logger.info('estimating tolerance from summed spectrum ...')
-            self.require_peaks()
-            self.require_kernels()
+            self.require_peaks(**kwargs_peaks)
+            self.require_kernels(**kwargs_peaks)
             tolerances: float = np.median(self.kernel_params[:, -1])
             logger.info(f'found tolerance of {tolerances * 1e3:.1f} mDa')
 
@@ -1890,9 +1892,9 @@ class Spectra(DFolderManager, MzUtility):
         kwargs: Any,
             Keyword arguments provided to bin_spectra and require_peaks.
         """
-        assert method_peak_center in ["theory", "closest"], \
-            (f'available options for method_peak_center are "theo" and '
-             f'"closest, you provided {method_peak_center}')
+        assert method_peak_center in ["theory", "closest", "highest"], \
+            (f'available options for method_peak_center are "theory", '
+             f'"closest" and "highest", you provided {method_peak_center}')
 
         if plts:
             assert not np.all(self.intensities == 0), \
@@ -1903,77 +1905,60 @@ class Spectra(DFolderManager, MzUtility):
         # keep copy for plotting
         targets_o = targets.copy()
 
-        tolerances = self._find_tolerances(targets, tolerances)
+        tolerances = self._find_tolerances(targets, tolerances, **kwargs)
 
         # set peaks and kernels artificially from the target mzs and tolerances
         if method_peak_center == 'theory':
             self.reset_peaks()
-            self._peaks: list[int] = [
+            self._peaks: np.ndarray[int] = np.array([
                 np.argmin(np.abs(self.mzs - target)) for target in targets
-            ]
-        elif method_peak_center == 'closest':
+            ], dtype=int)
+        else:  # closest or highest
+            if method_peak_center == 'highest':
+                logger.warning('set_targets has not been tested with method_peak_center="highest" yet')
             # get a list of candidates for the specified parameters
             self.require_peaks(**kwargs)
-            whitelist = []  # container for peak idcs to keep
             peak_mzs: np.ndarray = self.mzs[self._peaks]  # mzs corresponding to peaks
-            valid_idcs = []  # idcs of targets that are valid (i.e. for which a peak was found)
-            for i, (target, tolerance) in enumerate(zip(targets, tolerances)):
-                # idx of mz closest to
+            # mz index of matched peak -> tolerance of the target it was matched to
+            tolerance_by_peak: dict[int, float] = {}
+            for target, tolerance in zip(targets, tolerances):
                 dists: np.ndarray[float] = np.abs(target - peak_mzs)
-                dist: float = np.min(dists)
-                idx_peak: int = self._peaks[np.argmin(dists)]
-                if dist > tolerance:
+                if method_peak_center == 'closest':
+                    idx_closest: int = np.argmin(dists)
+                    candidates: np.ndarray[int] = (
+                        self._peaks[[idx_closest]]
+                        if dists[idx_closest] <= tolerance
+                        else self._peaks[[]]
+                    )
+                else:
+                    # filter out peaks outside the mass tolerance
+                    candidates: np.ndarray[int] = self._peaks[dists <= tolerance]
+                if len(candidates) == 0:
                     logger.warning(
                         f'did not find peak for {target} within {tolerance=}'
                     )
                     continue
-                whitelist.append(idx_peak)
-                valid_idcs.append(i)
-            # set the parameters of the kernels using the whitelist to filter
-            # out all peaks that do not correspond to a target
-            self.filter_peaks(whitelist=whitelist)
-            # update targets and tolerances to those found
-            # changed in 1.4.1: targets get updated to closest peak
-            targets: list[float] = self.mzs[self._peaks]
-            logger.info(f'using closest peaks {targets} (instead of {targets_o})')
-
-            tolerances: list[float] = [tolerances[i] for i in valid_idcs]
-        elif method_peak_center == 'highest':
-            logger.warning('set_targets has not been tested with method_peak_center yet')
-            # TODO: test this method
-            # get a list of candidates for the specified parameters
-            self.require_peaks(**kwargs)
-            whitelist = []  # container for peak idcs to keep
-            peak_mzs: np.ndarray = self.mzs[self._peaks]  # mzs corresponding to peaks
-            valid_idcs = []  # idcs of targets that are valid (i.e. for which a peak was found)
-            for i, (target, tolerance) in enumerate(zip(targets, tolerances)):
-                # idx of mz closest to
-                dists: np.ndarray[float] = np.abs(target - peak_mzs)
-                # filter out peaks outside the mass tolerance
-                peak_idcs_candidates: np.ndarray[int] = self._peaks[dists < tolerance]
-                if peak_idcs_candidates.shape[0] == 0:
-                    logger.warning(
-                        f'did not find peak for {target} within {tolerance=}'
-                    )
-                    continue
-
                 # out of the candidates, pick the one with the highest intensity
-                idx_candidate_peak: int = np.argmax(self.intensities[peak_idcs_candidates])
-                idx_peak: int = peak_idcs_candidates[idx_candidate_peak]
-
-                whitelist.append(idx_peak)
-                valid_idcs.append(i)
-            # set the parameters of the kernels using the whitelist to filter
-            # out all peaks that do not correspond to a target
-            self.filter_peaks(whitelist=whitelist)
+                idx_peak: int = int(candidates[np.argmax(self.intensities[candidates])])
+                if idx_peak in tolerance_by_peak:
+                    logger.warning(
+                        f'target {target} matched the same peak '
+                        f'({self.mzs[idx_peak]:.4f}) as a previous target, '
+                        f'keeping only one'
+                    )
+                    continue
+                tolerance_by_peak[idx_peak] = tolerance
+            # filter out all peaks that do not correspond to a target
+            self.filter_peaks(whitelist=list(tolerance_by_peak.keys()))
             # update targets and tolerances to those found
             # changed in 1.4.1: targets get updated to closest peak
-            targets: list[float] = self.mzs[self._peaks]
-            logger.info(f'using closest peaks {targets} (instead of {targets_o})')
+            # peaks are now ordered by mz, so look up tolerances by peak
+            targets: np.ndarray[float] = self.mzs[self._peaks]
+            logger.info(f'using {method_peak_center} peaks {targets} (instead of {targets_o})')
 
-            tolerances: list[float] = [tolerances[i] for i in valid_idcs]
-        else:
-            raise NotImplementedError('internal error')
+            tolerances: np.ndarray[float] = np.array(
+                [tolerance_by_peak[int(peak)] for peak in self._peaks]
+            )
 
         n_peaks: int = len(targets)  # number of peaks equal to targets
         n_spectra: int = self._n_spectra
