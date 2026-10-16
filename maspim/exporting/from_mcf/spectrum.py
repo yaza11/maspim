@@ -394,8 +394,10 @@ class Spectra(DFolderManager, MzUtility):
                 reader.set_casi_window()
             limits = reader.limits
         self._limits = limits
+        # crop using limits
+        mzs_in_limits = (reader.mzs >= self._limits[0]) & (reader.mzs <= self._limits[1])
         # copy, reader.mzs may be the read-only array shared with pyrtms
-        self._mzs = np.array(reader.mzs)
+        self._mzs = reader.mzs[mzs_in_limits].copy()
         self._intensities = np.zeros_like(self._mzs)
 
     def _pre_save(self):
@@ -533,12 +535,14 @@ class Spectra(DFolderManager, MzUtility):
             spectrum: np.ndarray[float] = \
                 reader.get_spectrum_resampled_intensities(
                     index=index,
-                    poly_coeffs=poly_coeffs
+                    poly_coeffs=poly_coeffs,
+                    limits=self.limits
                 )
         else:
             spectrum: Spectrum = reader.get_spectrum(
                 index=index,
                 poly_coeffs=poly_coeffs,
+                limits=self.limits,
                 **kwargs
             )
             spectrum.resample(self.mzs)
