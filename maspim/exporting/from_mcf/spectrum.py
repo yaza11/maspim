@@ -1989,6 +1989,14 @@ class Spectra(Convenience):
                 )
         return kernels.T
 
+    def update_limits(self, limits: tuple[float, float]) -> None:
+        assert self._kernel_params is not None, \
+            'updating limits is only available after setting kernels'
+        self._limits = limits
+        mask_limits = (self.mzs >= self.limits[0]) & (self.mzs <= self.limits[1])
+        self._mzs = self.mzs[mask_limits]
+        self._intensities = self.intensities[mask_limits]
+
     def bin_spectra(
             self,
             reader: ReadBrukerMCF | Hdf5Handler | None = None,
