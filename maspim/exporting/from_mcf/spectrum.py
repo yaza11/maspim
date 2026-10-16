@@ -166,34 +166,34 @@ class Spectra(Convenience):
     Finally, a feature table is created from the binned spectra
     >>> spec.set_feature_table()
     """
-    _indices: np.ndarray[int] | None = None
-    _limits: np.ndarray[float] | None = None
-    _mzs: np.ndarray[float] | None = None
-    _delta_mz: float | None = None
-    _intensities: np.ndarray[float] | None = None
-    _tic: np.ndarray[float] | None = None
+    _indices: np.ndarray[int] = None
+    _limits: tuple[float, float] = None
+    _mzs: np.ndarray[float] = None
+    _delta_mz: float = None
+    _intensities: np.ndarray[float] = None
+    _tic: np.ndarray[float] = None
 
-    _noise_level: np.ndarray[float] | None = None
+    _noise_level: np.ndarray[float] = None
     _noise_level_subtracted: bool = False
-    _noise_level_parameters: dict[str, float] | None = None
+    _noise_level_parameters: dict[str, float] = None
 
-    _calibration_parameters: np.ndarray[float] | None = None
-    _calibration_settings: np.ndarray[float] | None = None
+    _calibration_parameters: np.ndarray[float] = None
+    _calibration_settings: np.ndarray[float] = None
 
-    _peaks: np.ndarray[int] | None = None
-    _peak_properties: np.ndarray[float] | None = None
-    _peak_setting_parameters: dict[str, Any] | None = None
-    _peaks_SNR: np.ndarray[float] | None = None
-    _peaks_is_side_peak: np.ndarray[bool] | None = None
+    _peaks: np.ndarray[int] = None
+    _peak_properties: np.ndarray[float] = None
+    _peak_setting_parameters: dict[str, Any] = None
+    _peaks_SNR: np.ndarray[float] = None
+    _peaks_is_side_peak: np.ndarray[bool] = None
 
-    _kernel_params: np.ndarray[float] | None = None
-    _kernel_shape: str | None = None
+    _kernel_params: np.ndarray[float] = None
+    _kernel_shape: str = None
 
-    _binning_by: str | None = None
-    _line_spectra: np.ndarray[float] | None = None
-    _feature_table: pd.DataFrame | None = None
+    _binning_by: str = None
+    _line_spectra: np.ndarray[float] = None
+    _feature_table: pd.DataFrame = None
 
-    _losses: np.ndarray[float] | None = None
+    _losses: np.ndarray[float] = None
 
     _save_in_d_folder: bool = True
     _save_attrs: set[str] = {
