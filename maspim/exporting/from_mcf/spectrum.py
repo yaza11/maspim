@@ -701,6 +701,12 @@ class Spectra(DFolderManager, MzUtility):
         assert check_attr(self, '_indices'), \
             ('No indices were set and also none were found in the reader. '
              'Make sure to initialize the reader correctly')
+        assert check_attr(self, '_mzs'), \
+            ('instance does not have mz values and it was also not possible to '
+             'get the limits from the reader. Please make sure to initialize '
+             'either the instance with limits or the reader')
+
+        self.reset_intensities()
 
         for it, index in tqdm(
                 enumerate(self.indices),
@@ -713,12 +719,16 @@ class Spectra(DFolderManager, MzUtility):
                 reader=reader, index=index, only_intensity=False
             )
             if it > 0:
-                shift: float = self.get_mass_shift(spectrum)  # shift in Da
-                # shift according to number of spectra
+                # shift = (mass in sum) - (mass in spectrum), in Da
+                shift: float = self.get_mass_shift(spectrum)
+                # move sum and spectrum towards each other, weighted by the
+                # number of spectra already in the sum
                 weight: float = 1 / (it + 1)
-                self._mzs += shift * weight
-                # don't modify in place, mzs may be shared with the reader or self._mzs
-                spectrum.mzs = spectrum.mzs - shift * (1 - weight)
+                # don't modify in place, mzs may be shared with the reader or the spectrum
+                self._mzs = self._mzs - shift * weight
+                spectrum.mzs = spectrum.mzs + shift * (1 - weight)
+                # intensities have to be on the (shifted) grid of the sum
+                spectrum.resample(self.mzs)
             self.add_spectrum(spectrum.intensities)
             self._tic[it] = np.trapezoid(spectrum.intensities, dx=self.delta_mz)
 
@@ -1412,21 +1422,20 @@ class Spectra(DFolderManager, MzUtility):
         peaks_valid: np.ndarray[bool] = np.full(n_peaks, True, dtype=bool)
 
         if skip_filtering:  # exclude all peaks not in whitelist
-            whitelisted = np.array([peak in whitelist
-                                    for peak in self._peaks], dtype=bool)
+            whitelisted = np.isin(self._peaks, np.asarray(whitelist, dtype=int))
             peaks_valid &= whitelisted
-            logging.info(f'keeping {whitelisted.sum()} whitelisted '
-                         f'out of {n_peaks} peaks')
+            logger.info(f'keeping {whitelisted.sum()} whitelisted '
+                        f'out of {n_peaks} peaks')
         if (not skip_filtering) and (peaks_snr_threshold > 0):
             # set peaks below SNR threshold to False
             snred = self.peaks_SNR > peaks_snr_threshold
             peaks_valid &= snred
-            logging.info(f'keeping {snred.sum()} out of {n_peaks} peaks with SNR '
-                         f'above {peaks_snr_threshold}')
+            logger.info(f'keeping {snred.sum()} out of {n_peaks} peaks with SNR '
+                        f'above {peaks_snr_threshold}')
         if (not skip_filtering) and remove_sidepeaks:  # set sidepeaks to False
             side_peaks = self.require_side_peaks(**kwargs_sidepeaks)
             peaks_valid &= ~side_peaks
-            logging.info(f'Removing {side_peaks.sum()} peaks identified as side peaks')
+            logger.info(f'Removing {side_peaks.sum()} peaks identified as side peaks')
         if (not skip_filtering) and (thr_sigma is not None):
             if not check_attr(self, '_kernel_params'):
                 logger.warning(f'Kernel parameters not set, peak filtering '
@@ -1450,21 +1459,20 @@ class Spectra(DFolderManager, MzUtility):
         if plts:  # keep a copy of the original peaks
             peaks = self._peaks.copy()
 
-        # filter out invalid peaks
-        self._peaks: np.ndarray[int] = self._peaks[peaks_valid]
-        peak_props = {}
-        for key, val in self._peak_properties.items():
-            peak_props[key] = val[peaks_valid]
-        self._peak_properties = peak_props
-        # add flag
-        self._peak_setting_parameters['modified'] = {
+        self._apply_peak_mask(peaks_valid)
+        # keep a record of all filtering steps
+        if self._peak_setting_parameters is None:
+            self._peak_setting_parameters = {}
+        modifications = self._peak_setting_parameters.get('modified', [])
+        if isinstance(modifications, dict):  # legacy: only the last step was stored
+            modifications = [modifications]
+        modifications.append({
             'whitelist': whitelist,
-            'calib_snr_threshold': peaks_snr_threshold,
-            'remove_sidepeaks': remove_sidepeaks
-        }
-
-        if check_attr(self, '_kernel_params'):
-            self._kernel_params = self._kernel_params[peaks_valid, :]
+            'peaks_snr_threshold': peaks_snr_threshold,
+            'remove_sidepeaks': remove_sidepeaks,
+            'thr_sigma': thr_sigma
+        })
+        self._peak_setting_parameters['modified'] = modifications
 
         if plts:
             idxs_removed: np.ndarray[int] = peaks[~peaks_valid]
@@ -1487,6 +1495,22 @@ class Spectra(DFolderManager, MzUtility):
             plt.ylabel('Intensities')
             plt.legend()
             plt.show()
+
+    def _apply_peak_mask(self, peaks_valid: np.ndarray[bool]) -> None:
+        """Keep only the masked peaks in all arrays that have one entry per peak."""
+        self._peaks = np.asarray(self._peaks)[peaks_valid]
+        if self._peak_properties is not None:
+            self._peak_properties = {
+                key: val[peaks_valid] for key, val in self._peak_properties.items()
+            }
+        if self._peaks_SNR is not None:
+            self._peaks_SNR = self._peaks_SNR[peaks_valid]
+        if self._peaks_is_side_peak is not None:
+            self._peaks_is_side_peak = self._peaks_is_side_peak[peaks_valid]
+        if self._kernel_params is not None:
+            self._kernel_params = self._kernel_params[peaks_valid, :]
+        if self._line_spectra is not None:
+            self._line_spectra = self._line_spectra[:, peaks_valid]
 
     def _gaussian_from_peak(self, peak_idx: int) -> tuple[float, ...]:
         """
