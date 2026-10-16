@@ -27,7 +27,7 @@ from maspim.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
 from maspim.exporting.from_mcf.helper import get_mzs_for_limits, find_polycalibration_spectrum
 from maspim.res.calibrants import get_calibrants
 from maspim.util import Convenience
-from maspim.util.convenience import check_attr
+from maspim.util.convenience import check_attr, MzUtility, DFolderManager
 from maspim.project.msi_spot_helpers import get_rxy, get_spots, ImagingInfoXML
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ def bigaussian(
     return np.hstack([y_l, y_r])
 
 
-class Spectra(Convenience):
+class Spectra(DFolderManager, MzUtility):
     """
     Container for multiple Spectrum objects and binning.
 
@@ -248,7 +248,7 @@ class Spectra(Convenience):
             spectrum. The default is 1e-4.
         indices : Iterable, optional
             Indices of spectra to be summed. This can be used to only sum up a
-            subset of spectra. The default is None and results in summing up 
+            subset of spectra. The default is None and results in summing up
             all spectra.
         path_d_folder : str | None, optional
             folder with data. The default is str | None. Only necessary if reader
@@ -784,10 +784,6 @@ class Spectra(Convenience):
 
         return self._noise_level
 
-    @property
-    def noise_level(self) -> np.ndarray[float]:
-        return self.require_noise_level()
-
     def subtract_baseline(
             self,
             **kwargs
@@ -1245,12 +1241,6 @@ class Spectra(Convenience):
         self._peaks_SNR: np.ndarray[float] = \
             av_intensities / self.noise_level[self._peaks]
 
-    @property
-    def peaks_SNR(self) -> np.ndarray[float]:
-        if not check_attr(self, '_peaks_SNR'):
-            self._set_peaks_SNR()
-        return self._peaks_SNR
-
     def _get_SNR_table(self) -> np.ndarray[float]:
         """
         Return SNR values for each spectrum as array where each row corresponds
@@ -1697,15 +1687,6 @@ class Spectra(Convenience):
         # delete invalid peaks
         if discard_invalid:
             self.filter_peaks(whitelist=self._peaks[mask_valid])
-
-    def require_kernels(self, **kwargs) -> np.ndarray[float]:
-        if not check_attr(self, '_kernel_params', True):
-            self.set_kernels(**kwargs)
-        return self._kernel_params
-
-    @property
-    def kernel_params(self):
-        return self.require_kernels()
 
     def _find_tolerances(
             self,
@@ -2284,15 +2265,6 @@ class Spectra(Convenience):
 
         self._feature_table: pd.DataFrame = df
         return self._feature_table
-
-    def require_feature_table(self, **kwargs) -> pd.DataFrame:
-        if not check_attr(self, 'feature_table'):
-            self.set_feature_table(**kwargs)
-        return self._feature_table
-
-    @property
-    def feature_table(self):
-        return self.require_feature_table()
 
     def get_kernel_params_df(self) -> pd.DataFrame:
         """Turn the kernel parameters into a feature table."""
