@@ -584,7 +584,8 @@ class Spectra(DFolderManager, MzUtility):
         reader : ReadBrukerMCF | Hdf5Handler
             Reader object from which to obtain the spectrum.
         index : int | str
-            Index of the spectrum to obtain (1-based).
+            Index of the spectrum to obtain, as used by the reader (an element
+            of self.indices, not necessarily the position in the array).
         only_intensity : bool
             Whether to return only the intensity of the spectrum object.
         **kwargs : Any
@@ -606,7 +607,10 @@ class Spectra(DFolderManager, MzUtility):
             calibrate: bool = check_attr(self, '_calibration_parameters')
 
         if calibrate:
-            poly_coeffs: np.ndarray = self._calibration_parameters[index, :]
+            # rows of calibration parameters follow the order of self.indices
+            poly_coeffs: np.ndarray = self._calibration_parameters[
+                self.spectrum_idx2array_idx(index), :
+            ]
         else:
             poly_coeffs: None = None
 
@@ -1232,6 +1236,7 @@ class Spectra(DFolderManager, MzUtility):
             self,
             max_relative_height: float = .1,
             max_distance: float = .001,
+            **_
     ) -> None:
         """
         This method defines a list of peaks that are likely artifacts from the
@@ -1669,6 +1674,23 @@ class Spectra(DFolderManager, MzUtility):
     def kernel_params(self) -> np.ndarray:
         return self._kernel_params
 
+    @kernel_params.setter
+    def kernel_params(self, kernel_params: np.ndarray | None) -> None:
+        self._kernel_params = kernel_params
+
+    @property
+    def kernel_shape(self) -> str | None:
+        return self._kernel_shape
+
+    @kernel_shape.setter
+    def kernel_shape(self, kernel_shape: str | None) -> None:
+        self._kernel_shape = kernel_shape
+
+    def require_kernels(self, overwrite: bool = False, **kwargs) -> np.ndarray[float]:
+        if overwrite or (not check_attr(self, '_kernel_params')):
+            self.set_kernels(**kwargs)
+        return self._kernel_params
+
     def set_kernels(
             self,
             use_bigaussian: bool = False,
@@ -2067,7 +2089,8 @@ class Spectra(DFolderManager, MzUtility):
             self,
             reader: ReadBrukerMCF | Hdf5Handler = None,
             profile_spectra: np.ndarray[float] = None,
-            method: Literal['height', 'max', 'area'] = 'height'
+            method: Literal['height', 'max', 'area'] = 'height',
+            **_
     ) -> None:
         """
         For each spectrum find overlap between kernels and signal.
@@ -2236,12 +2259,10 @@ class Spectra(DFolderManager, MzUtility):
             if reader is not None:
                 # TODO: verify that calibration is used correctly
                 spectrum: np.ndarray[float] = self.get_spectrum(
-                    reader=reader, index=idx_spectrum, only_intensity=True, limits=self._limits
+                    reader=reader, index=idx_spectrum, only_intensity=True
                 )
-                print(f'fetched spectrum for limits {self._limits}')
             else:
                 spectrum: np.ndarray[float] = profile_spectra[:, it]
-            print(spectrum.shape)
             _bin_spectrum(spectrum, it)
 
     def _add_rxys_to_df(
@@ -2427,7 +2448,12 @@ class Spectra(DFolderManager, MzUtility):
             self, index: int | Iterable[int]
     ) -> int | np.ndarray[int]:
         """
-        Convert the 1-based spectrum index to 0-based array index.
+        Convert the spectrum index (as used by the reader) to the array index.
+
+        Rows of per-spectrum arrays (e.g. calibration parameters, line spectra)
+        follow the order of self.indices. If all spectra of a measurement are
+        used, this is the identity, but it is required if only a subset
+        (or a reordering) of spectra is used.
 
         Parameters
         ----------
@@ -2439,11 +2465,19 @@ class Spectra(DFolderManager, MzUtility):
         array_idx : int | np.ndarray[int]
             Indices in array that correspond to the spectrum indices.
         """
-        if hasattr(index, '__iter__'):
-            idxs: list[int] = [np.argwhere(self.indices == idx)[0][0] for idx in index]
-            return np.array(idxs)
-        else:
-            return np.argwhere(self.indices == index)[0][0]
+        # rebuild the lookup if indices have been replaced since it was built
+        if (self._index_lookup is None) or (self._index_lookup[0] is not self.indices):
+            # indices used to create the lookup and a dictionary mapping the spectrum index to array index
+            # spectrum indices can be arbitrary order, array indices always run from 0 .. len(self.indices) - 1
+            self._index_lookup: tuple[np.ndarray[int], dict[int, int]] = (
+                self.indices,
+                {int(idx): i for i, idx in enumerate(self.indices)}
+            )
+        lookup: dict[int, int] = self._index_lookup[1]
+        if hasattr(index, '__iter__'):  # multiple indices
+            return np.array([lookup[int(idx)] for idx in index], dtype=int)
+        # one index
+        return lookup[int(index)]
 
     def set_reconstruction_losses(
             self,
@@ -2484,12 +2518,12 @@ class Spectra(DFolderManager, MzUtility):
         # precompute kernel functions
         kernels: np.ndarray[float] = self._get_kernels(norm_mode='height')
         # loop over spectra
-        for c, index in tqdm(
-                enumerate(indices),
-                total=self._n_spectra,
+        for index in tqdm(
+                indices,
+                total=len(indices),
                 desc='Setting losses'
         ):
-            # get index in array corresponding to spectrum index
+            # rows of per-spectrum arrays follow the order of self.indices
             array_idx: int = self.spectrum_idx2array_idx(index)
             spec: np.ndarray[float] = self.get_spectrum(
                 reader=reader, index=index, only_intensity=True
@@ -2619,7 +2653,8 @@ class Spectra(DFolderManager, MzUtility):
             path_d_folder: str = os.path.commonpath([
                 self.path_d_folder, other.path_d_folder
             ])
-            indices: None = None
+            # placeholder indices, they no longer refer to spectra on disk
+            indices: np.ndarray[int] = np.arange(0, self._n_spectra + other._n_spectra)
 
         s_new: Self = self.__class__(
             limits=self.limits,
@@ -3081,7 +3116,8 @@ class MultiSectionSpectra(Spectra):
             idxs = spec.indices.copy()
             idxs += offset
             indices.append(idxs)
-            offset = idxs[-1]
+            # indices are 0-based, start the next section after the last index
+            offset = idxs[-1] + 1
         self.mzs: np.ndarray[float] = spec.mzs.copy()
         self.delta_mz = spec.delta_mz
         self.intensities: np.ndarray[float] = np.zeros_like(self.mzs)
@@ -3098,6 +3134,7 @@ class MultiSectionSpectra(Spectra):
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
         """
+        self.intensities = np.zeros_like(self.mzs)
         for i, reader in enumerate(readers):
             self.specs[i].add_all_spectra(reader)
             self.intensities += self.specs[i].intensities
