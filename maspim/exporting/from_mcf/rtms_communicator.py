@@ -154,7 +154,7 @@ class ReadBrukerMCF(ReaderBaseClass):
             limits: tuple[float, float] | None = None
     ) -> Spectrum:
         """
-        Get spectrum in mcf file by index (R index, so 1-based).
+        Get spectrum in mcf file by index.
 
         Parameters
         ----------

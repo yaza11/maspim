@@ -394,8 +394,10 @@ class Spectra(DFolderManager, MzUtility):
                 reader.set_casi_window()
             limits = reader.limits
         self._limits = limits
+        # crop using limits
+        mzs_in_limits = (reader.mzs >= self._limits[0]) & (reader.mzs <= self._limits[1])
         # copy, reader.mzs may be the read-only array shared with pyrtms
-        self._mzs = np.array(reader.mzs)
+        self._mzs = reader.mzs[mzs_in_limits].copy()
         self._intensities = np.zeros_like(self._mzs)
 
     def _pre_save(self):
@@ -414,15 +416,27 @@ class Spectra(DFolderManager, MzUtility):
         assert check_attr(self, '_indices')
         return self._indices
 
+    @indices.setter
+    def indices(self, indices: Iterable[int]) -> None:
+        self._indices = np.array(indices)
+
     @property
     def intensities(self) -> np.ndarray[float]:
         assert check_attr(self, '_intensities')
         return self._intensities
 
+    @intensities.setter
+    def intensities(self, intensities: np.ndarray[float]) -> None:
+        self._intensities = intensities
+
     @property
     def mzs(self) -> np.ndarray[float]:
         assert check_attr(self, '_mzs')
         return self._mzs
+
+    @mzs.setter
+    def mzs(self, mzs: np.ndarray[float]) -> None:
+        self._mzs = mzs
 
     @property
     def limits(self):
@@ -433,6 +447,73 @@ class Spectra(DFolderManager, MzUtility):
     def delta_mz(self) -> float:
         assert check_attr(self, '_delta_mz')
         return self._delta_mz
+
+    @delta_mz.setter
+    def delta_mz(self, delta_mz: float) -> None:
+        self._delta_mz = delta_mz
+
+    @property
+    def noise_level(self) -> np.ndarray[float]:
+        assert check_attr(self, '_noise_level'), 'call set_noise_level first'
+        return self._noise_level
+
+    @noise_level.setter
+    def noise_level(self, noise_level: np.ndarray[float]) -> None:
+        self._noise_level = noise_level
+
+    @property
+    def peaks(self) -> np.ndarray[int]:
+        return self._peaks
+
+    @peaks.setter
+    def peaks(self, peaks: Iterable[int]) -> None:
+        self._peaks = np.array(peaks, dtype=int)
+
+    @property
+    def peak_properties(self) -> dict[str, np.ndarray] | None:
+        return self._peak_properties
+
+    @peak_properties.setter
+    def peak_properties(self, peak_properties: dict[str, np.ndarray] | None) -> None:
+        self._peak_properties = peak_properties
+
+    @property
+    def peak_setting_parameters(self) -> dict[str, Any] | None:
+        return self._peak_setting_parameters
+
+    @peak_setting_parameters.setter
+    def peak_setting_parameters(self, params: dict[str, Any] | None) -> None:
+        self._peak_setting_parameters = params
+
+    @property
+    def peaks_SNR(self) -> np.ndarray[float]:
+        if not check_attr(self, '_peaks_SNR'):
+            self._set_peaks_SNR()
+        return self._peaks_SNR
+
+    @property
+    def line_spectra(self) -> np.ndarray[float] | None:
+        return self._line_spectra
+
+    @line_spectra.setter
+    def line_spectra(self, line_spectra: np.ndarray[float] | None) -> None:
+        self._line_spectra = line_spectra
+
+    @property
+    def binning_by(self) -> str | None:
+        return self._binning_by
+
+    @binning_by.setter
+    def binning_by(self, binning_by: str | None) -> None:
+        self._binning_by = binning_by
+
+    @property
+    def feature_table(self) -> pd.DataFrame | None:
+        return self._feature_table
+
+    @feature_table.setter
+    def feature_table(self, feature_table: pd.DataFrame | None) -> None:
+        self._feature_table = feature_table
 
     @property
     def _n_spectra(self) -> int:
@@ -533,12 +614,14 @@ class Spectra(DFolderManager, MzUtility):
             spectrum: np.ndarray[float] = \
                 reader.get_spectrum_resampled_intensities(
                     index=index,
-                    poly_coeffs=poly_coeffs
+                    poly_coeffs=poly_coeffs,
+                    limits=self.limits
                 )
         else:
             spectrum: Spectrum = reader.get_spectrum(
                 index=index,
                 poly_coeffs=poly_coeffs,
+                limits=self.limits,
                 **kwargs
             )
             spectrum.resample(self.mzs)
