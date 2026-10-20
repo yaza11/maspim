@@ -28,17 +28,13 @@ class Hdf5Handler:
     -------------
     >>> from maspim.exporting.sqlite_mcf_communicator.hdf import Hdf5Handler
     >>> brukerReader = RtmsBrukerMCFReader.from_dir('some/d/folder.d')
-    >>> brukerReader._create_reader()
-    >>> brukerReader.create_indices()
-    >>> brukerReader.set_meta_data()
-    >>> brukerReader.set_casi_window()  # very important, otherwise the saved file will be huge
-    >>> hdf = Hdf5Handler('some/d/folder.d')
-    This creates the disk file
+    >>> hdf = Hdf5Handler(path_folder='some/d/folder.d')
+    This creates the disk file (by default only the CASI window is stored, otherwise the file will be huge)
     >>> hdf.write(brukerReader)
     After that, for the initicailzation it suffices to call
-    >>> hdf = Hdf5Handler('some/d/folder.d')
-    and you have the same functionality as for the ReadBrukerMCF reader, e.g.
-    >>> hdf.get_spectrum(1000)
+    >>> hdf = Hdf5Handler(path_folder='some/d/folder.d')
+    and you have the same functionality as for the RtmsBrukerMCFReader, e.g.
+    >>> mzs, intensities = hdf.get_spectrum(1000)
     """
     _save_in_d_folder: bool = True
 
@@ -162,14 +158,14 @@ class Hdf5Handler:
     def add_metadata(self, reader: RtmsBrukerMCFReader) -> None:
         """Add index, measurement parameters and coordinates to hdf5 metadata"""
 
-        spots = reader.spots
         met = reader.metadataDF
-        indices = spots.index.to_numpy()
+        indices = np.asarray(reader.indices)
 
         with h5py.File(self.path_file, 'a') as f:
             if 'indices' not in f.keys():
                 f.create_dataset('indices', data=indices)
-        if 'instrument_settings' not in f.keys():
+            has_settings: bool = 'instrument_settings' in f.keys()
+        if not has_settings:
             met.to_hdf(self.path_file, key='instrument_settings', mode='a')
 
     @property
@@ -205,15 +201,11 @@ class Hdf5Handler:
         delta_mz: float, optional
             The sampling rate for intensities in the spectra. The default is 1e-4 Da (0.1 mDa).
         """
-        assert hasattr(reader, 'indices'), 'call create_indices first'
-        assert hasattr(reader, 'limits') or (mzs is not None), \
-            'if mzs is not provided, reader must have limits'
-
         indices: np.ndarray[int] = reader.indices
         N: int = len(indices)
 
         if limits is None:
-            limits = reader.casi_window
+            limits = (mzs.min(), mzs.max()) if mzs is not None else reader.casi_window
 
         if mzs is None:
             mzs = get_mzs_for_limits(limits, delta_mz)
@@ -363,35 +355,36 @@ class Hdf5Handler:
     def get_spectrum(
             self,
             index: int,
-            return_mzs: bool,
+            return_mzs: bool = None,
             intensities_only: bool = None,
             limits: tuple[float, float] = None
     ) -> tuple[np.ndarray[float] | None, np.ndarray[float]]:
         """
-        Return the spectrum to the Spots index (starting at 1)
+        Return the spectrum with the given index (same signature as RtmsBrukerMCFReader.get_spectrum).
 
         Parameters
         ----------
         index: int
-            The index of the spectrum to retrieve.
-        poly_coeffs: np.ndarray[float], optional
-            The calibration function to apply before returning the spectrum.
-        kwargs: dict, optional
-            Additional keywords provided to the initialization of the Spectrum (e.g. limits).
+            The index of the spectrum to retrieve (an element of self.indices).
+        return_mzs, intensities_only : bool, optional
+            Whether to return the m/z values (otherwise None is returned instead).
+            Defaults to returning them.
+        limits : tuple[float, float], optional
+            Only return data points with limits[0] <= mz <= limits[1].
 
         Returns
         -------
-        spectrum: Spectrum
-            The (calibrated) spectrum.
+        mzs, intensities : tuple[np.ndarray | None, np.ndarray]
         """
         if return_mzs is not None and intensities_only is not None:
             raise ValueError('Provide only one of return_mzs and intensity_only, not both.')
-        if intensities_only is not None:
-            return_mzs = not intensities_only
+        if return_mzs is None:
+            return_mzs = (not intensities_only) if (intensities_only is not None) else True
 
         if limits is not None:
-            mz_idx_lower: int = np.searchsorted(self.mzs, limits[0])
-            mz_idx_upper: int = np.searchsorted(self.mzs, limits[1]) + 1
+            # same bounds as RtmsBrukerMCFReader: limits[0] <= mz <= limits[1]
+            mz_idx_lower: int = np.searchsorted(self.mzs, limits[0], side='left')
+            mz_idx_upper: int = np.searchsorted(self.mzs, limits[1], side='right')
             mz_idcs = slice(mz_idx_lower, mz_idx_upper)
         else:
             mz_idcs = slice(None)

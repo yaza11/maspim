@@ -521,7 +521,7 @@ class Spectra(DFolderManager, MzUtility):
             intensities_only: bool,
             recalibrate: bool,
             resample: bool = None
-    ) -> np.ndarray[float] | Spectrum:
+    ) -> tuple[np.ndarray[float] | None, np.ndarray[float]]:
         """
         Function to obtain a spectrum or its intensities from a reader.
 
@@ -532,51 +532,49 @@ class Spectra(DFolderManager, MzUtility):
         index : int | str
             Index of the spectrum to obtain, as used by the reader (an element
             of self.indices, not necessarily the position in the array).
-        only_intensity : bool
-            Whether to return only the intensity of the spectrum object.
+        intensities_only : bool
+            Whether to return only the intensities (mzs will be None).
         recalibrate: bool
             Whether the previously defined calibration shall be applied before returning the intensities
-        **kwargs : Any
-            Additional keyword arguments to be passed on to reader.get_spectrum.
-            Will be ignored if only_intensities is set to True.
+        resample: bool, optional
+            Whether to interpolate the intensities onto self.mzs. Defaults to
+            resampling if not all spectra in the reader share the same mz values.
+            Calibrated spectra are always resampled.
 
         Returns
         -------
-        spectrum : np.ndarray[float] | Spectrum
-            Either a spectrum object or its intensities calibrated and resampled
-            accordingly.
-
+        mzs, intensities : tuple[np.ndarray[float] | None, np.ndarray[float]]
+            The mz values and intensities within self.limits, calibrated and
+            resampled accordingly (if resampled, mzs is self.mzs).
         """
         if recalibrate:
             # rows of calibration parameters follow the order of self.indices
             if self._calibration_parameters is None:
                 raise ValueError(
                     'calibration parameters have not been set. '
-                    'Please set them before calling get_spectrum with use_calibration=True.'
+                    'Please set them before calling get_spectrum with recalibrate=True.'
                 )
             poly_coeffs: np.ndarray = self._calibration_parameters[
                 self.spectrum_idx2array_idx(index), :
             ]
+            # readers crop to the limits before calibrating, which shifts the mzs, so
+            # read a wider window such that the calibrated spectrum still covers the limits
+            # (resampling to self.mzs crops to the limits afterward)
+            margin: float = float(np.max(np.abs(np.polyval(poly_coeffs, self.limits))))
         else:
             poly_coeffs: None = None
+            margin: float = 0
 
         if resample is None:
             # determine from whether all spectra in the reader have the same mz values
             resample = not reader.all_mz_values_same
+        # calibrated mzs are not on the grid anymore
+        resample = resample or recalibrate
 
-
-        if poly_coeffs is not None:
-            # readers crop to the limits before calibrating, which shifts the mzs, so
-            # read a wider window such that the calibrated spectrum still covers the limits
-            # (resampling to self.mzs crops to the limits afterward)
-            margin = np.max(np.abs(np.polyval(poly_coeffs, self.limits)))
-        else:
-            margin = 0
-        get_intensity_only: bool = intensities_only and (not recalibrate) and (not resample)
         mzs, intensities = reader.get_spectrum(
             index=int(index),  # Ensure index is int
             limits=(self.limits[0] - margin, self.limits[1] + margin),
-            intensities_only=get_intensity_only
+            return_mzs=resample or (not intensities_only)
         )
 
         if recalibrate:
@@ -586,14 +584,15 @@ class Spectra(DFolderManager, MzUtility):
                 inplace=False
             )
 
-        if margin > 0 or recalibrate:
-            idx_lower = np.searchsorted(mzs, self.limits[0], side='left')
-            idx_upper = np.searchsorted(mzs, self.limits[1], side='right')
-            if mzs is not None:
-                mzs = mzs[idx_lower:idx_upper]
-            intensities = intensities[idx_lower:idx_upper]
-        if recalibrate or resample:  # can do this in one go
+        if resample:
+            # np.interp only evaluates at self.mzs, which crops to the limits
             intensities = np.interp(self.mzs, mzs, intensities)
+            mzs = self.mzs
+        elif len(intensities) != len(self.mzs):
+            raise ValueError(
+                f'spectrum {index} has {len(intensities)} values within the limits, but '
+                f'there are {len(self.mzs)} mz values, call get_spectrum with resample=True'
+            )
 
         if intensities_only:
             mzs = None
@@ -672,18 +671,17 @@ class Spectra(DFolderManager, MzUtility):
         # ):
         #     self._intensities += intensities.sum(axis=0)
         #     self._tic[rows] = np.trapezoid(intensities, x=self.mzs, axis=1)
-        for idx in tqdm(
-                self.indices,
+        for it, idx in tqdm(
+                enumerate(self.indices),
                 desc='Adding spectra', smoothing=50 / self._n_spectra,
                 total=self.indices.shape[0],
                 disable=not show_progress
         ):
-            _mzs, _ints = self.get_spectrum(
+            _, _ints = self.get_spectrum(
                 reader=reader,
                 index=idx,
                 recalibrate=recalibrate,
-                resample=reader.all_mz_values_same or recalibrate,
-                intensities_only=False
+                intensities_only=True
             )
             self._intensities += _ints
             self._tic[idx] = np.trapezoid(_ints, x=self.mzs)
@@ -724,9 +722,15 @@ class Spectra(DFolderManager, MzUtility):
                 total=self._n_spectra,
                 disable=not show_progress
         ):
-            spectrum: Spectrum = self.get_spectrum(
-                reader=reader, index=index, only_intensity=False
+            # resampled onto the current grid of the sum
+            mzs, intensities = self.get_spectrum(
+                reader=reader,
+                index=index,
+                intensities_only=False,
+                recalibrate=check_attr(self, '_calibration_parameters'),
+                resample=True
             )
+            spectrum: Spectrum = Spectrum((mzs, intensities))
             if it > 0:
                 # shift = (mass in sum) - (mass in spectrum), in Da
                 shift: float = self.get_mass_shift(spectrum)
@@ -2892,10 +2896,12 @@ class Spectra(DFolderManager, MzUtility):
 
         for idx, (ax_l, ax_r) in zip(indices, axs):
             # obtain spectra
-            spec_o: Spectrum = reader.get_spectrum(index=idx, limits=self.limits)
-            spec_c: Spectrum = self.get_spectrum(
-                reader=reader, index=idx, only_intensity=False
+            spec_o: Spectrum = Spectrum(
+                reader.get_spectrum(index=int(idx), return_mzs=True, limits=self.limits)
             )
+            spec_c: Spectrum = Spectrum(self.get_spectrum(
+                reader=reader, index=idx, intensities_only=False, recalibrate=True
+            ))
 
             array_idx: int = self.spectrum_idx2array_idx(idx)
             poly_coeffs: np.ndarray = self._calibration_parameters[array_idx, :]
