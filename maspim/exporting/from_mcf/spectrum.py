@@ -510,6 +510,19 @@ class Spectra(DFolderManager, MzUtility):
 
         self.reset_noise_level()
 
+    def _trapezoid_weights(self) -> np.ndarray[float]:
+        """
+        Weights w such that w @ y == np.trapezoid(y, x=self.mzs).
+
+        Much faster than calling np.trapezoid for every spectrum, which computes
+        the differences of the mzs each time.
+        """
+        half_dmz: np.ndarray[float] = np.diff(self.mzs) / 2
+        weights: np.ndarray[float] = np.zeros(len(self.mzs), dtype=np.float64)
+        weights[:-1] += half_dmz
+        weights[1:] += half_dmz
+        return weights
+
     def add_spectrum(self, spectrum: np.ndarray[float]) -> None:
         """Add passed spectrum values to summed spectrum."""
         self._intensities += spectrum
@@ -547,6 +560,10 @@ class Spectra(DFolderManager, MzUtility):
             The mz values and intensities within self.limits, calibrated and
             resampled accordingly (if resampled, mzs is self.mzs).
         """
+        if recalibrate and (not resample):
+            logger.warning(
+                'Recalibrating does not force resampling, usually this is intended. Consider setting resample=True')
+
         if recalibrate:
             # rows of calibration parameters follow the order of self.indices
             if self._calibration_parameters is None:
@@ -568,8 +585,6 @@ class Spectra(DFolderManager, MzUtility):
         if resample is None:
             # determine from whether all spectra in the reader have the same mz values
             resample = not reader.all_mz_values_same
-        # calibrated mzs are not on the grid anymore
-        resample = resample or recalibrate
 
         mzs, intensities = reader.get_spectrum(
             index=int(index),  # Ensure index is int
@@ -578,11 +593,13 @@ class Spectra(DFolderManager, MzUtility):
         )
 
         if recalibrate:
-            mzs = apply_calibration_mz(
+            mzs_calib = apply_calibration_mz(
                 mzs=mzs,
                 poly_coeffs=poly_coeffs,
                 inplace=False
             )
+            intensities = np.interp(mzs_calib, mzs, intensities)
+            mzs=mzs_calib
 
         if resample:
             # np.interp only evaluates at self.mzs, which crops to the limits
@@ -664,6 +681,7 @@ class Spectra(DFolderManager, MzUtility):
              'either the instance with limits or the reader')
 
         self.reset_intensities()
+        tic_weights: np.ndarray[float] = self._trapezoid_weights()
 
         # iterate over all spectra
         # for rows, intensities in self._iter_batches(
@@ -684,7 +702,8 @@ class Spectra(DFolderManager, MzUtility):
                 intensities_only=True
             )
             self._intensities += _ints
-            self._tic[idx] = np.trapezoid(_ints, x=self.mzs)
+            # rows of the tic follow the order of self.indices
+            self._tic[it] = tic_weights @ _ints
 
         # due to floating point precision?
         self._intensities[self._intensities < 0] = 0
@@ -714,6 +733,8 @@ class Spectra(DFolderManager, MzUtility):
                                  'either the instance with limits or the reader')
 
         self.reset_intensities()
+        # shifting the grid does not change the spacing of the mzs
+        tic_weights: np.ndarray[float] = self._trapezoid_weights()
 
         for it, index in tqdm(
                 enumerate(self.indices),
@@ -743,7 +764,7 @@ class Spectra(DFolderManager, MzUtility):
                 # intensities have to be on the (shifted) grid of the sum
                 spectrum.resample(self.mzs)
             self.add_spectrum(spectrum.intensities)
-            self._tic[it] = np.trapezoid(spectrum.intensities, x=self.mzs)
+            self._tic[it] = tic_weights @ spectrum.intensities
 
         self._intensities[self._intensities < 0] = 0
 
