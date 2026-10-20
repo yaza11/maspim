@@ -18,7 +18,6 @@ from maspim.exporting.legacy.data_analysis_export import DataAnalysisExport
 from maspim.exporting.legacy.parser import extract_mzs as da_export_extract_mzs
 from maspim.exporting.from_sqlite.parser import extract_mzs as sqlite_extract_mzs
 from maspim.exporting.from_mcf.spectrum import Spectra
-from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
 from maspim.exporting.from_mcf.helper import Spots, Spectrum
 
 from maspim.data.age_model import AgeModel

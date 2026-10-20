@@ -49,3 +49,5 @@ setup(
         "Operating System :: Microsoft :: Windows",
     ]
 )
+
+# pip install git+https://github.com/yaza11/chem_spectra.git

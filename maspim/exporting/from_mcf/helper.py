@@ -267,6 +267,19 @@ class Spectrum:
         return new_spectrum
 
 
+def apply_calibration_mz(
+        mzs: np.ndarray[float],
+        poly_coeffs: np.ndarray[float],
+        inplace=False
+) -> np.ndarray[float]:
+    f: Callable = np.poly1d(poly_coeffs)
+
+    if not inplace:
+        mzs = mzs.copy()
+    mzs += f(mzs)
+    return mzs
+
+
 def apply_calibration(
         spectrum: Spectrum,
         poly_coeffs: np.ndarray[float],
@@ -299,50 +312,6 @@ def apply_calibration(
     # apply the transformation to the mzs of the spectrum
     spectrum.mzs = spectrum.mzs + f(spectrum.mzs)  # do not use += here since mzs may be referenced, so we want to create a copy here
     return spectrum
-
-
-class ReaderBaseClass:
-    """
-    Base class for reader classes.
-
-    Implements shared methods for hdf5Handler and ReadBrukerMCF, such as
-    - calibrate_spectrum
-    - get_spectrum_resampled_intensities
-    """
-
-    mzs: Iterable[float] | None = None
-
-    def get_spectrum(self, *args, **kwargs) -> Any:
-        """This method is implemented by the child classes."""
-        raise NotImplementedError()
-
-    def get_spectrum_resampled_intensities(
-            self,
-            *args,
-            poly_coeffs: np.ndarray[float] | None = None,
-            **kwargs
-    ) -> np.ndarray[float]:
-        """
-        Return the intensities of a resampled (and calibrated) spectrum.
-
-        Parameters
-        ----------
-        index: int
-            The 1-based index of the spectrum.
-        poly_coeffs: np.ndarray[float], optional
-            Coefficients of the calibration polynomial. The default is None
-            and will not apply a calibration.
-
-        Returns
-        -------
-        spectrum_intensities: np.ndarray[float]
-            The intensities of the resampled (and possibly calibrated) spectrum.
-        """
-        assert check_attr(self, 'mzs'), 'need mz values to resample'
-
-        spectrum: Spectrum = self.get_spectrum(*args, poly_coeffs=poly_coeffs, **kwargs)
-        spectrum.resample(self.mzs)
-        return spectrum.intensities
 
 
 def find_polycalibration_spectrum(

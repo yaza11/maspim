@@ -14,19 +14,21 @@ import psutil
 import logging
 
 import scipy.signal
+from pyrtms.rtmsBrukerMCFReader import RtmsBrukerMCFReader
+from scipy.sparse import csc_matrix
 from tqdm import tqdm
-from typing import Iterable, Self, Any, Callable, Literal
+from typing import Iterable, Self, Any, Callable, Literal, Iterator
 from scipy.signal import find_peaks, correlate, correlation_lags, peak_widths
 from scipy.optimize import curve_fit
 from scipy.ndimage import minimum_filter, median_filter
 
 from maspim.data.combine_feature_tables import combine_feature_tables
-from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF, Spectrum
+from maspim.exporting.from_mcf.batch_processor import BatchProcessor
 from maspim.exporting.sqlite_mcf_communicator.hdf import Hdf5Handler
 from maspim.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
-from maspim.exporting.from_mcf.helper import get_mzs_for_limits, find_polycalibration_spectrum
+from maspim.exporting.from_mcf.helper import get_mzs_for_limits, find_polycalibration_spectrum, Spectrum, \
+    apply_calibration, apply_calibration_mz
 from maspim.res.calibrants import get_calibrants
-from maspim.util import Convenience
 from maspim.util.convenience import check_attr, MzUtility, DFolderManager
 from maspim.project.msi_spot_helpers import get_rxy, get_spots, ImagingInfoXML
 
@@ -131,10 +133,9 @@ class Spectra(DFolderManager, MzUtility):
 
     Example Usage
     -------------
-    >>> from maspim import ReadBrukerMCF
     >>> from maspim import Spectra
     Create a reader
-    >>> reader = ReadBrukerMCF('path/to/your/d_folder.d')
+    >>> reader = RtmsBrukerMCFReader('path/to/your/d_folder.d')
     Providing the reader is only necessary the first time an object is instanciated for a folder,
     afterward a reader will be initiated from the stored hdf5 file automatically, when used through
     the get_project class (recommended). This guide only discusses steps when used on its own. For
@@ -202,7 +203,7 @@ class Spectra(DFolderManager, MzUtility):
     _indices: np.ndarray[int] = None
     _limits: tuple[float, float] = None
     _mzs: np.ndarray[float] = None
-    _delta_mz: float = None
+    _is_evenly_spaced: bool = None
     _intensities: np.ndarray[float] = None
     _tic: np.ndarray[float] = None
 
@@ -233,7 +234,6 @@ class Spectra(DFolderManager, MzUtility):
 
     _save_in_d_folder: bool = True
     _save_attrs: set[str] = {
-        '_delta_mz',
         '_mzs',
         '_intensities',
         '_tic',
@@ -259,206 +259,53 @@ class Spectra(DFolderManager, MzUtility):
 
     def __init__(
             self,
-            *,
-            reader: ReadBrukerMCF | Hdf5Handler = None,
-            limits: tuple[float, float] = None,
-            delta_mz: float = 1e-4,
-            indices: Iterable[int] = None,
-            initiate: bool = True,
-            path_d_folder: str = None
-    ) -> None:
-        """
-        Initiate the object.
-
-        Either pass a reader or load it from the specified d_folder.
-
-        Parameters
-        ----------
-        reader : ReadBrukerMCF | hdf5Handler | None, optional
-            Reader to obtain metadata and spectra from disk. The default is None.
-        limits : tuple[float], optional
-            mz range of spectra. The default is None. This defaults to setting
-            the limits with parameters from the QTOF.
-        delta_mz : float, optional
-            Used to resample the spectra when combining to the summed
-            spectrum. The default is 1e-4.
-        indices : Iterable, optional
-            Indices of spectra to be summed. This can be used to only sum up a
-            subset of spectra. The default is None and results in summing up
-            all spectra.
-        path_d_folder : str | None, optional
-            folder with data. The default is str | None. Only necessary if reader
-            is not passed.
-
-        Returns
-        -------
-        None.
-
-        """
-        initiate = self._set_files(reader, path_d_folder, initiate)
-        self._delta_mz: float = delta_mz
-        if initiate:
-            self._initiate(reader, indices, limits)
-        else:
-            if indices is not None:
-                self._indices: np.ndarray[int] = np.array(indices)
-            if limits is not None:
-                self._limits: tuple[float, float] = _as_limits(limits)
+            path_folder: str = None,
+    ):
+        super().__init__(path_folder=path_folder)
 
     @classmethod
-    def load_from_file(cls, path_folder: str = None, path_file: str = None, tag: str = None):
-        assert (path_folder is not None) ^ (
-                    path_file is not None), 'provide either path_folder or path_file (but not both)'
-        if (path_file is not None) and (tag is not None):
-            logger.warning('tag is ignored when loading from file')
-
-        new = cls(path_d_folder=path_folder, initiate=False)
-        new._pre_load()
-        if path_folder is not None:
-            path_file = new.get_save_file(path_folder=path_folder, tag=tag)
-        new.load(path_file=path_file, tag=tag)
-        new._post_load()
+    def _from_rtms_reader(cls, reader: RtmsBrukerMCFReader) -> Self:
+        """
+        By default, use reader casi window as limits and mz values from reader, if they are the same. If mz values
+        are not all the same, set_mz_values must be called"""
+        new = cls(path_folder=reader.mcfdir)
+        new._indices = reader.indices.copy()
+        new._limits = reader.casi_window
+        try:
+            new._mzs = reader.mzs.copy()
+            new._mzs = new._mzs[(new._mzs >= new._limits[0]) & (new._mzs <= new._limits[1])]
+            new._intensities = np.zeros_like(new._mzs)
+        except ValueError:
+            logger.warning('Unable to set mzs from reader, because not all spectra use the same calibration parameters.')
         return new
 
-    def _from_reader(self, reader: ReadBrukerMCF | Hdf5Handler) -> None:
-        """
-        Inherit indices and limits from reader if self does not have them.
+    @classmethod
+    def _from_hdf5(cls, hdf5_handler: Hdf5Handler) -> Self:
+        new = cls(path_folder=hdf5_handler.path_folder)
+        new._indices = hdf5_handler.indices.copy()
+        new._limits = hdf5_handler.limits
+        new._mzs = hdf5_handler.mzs.copy()
+        new._mzs = new._mzs[(new._mzs >= new._limits[0]) & (new._mzs <= new._limits[1])]
+        new._intensities = np.zeros_like(new._mzs)
+        return new
 
-        This method also attempts to set the mz values from the limits.
-        """
-
-        def try_inherit(attr: str) -> None:
-            """Inherit attribute if self does not but reader does have it"""
-            private_attr = f'_{attr}'
-            if check_attr(self, private_attr):
-                return
-            if not check_attr(reader, attr):
-                return
-
-            logger.info(f'inherited {attr} from reader')
-            setattr(self, private_attr, getattr(reader, attr))
-
-        try_inherit('indices')
-        try_inherit('limits')
-        if check_attr(self, '_limits'):
-            self._limits = _as_limits(self._limits)
-
-        # set mzs
-        if not check_attr(self, '_mzs') and check_attr(self, '_limits'):
-            mzs: np.ndarray[float] = get_mzs_for_limits(self._limits, self._delta_mz)
-            # get_mzs_for_limits may extend beyond the limits, mzs are always within the limits
-            self._mzs = mzs[(mzs >= self._limits[0]) & (mzs <= self._limits[1])]
-
-    def _set_files(
-            self,
-            reader: ReadBrukerMCF | Hdf5Handler | None,
-            path_d_folder: str | None,
-            initiate: bool,
-    ) -> bool:
-        assert (reader is not None) or (path_d_folder is not None), \
-            'Either pass a reader or the corresponding d-folder'
-        if reader is not None:
-            assert isinstance(reader, ReadBrukerMCF | Hdf5Handler), \
-                'Reader must be an instance of ReadBrukerMCF or hdf5Handler'
-        if path_d_folder is not None:
-            assert isinstance(path_d_folder, str), \
-                'Path d_folder must be an instance of str'
-        assert initiate in (True, False), \
-            'Initiate must be True or False'
-
-        if (reader is None) and initiate:
-            logger.warning('cannot initiate without a reader')
-            initiate = False
-
-        if path_d_folder is not None:
-            path_folder, d_folder = os.path.split(path_d_folder)
-        elif reader is not None:
-            # Hdf5Handler has no path_d_folder, but its file is stored in the d-folder
-            path_folder, d_folder = os.path.split(
-                getattr(reader, 'path_d_folder', None) or reader.path_folder
-            )
+    @classmethod
+    def from_reader(cls, reader: Hdf5Handler | RtmsBrukerMCFReader):
+        if isinstance(reader, RtmsBrukerMCFReader):
+            return cls._from_rtms_reader(reader)
+        elif isinstance(reader, Hdf5Handler):
+            return cls._from_hdf5(reader)
         else:
-            raise NotImplementedError("Internal error, please report.")
-        self.path_folder = path_folder
-        self.d_folder = d_folder
+            raise TypeError(f'Unsupported reader type: {type(reader)}')
 
-        return initiate
-
-    def _initiate(
-            self,
-            reader: ReadBrukerMCF | Hdf5Handler,
-            indices: Iterable[int] | None,
-            limits: tuple[float, float] | None
-    ) -> None:
-        """
-        Set limits and masses based on metadata from the reader.
-
-        Parameters
-        ----------
-        reader: ReadBrukerMCF | Hdf5Handler
-            Reader from which to pull the metadata.
-        indices: Iterable[int] | None
-            Indices to be used. None defaults to using all of them.
-        limits: tuple[float, float] | None
-            mz limits of the spectra. None defaults to getting the limits from the QTOF
-            metadata.
-
-        Notes
-        -----
-        This method defines the following attribute(s):
-        mzs: np.ndarray[float]
-            mz values of the reader within the limits (not necessarily evenly
-            spaced, e.g. for the native mzs of the pyrtms reader)
-        intensities: np.ndarray[float]
-            Container for summed up intensities with the same shape as mzs.
-        limits : tuple[float, float]
-            mz limits of the spectra.
-        indices : np.ndarray[int]
-            Indices of the spectra to use.
-        """
-        type_reader: type = type(reader)
-        is_rtms: bool = type_reader is ReadBrukerMCF
-
-        assert is_rtms or (type_reader is Hdf5Handler), \
-            (f"Reader must be either a hdf5Handler or ReadBrukerMCF instance. "
-             f"You provided {type_reader}")
-        assert (indices is None) or (len(indices) > 0), \
-            f"indices must either be None or of non-zero length. You provided {indices}."
-        assert (limits is None) or ((len(limits) == 2) and limits[0] < limits[1]), \
-            (f'limits must either be None or contain an upper and lower bound '
-             f'with upper != lower, you provided {limits}.')
-
-        if indices is None:
-            if not check_attr(reader, 'indices'):
-                reader.create_indices()
-            indices = reader.indices
-        self._indices = np.array(indices)
-        if limits is None:
-            if not check_attr(reader, 'limits'):
-                reader.set_casi_window()
-            limits = reader.limits
-        self._limits = _as_limits(limits)
-        if (self._limits[0] < reader.mzs[0]) or (self._limits[1] > reader.mzs[-1]):
-            logger.warning(
-                f'limits {self._limits} extend beyond the mzs of the reader '
-                f'({reader.mzs[0]:.4f}, {reader.mzs[-1]:.4f}), mzs will only cover '
-                f'the overlap'
-            )
-        # crop using limits, mzs are always within the limits
-        mzs_in_limits = (reader.mzs >= self._limits[0]) & (reader.mzs <= self._limits[1])
-        assert np.any(mzs_in_limits), \
-            f'none of the mzs of the reader are within the limits {self._limits}'
-        # copy, reader.mzs may be the read-only array shared with pyrtms
-        self._mzs = reader.mzs[mzs_in_limits].copy()
-        self._intensities = np.zeros_like(self._mzs)
-        # integrals (TIC, areas) use delta_mz, so it has to match the sampling of the mzs
-        spacing: float = float(np.median(np.diff(self._mzs)))
-        if not np.isclose(spacing, self._delta_mz, rtol=1e-3):
-            logger.info(
-                f'using the sampling interval of the reader ({spacing * 1e3:.2f} mDa) '
-                f'instead of delta_mz={self._delta_mz * 1e3:.2f} mDa'
-            )
-            self._delta_mz = spacing
+    @property
+    def is_evenly_spaced(self) -> bool | None:
+        if self._is_evenly_spaced is None:
+            if self._mzs is None:
+                return None
+            diffs = np.diff(self._mzs)
+            self._is_evenly_spaced = np.allclose(diffs[1:], diffs[0])
+        return self._is_evenly_spaced
 
     def _pre_save(self):
         # only save line spectra, if both exist
@@ -483,27 +330,63 @@ class Spectra(DFolderManager, MzUtility):
         assert check_attr(self, '_indices')
         return self._indices
 
-    @indices.setter
-    def indices(self, indices: Iterable[int]) -> None:
-        self._indices = np.array(indices)
-
     @property
     def intensities(self) -> np.ndarray[float]:
         assert check_attr(self, '_intensities')
         return self._intensities
-
-    @intensities.setter
-    def intensities(self, intensities: np.ndarray[float]) -> None:
-        self._intensities = intensities
 
     @property
     def mzs(self) -> np.ndarray[float]:
         assert check_attr(self, '_mzs')
         return self._mzs
 
-    @mzs.setter
-    def mzs(self, mzs: np.ndarray[float]) -> None:
-        self._mzs = mzs
+    def set_mzs(self, mzs: Iterable[float]) -> None:
+        self._mzs = np.array(mzs)
+
+    def set_mzs_from_limits_and_spacing(self, delta_mz: float, limits: tuple[float, float] = None):
+        if limits is None:
+            limits = self.limits
+        self._mzs = get_mzs_for_limits(limits, delta_mz)
+
+    def set_mzs_from_reader(self, reader: RtmsBrukerMCFReader, min_dmz=1e-4, batch_size=1000, show_progress=False):
+        """Intended to be used if reader is Rtms with not all the same calibration parameters"""
+        raise NotImplementedError('Not implemented yet, no data to test this on')
+        if reader.all_mz_values_same and False:
+            self._mzs = reader.mzs.copy()
+            if self._limits is not None:
+                self._mzs = self._mzs[(self._mzs >= self._limits[0]) & (self._mzs <= self._limits[1])]
+            self._intensities = np.zeros_like(self._mzs)
+            return
+
+        # TODO: is this always the same?
+        #  likely controlled by size but likely some constant overhead, so not sure how to directly calculate num_values from size
+        if not np.allclose(reader.spotTable.loc[:, 'size'].values[1:], reader.spotTable.loc[:, 'size'].values[0]):
+            logger.warning('Not all spectra have the same number of values. Further inspection is recommended.')
+        num_mz_values = reader.get_spectrum(reader.indices[0], return_mzs=False)[1].shape[0]
+        # calculate coefficients
+        fhigh_vec: np.ndarray[float] = reader.spotTable.frequencyHigh.values
+        slope_vec: np.ndarray[float] = reader.spotTable.frequencyWidth.values / reader.spotTable.loc[:, 'size'].values
+        offset_vec: np.ndarray[float] = reader.spotTable.frequencyWidth.values - reader.spotTable.beta.values
+        shift_vec: np.ndarray[float] = reader.spotTable.alpha.values / fhigh_vec
+        # collect all mz values, sort and bin them
+        n = len(fhigh_vec)
+
+        mz_indices = np.arange(num_mz_values)
+
+        bin_chunks = []
+        for fhigh, slope, offset, shift in tqdm(
+                zip(fhigh_vec, slope_vec, offset_vec, shift_vec),
+                desc='determining mz bins',
+                disable=not show_progress,
+                total=fhigh_vec.shape[0]
+        ):
+            mzs = fhigh / (mz_indices * (-slope) + offset) + shift
+            bin_chunks.append(np.rint(mzs / min_dmz).astype(np.int64))
+        mz_bins = np.unique(np.concatenate(bin_chunks)) * min_dmz
+        self._mzs = np.array(sorted(mz_bins), dtype=np.float64)
+        if self._limits is not None:
+            self._mzs = self._mzs[(self._mzs >= self._limits[0]) & (self._mzs <= self._limits[1])]
+        self._intensities = np.zeros_like(self._mzs)
 
     @property
     def limits(self):
@@ -512,45 +395,26 @@ class Spectra(DFolderManager, MzUtility):
 
     @property
     def delta_mz(self) -> float:
-        assert check_attr(self, '_delta_mz')
-        return self._delta_mz
-
-    @delta_mz.setter
-    def delta_mz(self, delta_mz: float) -> None:
-        self._delta_mz = delta_mz
+        if not self.is_evenly_spaced:
+            raise ValueError('mz values are not evenly spaced')
+        return self._mzs[1] - self._mzs[0]
 
     @property
     def noise_level(self) -> np.ndarray[float]:
         assert check_attr(self, '_noise_level'), 'call set_noise_level first'
         return self._noise_level
 
-    @noise_level.setter
-    def noise_level(self, noise_level: np.ndarray[float]) -> None:
-        self._noise_level = noise_level
-
     @property
     def peaks(self) -> np.ndarray[int]:
         return self._peaks
-
-    @peaks.setter
-    def peaks(self, peaks: Iterable[int]) -> None:
-        self._peaks = np.array(peaks, dtype=int)
 
     @property
     def peak_properties(self) -> dict[str, np.ndarray] | None:
         return self._peak_properties
 
-    @peak_properties.setter
-    def peak_properties(self, peak_properties: dict[str, np.ndarray] | None) -> None:
-        self._peak_properties = peak_properties
-
     @property
     def peak_setting_parameters(self) -> dict[str, Any] | None:
         return self._peak_setting_parameters
-
-    @peak_setting_parameters.setter
-    def peak_setting_parameters(self, params: dict[str, Any] | None) -> None:
-        self._peak_setting_parameters = params
 
     @property
     def peaks_SNR(self) -> np.ndarray[float]:
@@ -562,25 +426,13 @@ class Spectra(DFolderManager, MzUtility):
     def line_spectra(self) -> np.ndarray[float] | None:
         return self._line_spectra
 
-    @line_spectra.setter
-    def line_spectra(self, line_spectra: np.ndarray[float] | None) -> None:
-        self._line_spectra = line_spectra
-
     @property
     def binning_by(self) -> str | None:
         return self._binning_by
 
-    @binning_by.setter
-    def binning_by(self, binning_by: str | None) -> None:
-        self._binning_by = binning_by
-
     @property
     def feature_table(self) -> pd.DataFrame | None:
         return self._feature_table
-
-    @feature_table.setter
-    def feature_table(self, feature_table: pd.DataFrame | None) -> None:
-        self._feature_table = feature_table
 
     @property
     def _n_spectra(self) -> int:
@@ -590,6 +442,37 @@ class Spectra(DFolderManager, MzUtility):
     def _n_peaks(self) -> int:
         assert check_attr(self, '_peaks')
         return len(self._peaks)
+
+    def _nearest_mz_idx(self, mzs: float | Iterable[float]) -> np.ndarray[int]:
+        """
+        Return the index of the closest value in self.mzs for each mz (same
+        result as argmin(abs(self.mzs - mz)), but using that mzs are sorted).
+        """
+        query: np.ndarray[float] = np.atleast_1d(np.asarray(mzs, dtype=float))
+        idxs: np.ndarray[int] = np.clip(
+            np.searchsorted(self.mzs, query), 1, len(self.mzs) - 1
+        )
+        # step to the left neighbour if it is at least as close (argmin picks the first)
+        idxs -= (query - self.mzs[idxs - 1]) <= (self.mzs[idxs] - query)
+        return idxs
+
+    def _kernel_windows(
+            self,
+            kernel_params: np.ndarray[float] | None = None,
+            n_sigma: float = KERNEL_N_SIGMA
+    ) -> tuple[np.ndarray[int], np.ndarray[int]]:
+        """
+        Return start and stop indices in self.mzs (as for a slice) of the
+        windows within n_sigma standard deviations of each kernel center.
+        """
+        if kernel_params is None:
+            kernel_params = self.kernel_params
+        kernel_params = np.atleast_2d(kernel_params)
+        # columns: mz_c, H, sigma (gaussian) or mz_c, H, sigma_l, sigma_r (bigaussian)
+        mz_c: np.ndarray[float] = kernel_params[:, 0]
+        starts = np.searchsorted(self.mzs, mz_c - n_sigma * kernel_params[:, 2], side='left')
+        stops = np.searchsorted(self.mzs, mz_c + n_sigma * kernel_params[:, -1], side='right')
+        return starts, stops
 
     def reset_binning(self) -> None:
         """Reset the binnend intensities"""
@@ -633,28 +516,26 @@ class Spectra(DFolderManager, MzUtility):
 
     def get_spectrum(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
             index: int | str,
-            only_intensity: bool,
-            calibrate: bool = None,
-            **kwargs: Any
+            intensities_only: bool,
+            recalibrate: bool,
+            resample: bool = None
     ) -> np.ndarray[float] | Spectrum:
         """
         Function to obtain a spectrum or its intensities from a reader.
-        
-        This method is useful to manage the calibration and whether a Spectrum
-        object or just its intensities should be returned. The returned spectrum
-        is guaranteed to have the same sample points as the spectra instance.
 
         Parameters
         ----------
-        reader : ReadBrukerMCF | Hdf5Handler
+        reader : RtmsBrukerMCFReader | Hdf5Handler
             Reader object from which to obtain the spectrum.
         index : int | str
             Index of the spectrum to obtain, as used by the reader (an element
             of self.indices, not necessarily the position in the array).
         only_intensity : bool
             Whether to return only the intensity of the spectrum object.
+        recalibrate: bool
+            Whether the previously defined calibration shall be applied before returning the intensities
         **kwargs : Any
             Additional keyword arguments to be passed on to reader.get_spectrum.
             Will be ignored if only_intensities is set to True.
@@ -666,41 +547,105 @@ class Spectra(DFolderManager, MzUtility):
             accordingly.
 
         """
-        # Ensure index is int
-        index: int = int(index)
-
-        # Determine whether to use calibration functions on spectra
-        if calibrate is None:
-            calibrate: bool = check_attr(self, '_calibration_parameters')
-
-        if calibrate:
+        if recalibrate:
             # rows of calibration parameters follow the order of self.indices
+            if self._calibration_parameters is None:
+                raise ValueError(
+                    'calibration parameters have not been set. '
+                    'Please set them before calling get_spectrum with use_calibration=True.'
+                )
             poly_coeffs: np.ndarray = self._calibration_parameters[
                 self.spectrum_idx2array_idx(index), :
             ]
         else:
             poly_coeffs: None = None
 
-        if only_intensity:
-            spectrum: np.ndarray[float] = \
-                reader.get_spectrum_resampled_intensities(
-                    index=index,
-                    poly_coeffs=poly_coeffs,
-                    limits=self.limits
-                )
+        if resample is None:
+            # determine from whether all spectra in the reader have the same mz values
+            resample = not reader.all_mz_values_same
+
+
+        if poly_coeffs is not None:
+            # readers crop to the limits before calibrating, which shifts the mzs, so
+            # read a wider window such that the calibrated spectrum still covers the limits
+            # (resampling to self.mzs crops to the limits afterward)
+            margin = np.max(np.abs(np.polyval(poly_coeffs, self.limits)))
         else:
-            spectrum: Spectrum = reader.get_spectrum(
-                index=index,
+            margin = 0
+        get_intensity_only: bool = intensities_only and (not recalibrate) and (not resample)
+        mzs, intensities = reader.get_spectrum(
+            index=int(index),  # Ensure index is int
+            limits=(self.limits[0] - margin, self.limits[1] + margin),
+            intensities_only=get_intensity_only
+        )
+
+        if recalibrate:
+            mzs = apply_calibration_mz(
+                mzs=mzs,
                 poly_coeffs=poly_coeffs,
-                limits=self.limits,
-                **kwargs
+                inplace=False
             )
-            spectrum.resample(self.mzs)
-        return spectrum
+
+        if margin > 0 or recalibrate:
+            idx_lower = np.searchsorted(mzs, self.limits[0], side='left')
+            idx_upper = np.searchsorted(mzs, self.limits[1], side='right')
+            if mzs is not None:
+                mzs = mzs[idx_lower:idx_upper]
+            intensities = intensities[idx_lower:idx_upper]
+        if recalibrate or resample:  # can do this in one go
+            intensities = np.interp(self.mzs, mzs, intensities)
+
+        if intensities_only:
+            mzs = None
+        return mzs, intensities
+
+    def _iter_batches(
+            self,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
+            indices: Iterable[int] | None = None,
+            calibrate: bool | None = None,
+            **kwargs: Any
+    ) -> Iterator[tuple[np.ndarray[int], np.ndarray[float]]]:
+        """
+        Iterate over spectra in batches, calibrated and resampled to self.mzs.
+
+        Parameters
+        ----------
+        reader : RtmsBrukerMCFReader | Hdf5Handler
+            Reader from which to obtain the spectra.
+        indices: Iterable[int], optional
+            Indices of the spectra (as used by the reader). Defaults to self.indices.
+        calibrate: bool, optional
+            Whether to calibrate spectra. Defaults to calibrating if calibration
+            parameters have been set.
+        kwargs: Any
+            Additional keyword arguments for BatchProcessor (e.g. n_jobs, show_progress, desc).
+
+        Yields
+        ------
+        positions: np.ndarray[int]
+            Positions in indices of the spectra in this batch.
+        intensities: np.ndarray[float]
+            Intensities with shape (len(positions), len(self.mzs)).
+        """
+        if indices is None:
+            indices = self.indices
+        indices = np.asarray(indices)
+        if calibrate is None:
+            calibrate = check_attr(self, '_calibration_parameters')
+        poly_coeffs: np.ndarray[float] | None = (
+            self._calibration_parameters[self.spectrum_idx2array_idx(indices), :]
+            if calibrate else None
+        )
+        batch_processor: BatchProcessor = BatchProcessor(
+            reader, mzs=self.mzs, limits=self.limits, **kwargs
+        )
+        yield from batch_processor.iter_batches(indices, poly_coeffs=poly_coeffs)
 
     def add_all_spectra(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
+            recalibrate: bool,
             show_progress: bool = False
     ) -> None:
         """
@@ -708,37 +653,40 @@ class Spectra(DFolderManager, MzUtility):
 
         Parameters
         ----------
-        reader : ReadBrukerMCF | Hdf5Handler
+        reader : RtmsBrukerMCFReader | Hdf5Handler
             Reader from which to obtain the spectra.
         """
-        # inherit indices and limits if not set before
-        self._from_reader(reader)
-        assert check_attr(self, '_indices'), \
-            ('No indices were set and also none were found in the reader. '
+        if not check_attr(self, '_indices'):
+            raise AttributeError('No indices were set and also none were found in the reader. '
              'Make sure to initialize the reader correctly')
-        assert check_attr(self, '_mzs'), \
-            ('instance does not have mz values and it was also not possible to '
+        if not check_attr(self, '_mzs'):
+            raise AttributeError('instance does not have mz values and it was also not possible to '
              'get the limits from the reader. Please make sure to initialize '
              'either the instance with limits or the reader')
-
-        if not check_attr(reader, 'mzs'):
-            reader.mzs = np.array(self.mzs)
 
         self.reset_intensities()
 
         # iterate over all spectra
-        for i, index in tqdm(
-                enumerate(self.indices),
-                desc='Adding spectra',
-                smoothing=50 / self._n_spectra,
-                total=self._n_spectra,
+        # for rows, intensities in self._iter_batches(
+        #         reader, desc='Adding spectra', show_progress=show_progress
+        # ):
+        #     self._intensities += intensities.sum(axis=0)
+        #     self._tic[rows] = np.trapezoid(intensities, x=self.mzs, axis=1)
+        for idx in tqdm(
+                self.indices,
+                desc='Adding spectra', smoothing=50 / self._n_spectra,
+                total=self.indices.shape[0],
                 disable=not show_progress
         ):
-            spectrum: np.ndarray[float] = self.get_spectrum(
-                reader=reader, index=index, only_intensity=True
+            _mzs, _ints = self.get_spectrum(
+                reader=reader,
+                index=idx,
+                recalibrate=recalibrate,
+                resample=reader.all_mz_values_same or recalibrate,
+                intensities_only=False
             )
-            self.add_spectrum(spectrum)
-            self._tic[i] = np.trapezoid(spectrum, dx=self.delta_mz)
+            self._intensities += _ints
+            self._tic[idx] = np.trapezoid(_ints, x=self.mzs)
 
         # due to floating point precision?
         self._intensities[self._intensities < 0] = 0
@@ -747,7 +695,7 @@ class Spectra(DFolderManager, MzUtility):
 
     def add_all_spectra_aligned(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
             show_progress: bool = False
     ) -> None:
         """
@@ -756,20 +704,16 @@ class Spectra(DFolderManager, MzUtility):
         
         Parameters
         ----------
-        reader : ReadBrukerMCF | Hdf5Handler
+        reader : RtmsBrukerMCFReader | Hdf5Handler
             Reader from which to obtain the spectra.
         """
-        self.reset_intensities()
-
-        # inherit indices and limits if not set before
-        self._from_reader(reader)
-        assert check_attr(self, '_indices'), \
-            ('No indices were set and also none were found in the reader. '
-             'Make sure to initialize the reader correctly')
-        assert check_attr(self, '_mzs'), \
-            ('instance does not have mz values and it was also not possible to '
-             'get the limits from the reader. Please make sure to initialize '
-             'either the instance with limits or the reader')
+        if not check_attr(self, '_indices'):
+            raise AttributeError('No indices were set and also none were found in the reader. '
+                                 'Make sure to initialize the reader correctly')
+        if not check_attr(self, '_mzs'):
+            raise AttributeError('instance does not have mz values and it was also not possible to '
+                                 'get the limits from the reader. Please make sure to initialize '
+                                 'either the instance with limits or the reader')
 
         self.reset_intensities()
 
@@ -795,7 +739,7 @@ class Spectra(DFolderManager, MzUtility):
                 # intensities have to be on the (shifted) grid of the sum
                 spectrum.resample(self.mzs)
             self.add_spectrum(spectrum.intensities)
-            self._tic[it] = np.trapezoid(spectrum.intensities, dx=self.delta_mz)
+            self._tic[it] = np.trapezoid(spectrum.intensities, x=self.mzs)
 
         self._intensities[self._intensities < 0] = 0
 
@@ -839,7 +783,7 @@ class Spectra(DFolderManager, MzUtility):
             divided by the number of spectra.
 
         """
-
+        # TODO: is this good enough for unevenly spaced data?
         def estimate_peaks_width() -> int:
             """Estimate the minimum filter size from the peak widths."""
             prominence = .1 * np.median(self.intensities)
@@ -857,7 +801,7 @@ class Spectra(DFolderManager, MzUtility):
             window_size: int = estimate_peaks_width()
             logger.info(
                 'estimated window size for baseline subtraction is ' +
-                f'{self._delta_mz * window_size * 1e3:.1f} mDa'
+                f'{window_size} data points'
             )
         elif window_size == 0:  # subtract minimum
             base_lvl: float = self.intensities.min()
@@ -867,7 +811,7 @@ class Spectra(DFolderManager, MzUtility):
             return
         # convert Da to number of sample points
         elif (window_size < 1) and isinstance(window_size, float):
-            dmz: float = self.mzs[1] - self.mzs[0]
+            dmz: float = float(np.median(np.diff(self.mzs)))
             window_size: int = round(window_size / dmz)
         ys_min: np.ndarray[float] = minimum_filter(self.intensities, size=window_size)
         # run median filter on that
@@ -891,7 +835,7 @@ class Spectra(DFolderManager, MzUtility):
     def dataanalysis_like_export(
             self,
             path_file_export: str,
-            reader: ReadBrukerMCF | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
             image_info: ImagingInfoXML,
             min_intensity: int=10_000,
             min_snr: float=4,  # default value from DataAnalysis, although different meaning
@@ -922,24 +866,25 @@ class Spectra(DFolderManager, MzUtility):
         with open(path_file_export, 'w') as f:
             # first line is the number of pixels
             f.write(f'{n_pixels}\n')
-            for coord, index in tqdm(zip(coordinates, pixel_indices), desc='Exporting peaks', total=n_pixels):
-                spec: Spectrum = self.get_spectrum(reader=reader, index=index, only_intensity=False, calibrate=False)
-                # pick peaks
-                peak_idcs, *_ = find_peaks(x=spec.intensities, height=min_intensity)
-                # set other properties
-                peak_ints = spec.intensities[peak_idcs]
-                peak_mzs = spec.mzs[peak_idcs]
-                # need to find closest values since spectrum is not resampled
-                snrs = np.array([
-                    peak_int / self._noise_level[np.argmin(np.abs(self.mzs - peak_mz))]
-                    for peak_mz, peak_int in zip(peak_mzs, peak_ints)
-                ])
-                mask_above_snr = snrs >= min_snr
-                n_peaks = mask_above_snr.sum()
-                line = [coord, n_peaks]
-                for peak_mz, peak_int, snr in zip(peak_mzs[mask_above_snr], peak_ints[mask_above_snr], snrs[mask_above_snr]):
-                    line.extend([peak_mz, peak_int, snr])
-                f.write(f'{";".join(map(str, line))}\n')
+            for positions, spectra in self._iter_batches(
+                    reader, indices=np.asarray(pixel_indices), calibrate=False,
+                    desc='Exporting peaks', show_progress=True
+            ):
+                for position, intensities in zip(positions, spectra):
+                    coord = coordinates[position]
+                    # pick peaks
+                    peak_idcs, *_ = find_peaks(x=intensities, height=min_intensity)
+                    # set other properties
+                    peak_ints = intensities[peak_idcs]
+                    peak_mzs = self.mzs[peak_idcs]
+                    # spectrum is resampled to self.mzs, so indices match the noise level
+                    snrs = peak_ints / self._noise_level[peak_idcs]
+                    mask_above_snr = snrs >= min_snr
+                    n_peaks = mask_above_snr.sum()
+                    line = [coord, n_peaks]
+                    for peak_mz, peak_int, snr in zip(peak_mzs[mask_above_snr], peak_ints[mask_above_snr], snrs[mask_above_snr]):
+                        line.extend([peak_mz, peak_int, snr])
+                    f.write(f'{";".join(map(str, line))}\n')
 
     def require_noise_level(self, overwrite=False, **kwargs) -> np.ndarray[float]:
         if overwrite:
@@ -996,7 +941,7 @@ class Spectra(DFolderManager, MzUtility):
         n_mzs: int = len(b)
 
         lags: np.ndarray[float] = correlation_lags(n_mzs, n_mzs, mode='full')
-        masses: np.ndarray[float] = diffs[0] * lags
+        masses: np.ndarray[float] = np.median(diffs) * lags
         corrs: np.ndarray[float] = correlate(a, b, mode='full')
         if max_mass_offset is not None:
             mask: np.ndarray[bool] = np.abs(masses) <= max_mass_offset
@@ -1097,7 +1042,7 @@ class Spectra(DFolderManager, MzUtility):
 
     def set_calibration_functions(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
             calibrants_mz: Iterable[float] = None,
             search_range: float = 5e-3,
             calib_snr_threshold: float = 4,
@@ -1208,12 +1153,9 @@ class Spectra(DFolderManager, MzUtility):
                 'has been performed already.'
             )
 
-        assert isinstance(reader, ReadBrukerMCF | Hdf5Handler), \
-            f'reader must be a ReadBrukerMCF or hdf5Handler instance, not {type(reader)}'
+        assert isinstance(reader, RtmsBrukerMCFReader | Hdf5Handler), \
+            f'reader must be a RtmsBrukerMCFReader or hdf5Handler instance, not {type(reader)}'
         assert check_attr(reader, 'indices'), 'call reader.set_indices()'
-        assert check_attr(reader, 'mzs') and np.allclose(reader.mzs, self.mzs), \
-            ('Make sure the mzs of the reader match that of the spectra object '
-             '(consider calling reader.set_mzs(spec.mzs))')
         if calib_snr_threshold > 0:
             assert check_attr(self, '_noise_level'), \
                 ('This step has to be performed after subtracting the baseline '
@@ -1239,21 +1181,18 @@ class Spectra(DFolderManager, MzUtility):
             dtype=bool
         )
 
-        # iterate over all spectra
-        for it, index in tqdm(
-                enumerate(self.indices),
-                total=n_spectra,
-                desc='Finding calibration parameters',
-                smoothing=50 / n_spectra,
-                disable=not show_progress
+        # iterate over all (uncalibrated) spectra, calib_spec uses it and index
+        for rows, intensities in self._iter_batches(
+                reader, calibrate=False, desc='Finding calibration parameters',
+                show_progress=show_progress
         ):
-            spectrum: np.ndarray[float] = \
-                reader.get_spectrum_resampled_intensities(index=index)
-            ret = calib_spec(spectrum)
-            if ret == -1:
-                continue
-            p, n_coeffs = ret
-            calibration_parameters[it, n_calibration_parameters - n_coeffs:] = p
+            for it, spectrum in zip(rows, intensities):
+                index = self.indices[it]
+                ret = calib_spec(spectrum)
+                if ret == -1:
+                    continue
+                p, n_coeffs = ret
+                calibration_parameters[it, n_calibration_parameters - n_coeffs:] = p
 
         calibrant_matches: dict[float, float] = dict(zip(
             calibrants_mz,
@@ -1423,14 +1362,9 @@ class Spectra(DFolderManager, MzUtility):
         heights: np.ndarray[float] = self.get_heights()
         # noise level is assumed to be the same for each spectrum
         # get noise levels at centers of each peak
-        noise_levels: np.ndarray[float] = np.array([
-            self.noise_level[
-                np.argmin(
-                    np.abs(self.mzs - mz_c)
-                )
-            ]
-            for mz_c in self.kernel_params[:, 0]
-        ])
+        noise_levels: np.ndarray[float] = self.noise_level[
+            self._nearest_mz_idx(self.kernel_params[:, 0])
+        ]
 
         SNRs: np.ndarray[float] = heights / noise_levels
 
@@ -1467,13 +1401,15 @@ class Spectra(DFolderManager, MzUtility):
         kwargs_sidepeaks: Any
             Additional kwargs passed on to set_side_peaks.
         """
+        peaks_snr_threshold = _pop_deprecated_kwarg(
+            kwargs_sidepeaks, 'SNR_threshold', 'peaks_snr_threshold', peaks_snr_threshold, 0
+        )
         # skip filtering of valid peaks if a list of peaks to keep is provided
         skip_filtering: bool = whitelist is not None
 
         if skip_filtering and (
                 (peaks_snr_threshold != 0)
                 or remove_sidepeaks
-                or (peaks_snr_threshold > 0)
                 or (thr_sigma is not None)
         ):
             logger.warning(
@@ -1720,12 +1656,14 @@ class Spectra(DFolderManager, MzUtility):
         if len(sigma_r) > 0:  # bigaussian kernel shape
             bounds_l.append(sigma_r[0] * .8)
             bounds_r.append(sigma_r[0] * 1.2)
+        # initial guess has to be inside the bounds, so use the (possibly halved) sigma
+        p0: list[float] = [mz_c, H, min(sigma, bounds_r[2]), *sigma_r]
         try:
             params, *_ = curve_fit(
                 f=self._kernel_func,
                 xdata=self.mzs[mask],
                 ydata=self.intensities[mask],
-                p0=self._kernel_params[peak_idx, :],
+                p0=p0,
                 bounds=(bounds_l, bounds_r)
             )
         except ValueError as e:
@@ -1874,8 +1812,11 @@ class Spectra(DFolderManager, MzUtility):
                 else:
                     mask_valid[idx] = False
                     continue
-            self._intensities -= self._kernel_func(
-                self.mzs, *self._kernel_params[idx, :]
+            # only subtract the kernel where it is not negligible
+            starts, stops = self._kernel_windows(self._kernel_params[idx, :])
+            window: slice = slice(starts[0], stops[0])
+            self._intensities[window] -= self._kernel_func(
+                self.mzs[window], *self._kernel_params[idx, :]
             )
         if spo and self._warnings_count_peak_fit > 10:
             logger.warning(f'muted {self._warnings_count_peak_fit - 10} more warnings')
@@ -1970,14 +1911,19 @@ class Spectra(DFolderManager, MzUtility):
         # keep copy for plotting
         targets_o = targets.copy()
 
+        outside: np.ndarray[bool] = (targets < self.mzs[0]) | (targets > self.mzs[-1])
+        if np.any(outside):
+            raise ValueError(
+                f'targets {targets[outside]} are outside the mass window '
+                f'({self.mzs[0]:.4f}, {self.mzs[-1]:.4f})'
+            )
+
         tolerances = self._find_tolerances(targets, tolerances, **kwargs)
 
         # set peaks and kernels artificially from the target mzs and tolerances
         if method_peak_center == 'theory':
             self.reset_peaks()
-            self._peaks: np.ndarray[int] = np.array([
-                np.argmin(np.abs(self.mzs - target)) for target in targets
-            ], dtype=int)
+            self._peaks: np.ndarray[int] = self._nearest_mz_idx(targets)
         else:  # closest or highest
             if method_peak_center == 'highest':
                 logger.warning('set_targets has not been tested with method_peak_center="highest" yet')
@@ -2115,57 +2061,110 @@ class Spectra(DFolderManager, MzUtility):
             Factor by which to scale the intensities.
             Options are 'area' and 'height'. Default is area.
         """
+        return self._get_kernels_sparse(norm_mode=norm_mode).toarray()
+
+    def _get_kernels_sparse(
+            self,
+            norm_mode: str = 'area',
+            n_sigma: float = KERNEL_N_SIGMA
+    ) -> csc_matrix:
+        """
+        Return sparse matrix of shape (n_mzs, n_peaks) in which each column
+        corresponds to the intensities of a kernel.
+
+        Kernels are only evaluated within n_sigma standard deviations of their
+        center, which saves memory and time compared to the dense matrix.
+
+        Parameters
+        ----------
+        norm_mode: str, optional
+            Factor by which to scale the intensities.
+            Options are 'area' and 'height'. Default is area.
+        n_sigma: float, optional
+            Width of the window (in standard deviations) in which kernels are
+            evaluated.
+        """
         assert check_attr(self, '_kernel_params'), \
             'call set_kernels() first'
-
-        n_peaks: int = self.kernel_params.shape[0]  # number of identified peaks
 
         if norm_mode == 'area':
             H: float = np.sqrt(2)  # normalization constant
         elif norm_mode == 'height':
             H: float = 1.
         else:
-            raise KeyError('norm_mode must be one of "area", "height", "prob"')
+            raise KeyError('norm_mode must be one of "area", "height"')
 
-        kernels: np.ndarray[float] = np.zeros((n_peaks, len(self.mzs)))
-        # TODO: make use of _kernel_func
-        if self._kernel_shape == 'bigaussian':
-            for idx_peak in range(n_peaks):
-                # x_c, H, sigma_l, sigma_r
-                sigma_l: float = self.kernel_params[idx_peak, 2]
-                sigma_r: float = self.kernel_params[idx_peak, 3]
-                kernels[idx_peak] = bigaussian(
-                    self.mzs,
-                    x_c=self.kernel_params[idx_peak, 0],
-                    H=H,  # normalized kernels
-                    sigma_l=sigma_l,
-                    sigma_r=sigma_r
-                )
-        elif self._kernel_shape == 'gaussian':
-            for idx_peak in range(n_peaks):
-                # x_c, H, sigma
-                sigma: float = self.kernel_params[idx_peak, 2]
-                kernels[idx_peak] = gaussian(
-                    self.mzs,
-                    x_c=self.kernel_params[idx_peak, 0],
-                    H=H,  # normalized kernels
-                    sigma=sigma
-                )
-        return kernels.T
+        n_peaks: int = self.kernel_params.shape[0]  # number of identified peaks
+        starts, stops = self._kernel_windows(n_sigma=n_sigma)
+        rows: list[np.ndarray[int]] = []
+        values: list[np.ndarray[float]] = []
+        for idx_peak in range(n_peaks):
+            window: slice = slice(starts[idx_peak], stops[idx_peak])
+            rows.append(np.arange(starts[idx_peak], stops[idx_peak]))
+            # x_c, H, sigma (or sigma_l, sigma_r), normalized kernels
+            values.append(self._kernel_func(
+                self.mzs[window],
+                self.kernel_params[idx_peak, 0],
+                H,
+                *self.kernel_params[idx_peak, 2:]
+            ))
+        cols: np.ndarray[int] = np.repeat(np.arange(n_peaks), stops - starts)
+        return csc_matrix(
+            (np.concatenate(values or [np.empty(0)]),
+             (np.concatenate(rows or [np.empty(0, dtype=int)]), cols)),
+            shape=(len(self.mzs), n_peaks)
+        )
 
     def update_limits(self, limits: tuple[float, float]) -> None:
-        assert self._kernel_params is not None, \
-            'updating limits is only available after setting kernels'
-        self._limits = limits
-        mask_limits = (self.mzs >= self.limits[0]) & (self.mzs <= self.limits[1])
+        """
+        Narrow the mass window to the new limits.
+
+        All arrays with one value per mz are cropped and peaks (and kernels)
+        outside the new limits are removed. Widening the window is not possible
+        since that would require reading the spectra again. Notice that the TIC
+        still refers to the original window.
+        """
+        new_limits: tuple[float, float] = _as_limits(limits)
+        assert (new_limits[0] >= self.limits[0]) and (new_limits[1] <= self.limits[1]), \
+            f'limits can only be narrowed, current limits are {self.limits}, you provided {new_limits}'
+        mask_limits: np.ndarray[bool] = (self.mzs >= new_limits[0]) & (self.mzs <= new_limits[1])
+        assert np.any(mask_limits), f'no mzs within {new_limits}'
+        # first index inside the new limits, indices into mzs have to be shifted by this
+        offset: int = int(np.argmax(mask_limits))
+        n_mzs_new: int = int(mask_limits.sum())
+
+        if self._peaks is not None:
+            keep: np.ndarray[bool] = mask_limits[np.asarray(self._peaks)]
+            if self._kernel_params is not None:
+                keep &= ((self._kernel_params[:, 0] >= new_limits[0])
+                         & (self._kernel_params[:, 0] <= new_limits[1]))
+            self._apply_peak_mask(keep)
+            self._peaks = self._peaks - offset
+            if self._peak_properties is not None:
+                # properties from find_peaks that are (fractional) indices into mzs
+                for key in ('left_bases', 'right_bases', 'left_ips', 'right_ips'):
+                    if key in self._peak_properties:
+                        self._peak_properties[key] = np.clip(
+                            self._peak_properties[key] - offset, 0, n_mzs_new - 1
+                        )
+
         self._mzs = self.mzs[mask_limits]
         self._intensities = self.intensities[mask_limits]
+        if self._noise_level is not None:
+            self._noise_level = self._noise_level[mask_limits]
+        if self._losses is not None:
+            self._losses = self._losses[:, mask_limits]
+        self._limits = new_limits
+
+        if check_attr(self, '_feature_table'):
+            self.set_feature_table()
 
     def bin_spectra(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler = None,
+            reader: RtmsBrukerMCFReader | Hdf5Handler = None,
             profile_spectra: np.ndarray[float] = None,
             method: Literal['height', 'max', 'area'] = 'height',
+            show_progress: bool = True,
             **_
     ) -> None:
         """
@@ -2173,7 +2172,7 @@ class Spectra(DFolderManager, MzUtility):
 
         Parameters
         ----------
-        reader: ReadBrukerMCF, optional
+        reader: RtmsBrukerMCFReader, optional
             Reader to get the spectra. The default is None. Either reader or
             profile_spectra must be provided.
         profile_spectra: np.ndarray[float], optional
@@ -2222,7 +2221,10 @@ class Spectra(DFolderManager, MzUtility):
             >>>     weighted_signal = spectrum.intensities * bigaussians[idx_peak, :]
             >>>     line_spectrum[idx_peak] = np.sum(weighted_signal) * dmz
             """
-            self._line_spectra[_idx, :] = (_spectrum @ kernels) * dmz
+            # kernels_T is sparse with shape (n_peaks, n_mzs), dmzs are the
+            # widths of the sample points (mzs need not be evenly spaced),
+            # for a batch of spectra (rows) this is a single matrix product
+            self._line_spectra[_idx, :] = (kernels_T @ (_spectrum * dmzs).T).T
 
         def _bin_spectrum_height(
                 _spectrum: np.ndarray[float], _idx: int
@@ -2240,27 +2242,35 @@ class Spectra(DFolderManager, MzUtility):
 
             """
             # pick values of profile spectrum at kernel maxima
-            self._line_spectra[_idx, :] = _spectrum[idxs_mzs_c]
+            self._line_spectra[_idx, :] = _spectrum[..., idxs_mzs_c]
 
-        def _bin_spectrum_max(_spectrum: np.ndarray[float], _idx_spectrum: int) -> None:
-            # 2D matrix with intensities windowed to kernels: each column is the
-            # product of a kernel with the spectrum
+        def _bin_spectrum_max(_spectra: np.ndarray[float], _idxs: np.ndarray[int]) -> None:
+            """Apply _bin_single_spectrum_max to each spectrum (row) of a batch."""
+            for _spectrum, _idx_spectrum in zip(_spectra, _idxs):
+                _bin_single_spectrum_max(_spectrum, _idx_spectrum)
 
-            # vectorized
-            # vals = kernels[1:-1, :] * _spectrum[:, None]
-            # maxs = local_max_fast(vals)
-            # # of the local maxima, take the biggest
-            # self._line_spectra[_idx_spectrum, :] = maxs.max(axis=0)
+        def _bin_single_spectrum_max(_spectrum: np.ndarray[float], _idx_spectrum: int) -> None:
+            """
+            Find intensities of compound as the highest local maximum of the
+            spectrum within one standard deviation of the kernel center.
 
-            # loop
-            # faster than vectorized in this case because we don't have to
-            # modify the big kernels matrix
-            for peak_idx in range(kernels.shape[1]):
-                vals = _spectrum[kernels[:, peak_idx]]
-                peaks, _ = scipy.signal.find_peaks(vals)
-                if len(peaks) == 0:
-                    continue
-                self._line_spectra[_idx_spectrum, peak_idx] = vals[peaks].max()
+            Local maxima are searched once in the entire spectrum, which is
+            equivalent to searching them in each window, except that maxima
+            on the first and last point of a window are excluded.
+            """
+            peaks, _ = scipy.signal.find_peaks(_spectrum)
+            if len(peaks) == 0:
+                return
+            # pad with a dummy value so that every segment boundary is a valid index
+            peak_values: np.ndarray[float] = np.append(_spectrum[peaks], -np.inf)
+            # local maxima within the window are peaks[first[i]:last[i]]
+            first: np.ndarray[int] = np.searchsorted(peaks, window_starts + 1)
+            last: np.ndarray[int] = np.searchsorted(peaks, window_stops - 1)
+            # maximum of each segment [first, last), garbage for empty segments
+            maxs: np.ndarray[float] = np.maximum.reduceat(
+                peak_values, np.column_stack([first, last]).ravel()
+            )[::2]
+            self._line_spectra[_idx_spectrum, :] = np.where(last > first, maxs, 0)
 
         assert len(self._peaks) > 0, 'need at least one peak'
         assert check_attr(self, '_kernel_params'), \
@@ -2270,7 +2280,6 @@ class Spectra(DFolderManager, MzUtility):
         assert method in ('area', 'height', 'max'), \
             f'method must be either "area" or "height" or "max", not {method}'
 
-        indices_spectra: np.ndarray[int] = self.indices
         # number of spectra in mcf file
         n_spectra: int = self._n_spectra
         n_peaks: int = self._n_peaks  # number of identified peaks
@@ -2281,77 +2290,54 @@ class Spectra(DFolderManager, MzUtility):
 
         if method == 'area':
             _bin_spectrum: Callable[[np.ndarray[float], int], None] = _bin_spectrum_area
-            dmz: float = self.delta_mz
-            # precompute (bi)gaussians
-            kernels: np.ndarray[float] = self._get_kernels(norm_mode='area')
+            dmzs: np.ndarray[float] = np.gradient(self.mzs)
+            # precompute (bi)gaussians, sparse with shape (n_peaks, n_mzs)
+            kernels_T = self._get_kernels_sparse(norm_mode='area').T.tocsr()
         elif method == 'height':
             _bin_spectrum: Callable[[np.ndarray[float], int], None] = _bin_spectrum_height
             # indices in mzs corresponding to peak centers
-            mzs_c: np.ndarray[float] = self.kernel_params[:, 0]
-            idxs_mzs_c: np.ndarray[int] = np.array([
-                np.argmin(np.abs(mz_c - self.mzs)) for mz_c in mzs_c
-            ])
+            idxs_mzs_c: np.ndarray[int] = self._nearest_mz_idx(self.kernel_params[:, 0])
         elif method == 'max':
             if self._kernel_shape != 'gaussian':
                 raise NotImplementedError(
                     f'max only implemented for gaussian kernels, not {self._kernel_shape}'
                 )
             _bin_spectrum: Callable[[np.ndarray[float], int], None] = _bin_spectrum_max
-            # from taking 1 sigma interval
-            # H is 1 since g(x = sigma) is required to be 1
-            # from g(x = mu +/- sigma) it follows that g must be bigger than
-            # exp(-1 / 2) inside the kernel window
-            kernels: np.ndarray[float] = (self._get_kernels(norm_mode='height')
-                                          > np.exp(-1 / 2))
-
-            # # set values next to window boundary to inf to exclude from local max
-            # n_rows, n_columns = kernels.shape
-            # # stolen from first_nonzero and last_nonzero
-            # first_rows = kernels.argmax(axis=0)
-            # last_rows = kernels.shape[0] - np.flip(kernels, axis=0).argmax(axis=0) - 1
-            # # convert to 1D indices for easier access
-            # first_raveled = np.ravel_multi_index(
-            #     np.array([first_rows - 1, range(n_columns)]),
-            #     dims=(n_rows, n_columns)
-            # )
-            # last_raveled = np.ravel_multi_index(
-            #     np.array([last_rows + 1, range(n_columns)]),
-            #     dims=(n_rows, n_columns)
-            # )
-            #
-            # kernels.ravel()[first_raveled] = np.inf
-            # kernels.ravel()[last_raveled] = np.inf
-            # pad for compatibility with shifting (for vectorized version)
-            # kernels = np.pad(kernels, ((1, 1), (0, 0)), constant_values=np.inf)
+            # window of mzs strictly within 1 sigma of the kernel center
+            # (where a gaussian with H = 1 is bigger than exp(-1 / 2))
+            mzs_c: np.ndarray[float] = self.kernel_params[:, 0]
+            sigmas: np.ndarray[float] = self.kernel_params[:, 2]
+            window_starts: np.ndarray[int] = np.searchsorted(self.mzs, mzs_c - sigmas, side='right')
+            window_stops: np.ndarray[int] = np.searchsorted(self.mzs, mzs_c + sigmas, side='left')
         else:
             raise NotImplementedError()
 
-        # iterate over spectra and bin according to kernels
-        for it, idx_spectrum in tqdm(
-                enumerate(indices_spectra),
-                total=n_spectra,
-                desc='binning spectra', smoothing=50 / n_spectra
-        ):
-            if reader is not None:
-                # TODO: verify that calibration is used correctly
-                spectrum: np.ndarray[float] = self.get_spectrum(
-                    reader=reader, index=idx_spectrum, only_intensity=True
-                )
-            else:
-                spectrum: np.ndarray[float] = profile_spectra[:, it]
-            _bin_spectrum(spectrum, it)
+        # iterate over batches of spectra and bin according to kernels
+        if reader is not None:
+            batches = self._iter_batches(
+                reader, desc='binning spectra', show_progress=show_progress
+            )
+        else:  # profile spectra have one column per spectrum
+            batch_size: int = 1000
+            batches = (
+                (rows, profile_spectra[:, rows].T)
+                for rows in (np.arange(i, min(i + batch_size, n_spectra))
+                             for i in range(0, n_spectra, batch_size))
+            )
+        for rows, spectra in batches:
+            _bin_spectrum(spectra, rows)
 
     def _add_rxys_to_df(
             self,
             df: pd.DataFrame,
-            reader: ReadBrukerMCF | ImagingInfoXML | Hdf5Handler | pd.DataFrame | None = None,
+            reader: RtmsBrukerMCFReader | ImagingInfoXML | Hdf5Handler | pd.DataFrame | None = None,
             **_
     ) -> pd.DataFrame:
         """
         Add region and spot names to dataframe.
 
-        This method obtains the R, x, y coordinates either from a ReadBrukerMCF or
-        ImagingInfoXML object. Unless the ReadBrukerMCF object does not exist already,
+        This method obtains the R, x, y coordinates either from a RtmsBrukerMCFReader or
+        ImagingInfoXML object. Unless the RtmsBrukerMCFReader object does not exist already,
         it is much faster to leave the reader object empty and let the method evoke a new
         ImagingInfoXML instance. Indices are matched to spot names automatically.
 
@@ -2359,11 +2345,11 @@ class Spectra(DFolderManager, MzUtility):
         ----------
         df : pd.DataFrame
             Data frame on which to append the R, x, and y columns
-        reader : ReadBrukerMCF | None, optional
+        reader : RtmsBrukerMCFReader | None, optional
             Reader from which to obtain the spot data. Defaults to evoking new
             ImagingInfoXML object.
         """
-        if (reader is not None) and isinstance(reader, ReadBrukerMCF):
+        if (reader is not None) and isinstance(reader, RtmsBrukerMCFReader):
             reader.create_spots()
             names: np.ndarray[str] = reader.spots.names
             if not check_attr(reader, 'indices'):
@@ -2375,7 +2361,7 @@ class Spectra(DFolderManager, MzUtility):
             )
             names: np.ndarray[str] = reader.spotName
 
-            if isinstance(reader, ImagingInfoXML | ReadBrukerMCF | Hdf5Handler):
+            if isinstance(reader, ImagingInfoXML | RtmsBrukerMCFReader | Hdf5Handler):
                 imaging_indices = reader.indices
             else:
                 assert isinstance(reader, pd.DataFrame)
@@ -2383,16 +2369,13 @@ class Spectra(DFolderManager, MzUtility):
 
         RXYs = get_rxy(names)
 
-        # search indices of spectra object in reader
-        if self._n_spectra != len(imaging_indices):
-            mask: np.ndarray[bool] = np.array(
-                [np.argwhere(idx == imaging_indices)[0][0] for idx in self.indices]
-            )
-        else:
-            mask: np.ndarray[bool] = np.ones_like(self.indices, dtype=bool)
-        df['R'] = RXYs[mask, 0]
-        df['x'] = RXYs[mask, 1]
-        df['y'] = RXYs[mask, 2]
+        # positions of the spectra of this object in the spot table
+        positions: np.ndarray[int] = pd.Index(imaging_indices).get_indexer(self.indices)
+        assert np.all(positions >= 0), \
+            f'some indices were not found in the spot table: {self.indices[positions < 0]}'
+        df['R'] = RXYs[positions, 0]
+        df['x'] = RXYs[positions, 1]
+        df['y'] = RXYs[positions, 2]
 
         return df
 
@@ -2557,7 +2540,7 @@ class Spectra(DFolderManager, MzUtility):
 
     def set_reconstruction_losses(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
             indices: list[int] | None = None,
     ) -> None:
         """
@@ -2573,7 +2556,7 @@ class Spectra(DFolderManager, MzUtility):
 
         Parameters
         ----------
-        reader: ReadBrukerMCF | Hdf5Handler
+        reader: RtmsBrukerMCFReader | Hdf5Handler
             Reader to use for getting spectra.
         indices: list[int] | None, optional
             Indices for which to construct the loss. Defaults to all.
@@ -2584,33 +2567,36 @@ class Spectra(DFolderManager, MzUtility):
             indices: np.ndarray[int] = self.indices
 
         if not check_attr(self, '_losses'):
-            self._losses: np.ndarray[float] = np.zeros((self._n_spectra, len(self.mzs)))
+            # this array has one value per spectrum and mz, use single precision to save memory
+            self._losses: np.ndarray[np.float32] = np.zeros(
+                (self._n_spectra, len(self.mzs)), dtype=np.float32
+            )
         # heights of kernels in each spectrum (independent of binning method)
         heights: np.ndarray[float] = self.get_heights()
-        # precompute kernel functions
-        kernels: np.ndarray[float] = self._get_kernels(norm_mode='height')
-        # loop over spectra
-        for index in tqdm(
-                indices,
-                total=len(indices),
-                desc='Setting losses'
+        # precompute kernel functions (sparse)
+        kernels = self._get_kernels_sparse(norm_mode='height')
+        # rows of per-spectrum arrays follow the order of self.indices
+        array_idxs: np.ndarray[int] = self.spectrum_idx2array_idx(np.asarray(indices))
+        # loop over batches of spectra
+        for positions, spectra in self._iter_batches(
+                reader, indices=indices, desc='Setting losses', show_progress=True
         ):
-            # rows of per-spectrum arrays follow the order of self.indices
-            array_idx: int = self.spectrum_idx2array_idx(index)
-            spec: np.ndarray[float] = self.get_spectrum(
-                reader=reader, index=index, only_intensity=True
+            rows: np.ndarray[int] = array_idxs[positions]
+            # reconstructed spectra with shape (n_batch, n_mzs)
+            y_rec: np.ndarray[float] = (kernels @ heights[rows, :].T).T
+            tics: np.ndarray[float] = self._tic[rows]
+            # spectra with a TIC of 0 get a loss of 0
+            self._losses[rows, :] = np.divide(
+                np.abs(y_rec - spectra), tics[:, None],
+                out=np.zeros_like(spectra), where=tics[:, None] != 0
             )
-
-            y_rec: np.ndarray[float] = kernels @ heights[array_idx, :]
-            tic = self._tic[array_idx]
-            self._losses[array_idx, :] = np.abs(y_rec - spec) / tic if tic else 0
 
     def filter_line_spectra(
             self,
             binned_snr_threshold: float = 0,
             intensity_min: float = 0,
             success_rate_threshold: float = 0,
-            **_: Any
+            **kwargs: Any
     ) -> np.ndarray[bool]:
         """
         Set the intensities that fall below SNR or min intensity to zero
@@ -2633,6 +2619,9 @@ class Spectra(DFolderManager, MzUtility):
         mask : np.ndarray[bool]
             Mask object where values not meeting the criteria are set to False
         """
+        binned_snr_threshold = _pop_deprecated_kwarg(
+            kwargs, 'SNR_threshold', 'binned_snr_threshold', binned_snr_threshold, 0
+        )
         # check if the baseline has been estimated, otherwise can't filter based
         # on noise leveles
         if binned_snr_threshold > 0:
@@ -2671,7 +2660,7 @@ class Spectra(DFolderManager, MzUtility):
 
     def reconstruct_all(self) -> np.ndarray[float]:
         """Calculate reconstructed profiles from line_spectra and peak properties."""
-        kernels: np.ndarray[float] = self._get_kernels(norm_mode='height')
+        kernels = self._get_kernels_sparse(norm_mode='height')
         line_spectra: np.ndarray[float] = self.get_heights()
         reconstructed: np.ndarray[float] = kernels @ line_spectra.T
         return reconstructed
@@ -2723,17 +2712,18 @@ class Spectra(DFolderManager, MzUtility):
             # placeholder indices, they no longer refer to spectra on disk
             indices: np.ndarray[int] = np.arange(0, self._n_spectra + other._n_spectra)
 
-        s_new: Self = self.__class__(
-            limits=self.limits,
-            delta_mz=self.delta_mz,
-            indices=indices,
-            path_d_folder=path_d_folder,
-            initiate=False
-        )
+        s_new: Self = self.__class__(path_folder=self.path_folder)
 
         # combine spectra
         s_new.mzs = self.mzs.copy()
-        s_new.intensities = np.interp(self.mzs, other.mzs, other.intensities) + self.intensities
+        if self.limits != other.limits:
+            logger.warning(
+                f'limits of the objects differ ({self.limits} and {other.limits}), '
+                f'using {self.limits}, other does not contribute outside its limits'
+            )
+        # other has no data outside its mzs, so it contributes 0 there
+        s_new.intensities = (np.interp(self.mzs, other.mzs, other.intensities, left=0, right=0)
+                             + self.intensities)
         s_new._tic = np.hstack([self._tic, other._tic])
 
         # profiles have shape (n_mzs, n_spectra), other has to be put on the mzs of self
@@ -2741,12 +2731,18 @@ class Spectra(DFolderManager, MzUtility):
         other_profiles: np.ndarray[float] = other.reconstruct_all()
         if not np.array_equal(self.mzs, other.mzs):
             other_profiles = np.stack(
-                [np.interp(self.mzs, other.mzs, p) for p in other_profiles.T],
+                [np.interp(self.mzs, other.mzs, p, left=0, right=0) for p in other_profiles.T],
                 axis=1
             )
         profiles: np.ndarray[float] = np.hstack([self_profiles, other_profiles])
         # find peaks, bin
-        s_new.noise_level = (np.interp(self.mzs, other.mzs, other.noise_level) + self.noise_level) / 2
+        # average noise levels where both have data, otherwise take the one of self
+        other_noise_level = np.interp(self.mzs, other.mzs, other.noise_level, left=np.nan, right=np.nan)
+        s_new.noise_level = np.where(
+            np.isnan(other_noise_level),
+            self.noise_level,
+            (other_noise_level + self.noise_level) / 2
+        )
         s_new._noise_level_subtracted = self._noise_level_subtracted and other._noise_level_subtracted
         kwargs_peak = self._peak_setting_parameters.copy()
         prominence: float = kwargs_peak.pop('prominence')
@@ -2759,14 +2755,14 @@ class Spectra(DFolderManager, MzUtility):
         )
         return s_new
 
-    def add_calibrated_spectra(self, reader: ReadBrukerMCF | Hdf5Handler, **kwargs: Any):
-        self.add_all_spectra(reader=reader)
+    def add_calibrated_spectra(self, reader: RtmsBrukerMCFReader | Hdf5Handler, **kwargs: Any):
+        self.add_all_spectra(reader=reader, recalibrate=False)
         self.subtract_baseline(**kwargs)
         self.require_calibration_functions(reader=reader, **kwargs)
-        self.add_all_spectra(reader=reader)
+        self.add_all_spectra(reader=reader, recalibrate=True)
         self.subtract_baseline(**kwargs)
 
-    def full(self, reader: ReadBrukerMCF | Hdf5Handler, **kwargs: Any):
+    def full(self, reader: RtmsBrukerMCFReader | Hdf5Handler, **kwargs: Any):
         """Perform all steps with the provided parameters."""
         self.add_calibrated_spectra(reader=reader, **kwargs)
         self.set_peaks(**kwargs)
@@ -2778,7 +2774,7 @@ class Spectra(DFolderManager, MzUtility):
 
     def full_targeted(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
             targets: list[float],
             **kwargs
     ) -> None:
@@ -2824,8 +2820,8 @@ class Spectra(DFolderManager, MzUtility):
         """
         # calculate approximated signal by summing up kernels
         if plt_reconstructed := check_attr(self, '_kernel_params'):
-            kernels = self._get_kernels(norm_mode='height')
-            intensities_approx = (kernels * self.kernel_params[:, 1]).sum(axis=1)
+            kernels = self._get_kernels_sparse(norm_mode='height')
+            intensities_approx = kernels @ self.kernel_params[:, 1]
             loss = np.sum(np.abs(self.intensities - intensities_approx)) \
                    / np.sum(self.intensities)
 
@@ -2873,7 +2869,7 @@ class Spectra(DFolderManager, MzUtility):
 
     def plot_calibration_functions(
             self,
-            reader: ReadBrukerMCF | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler,
             indices: Iterable[int] | None = None,
             n_plot: int = 10
     ) -> None:
@@ -2959,7 +2955,7 @@ class Spectra(DFolderManager, MzUtility):
 
         # Plot the functions on each axis
         # normalized to total intensity of spectrum
-        spectra_wise_loss = np.trapezoid(self._losses, dx=self.delta_mz, axis=1)
+        spectra_wise_loss = np.trapezoid(self._losses, x=self.mzs, axis=1)
         # average loss at masses, normalized to average intensity
         mass_wise_loss = np.nanmedian(self._losses, axis=0)
 
@@ -3014,7 +3010,7 @@ class ClusteringManager:
     Currently not tested, usage is discouraged.
     """
 
-    def __init__(self, reader: ReadBrukerMCF, **kwargs_spectra):
+    def __init__(self, reader: RtmsBrukerMCFReader, **kwargs_spectra):
         assert check_attr(reader, 'indices'), 'call create_indices'
         assert check_attr(reader, 'limits'), \
             'call set_casi_window or define mass limits'
@@ -3115,16 +3111,18 @@ class ClusteringManager:
         plt.ylabel('data y coordinate')
         plt.show()
 
-    def get_spectra(self, reader: ReadBrukerMCF, **kwargs: dict) -> Spectra:
+    def get_spectra(self, reader: RtmsBrukerMCFReader, **kwargs: dict) -> Spectra:
         assert check_attr(self, 'clusters'), 'call set_clusters first'
+        # all clusters use the same limits
+        kwargs_spectra: dict = {'limits': self.limits} | self.kwargs_spectra
         spec_main = Spectra(
-            reader=reader, indices=self.clusters[0], **self.kwargs_spectra
+            reader=reader, indices=self.clusters[0], **kwargs_spectra
         )
         spec_main.full(reader, **kwargs)
         for i, c in self.clusters.items():
             if i == 0:
                 continue
-            spec = Spectra(reader=reader, indices=c)
+            spec = Spectra(reader=reader, indices=c, **kwargs_spectra)
             spec.full(reader, **kwargs)
             spec_main.combine_with(spec)
 
@@ -3142,10 +3140,9 @@ class MultiSectionSpectra(Spectra):
     -------
     Imports
     >>> from maspim.exporting.from_mcf.spectrum import MultiSectionSpectra
-    >>> from maspim.exporting.from_mcf.rtms_communicator import ReadBrukerMCF
     Initiate readers (could also be hdf5Handler's)
     >>> folders = ['path/to/d_folder1.d', 'path/to/d_folder2.d', ...]
-    >>> readers = [ReadBrukerMCF(path_d_folder=folder) for folder in folders]
+    >>> readers = [RtmsBrukerMCFReader(path_d_folder=folder) for folder in folders]
     Initiate MultiSectionSpectra
     >>> ms = MultiSectionSpectra(readers=readers)
     From here on same steps as in Spectra, except pass readers instead of reader.
@@ -3157,7 +3154,7 @@ class MultiSectionSpectra(Spectra):
 
     def __init__(
             self,
-            readers: list[ReadBrukerMCF | Hdf5Handler]
+            readers: list[RtmsBrukerMCFReader | Hdf5Handler]
     ) -> None:
         """
         Initialization.
@@ -3166,21 +3163,16 @@ class MultiSectionSpectra(Spectra):
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | Hdf5Handler]
+        readers : list[RtmsBrukerMCFReader | Hdf5Handler]
             List of readers from which to create spectra objects
 
         """
         self.specs: list[Spectra | None] = [None] * len(readers)
         self._initiate(readers)
 
-    def _initiate(self, readers: list[ReadBrukerMCF | Hdf5Handler]) -> None:
+    def _initiate(self, readers: list[RtmsBrukerMCFReader | Hdf5Handler]) -> None:
         """Set mzs and indices"""
         assert len(readers) > 0, 'pass at least one reader'
-        reader = readers[0]
-        assert all([r.limits[0] == reader.limits[0] for r in readers]), \
-            'readers must have the same limits'
-        assert all([r.limits[1] == reader.limits[1] for r in readers]), \
-            'readers must have the same limits'
 
         indices: list[np.ndarray[int]] = []
         offset = 0
@@ -3192,18 +3184,27 @@ class MultiSectionSpectra(Spectra):
             indices.append(idxs)
             # indices are 0-based, start the next section after the last index
             offset = idxs[-1] + 1
+        # summed intensities of the sections are added, so they need the same mzs
+        # (limits of readers may not be set before initializing the Spectra objects)
+        assert all(s.limits == self.specs[0].limits for s in self.specs), \
+            f'readers must have the same limits, found {[s.limits for s in self.specs]}'
+        assert all(
+            (len(s.mzs) == len(self.specs[0].mzs)) and np.allclose(s.mzs, self.specs[0].mzs, atol=1e-6, rtol=0)
+            for s in self.specs
+        ), 'readers must have the same mzs within the limits'
+        self._limits = self.specs[0].limits
         self.mzs: np.ndarray[float] = spec.mzs.copy()
         self.delta_mz = spec.delta_mz
         self.intensities: np.ndarray[float] = np.zeros_like(self.mzs)
         self.indices = np.hstack(indices)
 
-    def add_all_spectra(self, readers: list[ReadBrukerMCF | Hdf5Handler]) -> None:
+    def add_all_spectra(self, readers: list[RtmsBrukerMCFReader | Hdf5Handler]) -> None:
         """
         Iterate over spectra by calling the corresponding Spectra method.
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | Hdf5Handler]
+        readers : list[RtmsBrukerMCFReader | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3224,7 +3225,7 @@ class MultiSectionSpectra(Spectra):
     def require_calibration_functions(
             self,
             *,
-            readers: list[ReadBrukerMCF | Hdf5Handler] | None = None,
+            readers: list[RtmsBrukerMCFReader | Hdf5Handler] | None = None,
             **kwargs
     ) -> None:
         """
@@ -3232,7 +3233,7 @@ class MultiSectionSpectra(Spectra):
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | Hdf5Handler]
+        readers : list[RtmsBrukerMCFReader | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3256,13 +3257,13 @@ class MultiSectionSpectra(Spectra):
             if check_attr(self, '_noise_level'):
                 spec.noise_level = self.noise_level
 
-    def bin_spectra(self, readers: Iterable[ReadBrukerMCF | Hdf5Handler], **kwargs):
+    def bin_spectra(self, readers: Iterable[RtmsBrukerMCFReader | Hdf5Handler], **kwargs):
         """
         Iterate over spectra by calling the corresponding Spectra method.
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | Hdf5Handler]
+        readers : list[RtmsBrukerMCFReader | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3276,7 +3277,7 @@ class MultiSectionSpectra(Spectra):
 
     def set_feature_table(
             self,
-            readers: Iterable[ReadBrukerMCF | Hdf5Handler] | None = None,
+            readers: Iterable[RtmsBrukerMCFReader | Hdf5Handler] | None = None,
             **kwargs: dict
     ) -> pd.DataFrame:
         """
@@ -3284,7 +3285,7 @@ class MultiSectionSpectra(Spectra):
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | Hdf5Handler]
+        readers : list[RtmsBrukerMCFReader | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3300,13 +3301,13 @@ class MultiSectionSpectra(Spectra):
         self._feature_table: pd.DataFrame = combine_feature_tables(fts)
         return self._feature_table
 
-    def full(self, readers: list[ReadBrukerMCF | Hdf5Handler], **kwargs: dict):
+    def full(self, readers: list[RtmsBrukerMCFReader | Hdf5Handler], **kwargs: dict):
         """
         Perform all steps to process and bin the spectra.
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | Hdf5Handler]
+        readers : list[RtmsBrukerMCFReader | Hdf5Handler]
             List of readers from which to obtain the spectra.
         kwargs: dict[str, Any]
             Keyword arguments passed on to Spectra.require_calibration_functions
@@ -3325,7 +3326,7 @@ class MultiSectionSpectra(Spectra):
 
     def full_targeted(
             self,
-            readers: list[ReadBrukerMCF | Hdf5Handler],
+            readers: list[RtmsBrukerMCFReader | Hdf5Handler],
             targets: list[float],
             **kwargs
     ):
@@ -3334,7 +3335,7 @@ class MultiSectionSpectra(Spectra):
 
         Parameters
         ----------
-        readers : list[ReadBrukerMCF | Hdf5Handler]
+        readers : list[RtmsBrukerMCFReader | Hdf5Handler]
             List of readers from which to obtain the spectra.
         targets: list[float]
             Target mzs.
