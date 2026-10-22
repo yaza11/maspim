@@ -576,8 +576,10 @@ class Spectra(DFolderManager, MzUtility):
             ]
             # readers crop to the limits before calibrating, which shifts the mzs, so
             # read a wider window such that the calibrated spectrum still covers the limits
-            # (resampling to self.mzs crops to the limits afterward)
-            margin: float = float(np.max(np.abs(np.polyval(poly_coeffs, self.limits))))
+            # (resampling to self.mzs crops to the limits afterward), two grid spacings
+            # at the limits ensure there is a data point beyond each limit to interpolate from
+            edge_dmz: float = max(self.mzs[1] - self.mzs[0], self.mzs[-1] - self.mzs[-2])
+            margin: float = float(np.max(np.abs(np.polyval(poly_coeffs, self.limits)))) + 2 * edge_dmz
         else:
             poly_coeffs: None = None
             margin: float = 0
@@ -589,17 +591,21 @@ class Spectra(DFolderManager, MzUtility):
         mzs, intensities = reader.get_spectrum(
             index=int(index),  # Ensure index is int
             limits=(self.limits[0] - margin, self.limits[1] + margin),
-            return_mzs=resample or (not intensities_only)
+            return_mzs=resample or recalibrate or (not intensities_only)
         )
 
         if recalibrate:
-            mzs_calib = apply_calibration_mz(
+            # shift mz values
+            mzs = apply_calibration_mz(
                 mzs=mzs,
                 poly_coeffs=poly_coeffs,
                 inplace=False
             )
-            intensities = np.interp(mzs_calib, mzs, intensities)
-            mzs=mzs_calib
+            if not resample:
+                idx_lower = np.searchsorted(mzs, self.limits[0], side='left')
+                idx_upper = np.searchsorted(mzs, self.limits[1], side='right')
+                mzs = mzs[idx_lower:idx_upper]
+                intensities = intensities[idx_lower:idx_upper]
 
         if resample:
             # np.interp only evaluates at self.mzs, which crops to the limits
