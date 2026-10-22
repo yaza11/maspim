@@ -268,7 +268,7 @@ class Spectra(DFolderManager, MzUtility):
         """
         By default, use reader casi window as limits and mz values from reader, if they are the same. If mz values
         are not all the same, set_mz_values must be called"""
-        new = cls(path_folder=reader.mcfdir)
+        new = cls.from_path_d_folder(path_d_folder=reader.mcfdir)
         new._indices = reader.indices.copy()
         new._limits = reader.casi_window
         try:
@@ -281,7 +281,7 @@ class Spectra(DFolderManager, MzUtility):
 
     @classmethod
     def _from_hdf5(cls, hdf5_handler: Hdf5Handler) -> Self:
-        new = cls(path_folder=hdf5_handler.path_folder)
+        new = cls.from_path_d_folder(path_d_folder=hdf5_handler.path_folder)
         new._indices = hdf5_handler.indices.copy()
         new._limits = hdf5_handler.limits
         new._mzs = hdf5_handler.mzs.copy()
