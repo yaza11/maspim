@@ -1049,44 +1049,25 @@ class ImageSample(Image):
 
 class ImageROI(Image):
     """
-    Classify foreground pixels into light and dark.
+    Region of interest of a sample (the sample area found by ImageSample).
 
-    This class distinguishes light and dark pixels in an image by using the adaptive_mean_filter together with a
-    mask specifying fore- and background pixels. It is assumed that the image does not contain too much empty space at
-    the boundaries, since this may cause issues downstream.
+    It is assumed that the image does not contain too much empty space at the boundaries, since this may cause issues
+    downstream. The classification into light and dark pixels is done in ImageClassified.
 
     If the image is derived from an ImageSample object, it is advised to iniate the ImageROI instance from
     the 'from_parent' constructor:
     >>> from maspim import ImageROI
-    >>> i = ImageSample()
-    >>> i.from_disk(...)
+    >>> i = ImageSample.from_disk(...)
     >>> ir = ImageROI.from_parent(i)
 
-    Otherwise, the instance can be initiated using the default constructor by either providing an image or a file to an image.
-    For file management it is required to specify the path_folder, if path_image_file is not provided (otherwise the folder
-    will be infered from the image file path). So initiating could look like this (obj_color is always required):
+    Otherwise, create the instance with a folder and set the image and foreground mask:
     >>> from maspim import ImageROI
-    >>> ir = ImageROI(obj_color='light', path_image_file='path/to/your/image/file.png')
+    >>> ir = ImageROI(path_folder='path/to/your/folder')
+    >>> ir.set_image(path_image_file='path/to/your/image/file.png', obj_color='light')
     or
     >>> your_image = np.random.random((100, 200))
-    >>> ir = ImageROI(obj_color='light', image=your_image)
-
-    Classify the foreground pixels works best if the age span is known, in which case the kernel size can be estimated
-    to cover about 2 years:
-    >>> ir.set_age_span((0, 100))  # sample covers ages from 0 to 100 yrs
-    >>> ir.set_classification_adaptive_mean()
-    otherwise
-    >>> ir.set_classification_varying_kernel_size()
-    can be used which takes the median classification of a bunch of classifications with filters at different sizes.
-    This method is more prone to noise.
-    >>> ir.require_classification()
-    is a convinience function which chooses the adaptive mean method if an age span has been set and the varying kernel
-    size approach otherwise.
-
-    Under the hood, the classified images are pre- and post-processed, which can be controlled by setting keyword arguments.
-    This includes smoothing/ denoising the input image and excluding small blobs from the final classification. The choice
-    of parameters can be viewed in
-    >>> ir._params
+    >>> ir.set_image(image=your_image, image_type='np', obj_color='light')
+    >>> ir.set_foreground_mask()
 
     It is also possible to find punchholes (the positions where square-shaped holes have been punched into the sediment
     for later registration):
@@ -1325,9 +1306,9 @@ class ImageClassified(Image):
     if the sample does not have any holes, use instead
     >>> ic.set_foreground_mask_no_holes()
 
-    The stored image (self.image) is always the uncorrected input image. If
-    use_tilt_correction is True (the default), the analysis runs on the
-    tilt-corrected images (image_used, image_classification).
+    Every step has to be set explicitly. Nothing is computed implicitly when
+    accessing an attribute. If a set method is missing a prerequisite, the
+    error message names the set method to call first.
 
     Example Usage
     -------------
@@ -1336,11 +1317,12 @@ class ImageClassified(Image):
     >>> ir = ImageROI.from_disk('path/to/your/folder')
     >>> ic = ImageClassified.from_parent(ir)
     >>> ic.set_age_span((0, 100))  # optional, improves the classification
-    >>> ic.require_classification()
+    >>> ic.set_average_width_yearly_cycle()
+    >>> ic.set_classification_adaptive_mean()
     >>> ic.set_seeds(peak_prominence=.1,plts=True)
     >>> ic.set_params_laminae_simplified()
     >>> ic.set_quality_score()
-    or, doing it all in one step
+    or, doing all laminae steps at once (after setting the classification)
     >>> ic.set_laminae_params_table()
     and save to disk
     >>> ic.save()
@@ -1348,12 +1330,22 @@ class ImageClassified(Image):
     >>> ic = ImageClassified.from_disk('path/to/your/folder')
     View the results
     >>> ic.plot_overview()
+
+    Tilt correction
+    ---------------
+    A tilt corrected version is a new instance in which image, foreground mask
+    and classification are transformed such that laminae are roughly
+    distortion free. Laminae can then be described solely by their width.
+    >>> ic.set_tilt_correction()  # find the transformation (saved as Mapper)
+    >>> ic_corrected = ic.get_tilt_corrected()
+    >>> ic_corrected.set_laminae_params_table()
+    Both instances share the same folder, so save one of them with a tag
+    (e.g. ic_corrected.save(tag='tilt_corrected')) to keep both on disk.
     """
 
-    _image_classification: np.ndarray = None
-    _image_classification_corrected: np.ndarray = None
-    _image_corrected: np.ndarray = None
-    _mask_foreground_corrected: np.ndarray[bool] = None
+    image_classification: np.ndarray[int] = None
+    is_tilt_corrected: bool = False
+    tilt_mapper: Mapper = None
 
     _seeds_light: np.ndarray[int] = None
     _seeds_dark: np.ndarray[int] = None
@@ -1362,17 +1354,10 @@ class ImageClassified(Image):
     _prominences_light: np.ndarray[float] = None
     _prominences_dark: np.ndarray[float] = None
 
-    _qualities: np.ndarray[float] = None
     _params: dict[str, bool | int | float] = None
-    _tilt_descriptor: Mapper = None
 
     image_seeds: np.ndarray[int] = None
     params_laminae_simplified: pd.DataFrame = None
-
-    # If True, the input images will be transformed such that laminae are
-    # roughly distortion free. This allows to define laminae solely by their
-    # width.
-    use_tilt_correction: bool = True
 
     _save_attrs: set[str] = {
         'age_span',
@@ -1383,18 +1368,53 @@ class ImageClassified(Image):
         'height_width',
         'mask_foreground',
         'min_intensity_foreground',
-        'use_tilt_correction',
-        '_image_classification',
+        'is_tilt_corrected',
+        'image_classification',
         '_params',
         'params_laminae_simplified',
         'image_seeds'
     }
 
+    def _check_is_set(self, attr: str, *set_methods: str) -> None:
+        """Raise an error naming the set method(s) to call if attr is not set."""
+        if getattr(self, attr, None) is None:
+            raise ValueError(
+                f'{attr} is not set, call {" or ".join(set_methods)} first'
+            )
+
+    def _check_mask_is_set(self) -> None:
+        self._check_is_set(
+            'mask_foreground',
+            'set_foreground_mask',
+            'set_foreground_mask_from_other',
+            'set_foreground_mask_no_holes'
+        )
+
+    def _check_classification_is_set(self) -> None:
+        self._check_is_set(
+            'image_classification',
+            'set_classification_adaptive_mean',
+            'set_classification_varying_kernel_size',
+            'set_image_classification'
+        )
+
+    def _check_seeds_are_set(self) -> None:
+        for attr in ('_seeds_light', '_seeds_dark', '_width_light',
+                     '_width_dark', '_prominences_light', '_prominences_dark'):
+            self._check_is_set(attr, 'set_seeds')
+
+    def _check_params_laminae_are_set(self, with_quality: bool = False) -> None:
+        self._check_is_set('params_laminae_simplified', 'set_params_laminae_simplified')
+        if with_quality and ('quality' not in self.params_laminae_simplified.columns):
+            raise ValueError(
+                'params_laminae_simplified has no quality column, call '
+                'set_quality_score first'
+            )
+
     @classmethod
     def from_parent(
             cls,
             parent: ImageROI,
-            use_tilt_correction: bool | None = None,
             age_span: tuple[float | int, float | int] | None = None,
             **_
     ) -> Self:
@@ -1407,9 +1427,6 @@ class ImageClassified(Image):
         parent: ImageROI
             The parent object providing image, foreground mask, object color
             and age span.
-        use_tilt_correction: bool, optional
-            Whether to use the tilt corrected images for the analysis. Defaults
-            to the class default (True).
         age_span: tuple[float | int, float | int], optional
             Age span of the sample. If not provided, will be taken from the
             parent (if it is set there).
@@ -1433,9 +1450,6 @@ class ImageClassified(Image):
             thr_background=parent.min_intensity_foreground
         )
 
-        if use_tilt_correction is not None:
-            new.use_tilt_correction = use_tilt_correction
-
         if age_span is not None:
             new.set_age_span(age_span)
         elif check_attr(parent, 'age_span'):
@@ -1447,54 +1461,23 @@ class ImageClassified(Image):
 
     def set_foreground_mask_no_holes(self) -> None:
         """Set all pixels as foreground (for samples without holes)."""
-        if self.image is None:
-            raise ValueError('Set image before setting foreground mask.')
+        self._check_is_set('image', 'set_image')
         self.mask_foreground = np.ones(self.image.shape[:2], dtype=bool)
         self.min_intensity_foreground = 0
 
     def set_image_classification(self, image_classification: np.ndarray[int]) -> None:
         """
-        Set an existing classification (light, dark, background) of the
-        uncorrected image directly instead of calculating it.
+        Set an existing classification (light, dark, background) directly
+        instead of calculating it.
         """
-        if self.image is None:
-            raise ValueError('Set image before setting the classification.')
+        self._check_is_set('image', 'set_image')
         assert image_classification.shape[:2] == self.image.shape[:2], (
             'image_classification and image should have the same shape '
             'along the first two axes '
             f'but have shapes {image_classification.shape[:2]}'
             f' and {self.image.shape[:2]}'
         )
-        self._image_classification: np.ndarray[int] = image_classification
-        self._reset_corrected_images()
-
-    def _reset_corrected_images(self) -> None:
-        """Drop tilt corrected images (e.g. after a new classification)."""
-        self._image_corrected = None
-        self._image_classification_corrected = None
-        self._mask_foreground_corrected = None
-
-    def _require_average_width_yearly_cycle(self) -> float | None:
-        """Return the average width of a yearly cycle, calculate it if possible."""
-        if (self.average_width_yearly_cycle is None) and check_attr(self, 'age_span'):
-            self.set_average_width_yearly_cycle()
-        return self.average_width_yearly_cycle
-
-    def require_classification(self, overwrite: bool = False, **kwargs) -> np.ndarray[int]:
-        """
-        Return the classification of the uncorrected image, calculate it if necessary.
-
-        Uses the adaptive mean method if an age span is set and the varying
-        kernel size approach otherwise.
-        """
-        if (self._image_classification is not None) and (not overwrite):
-            return self._image_classification
-
-        if check_attr(self, 'age_span'):
-            self.set_classification_adaptive_mean(**kwargs)
-        else:
-            self.set_classification_varying_kernel_size(**kwargs)
-        return self._image_classification
+        self.image_classification: np.ndarray[int] = image_classification
 
     def _get_params_laminae_classification(
             self, image_gray_shape: tuple[int, ...], **kwargs
@@ -1518,7 +1501,14 @@ class ImageClassified(Image):
             if key in params:
                 params[key] = kwargs[key]
 
-        if not check_attr(self, 'age_span'):
+        if (
+                params['estimate_kernel_size_from_age_model']
+                and (self.average_width_yearly_cycle is None)
+        ):
+            logger.info(
+                'cannot estimate kernel size from age model, call '
+                'set_age_span and set_average_width_yearly_cycle first'
+            )
             params['estimate_kernel_size_from_age_model'] = False
 
         # update kernel_size to potentially match ROI
@@ -1528,7 +1518,7 @@ class ImageClassified(Image):
                 '2x expected thickness of one year).'
             )
             kernel_size_adaptive = ensure_odd(
-                int(self._require_average_width_yearly_cycle() * 2))
+                int(self.average_width_yearly_cycle * 2))
             params['kernel_size_adaptive'] = kernel_size_adaptive
         elif params['kernel_size_adaptive'] is None:
             logger.info('estimating adaptive kernel size from image dimensions')
@@ -1571,6 +1561,8 @@ class ImageClassified(Image):
         params : dict[str, bool | int | float]
             A dict specifying the parameters used.
         """
+        self._check_is_set('image', 'set_image')
+        self._check_mask_is_set()
         image_gray: np.ndarray = self.image_grayscale
 
         # update params with kwargs
@@ -1580,11 +1572,6 @@ class ImageClassified(Image):
         if plts:
             plt_cv2_image(image_gray, 'input in grayscale')
 
-        if self.mask_foreground is None:
-            raise ValueError(
-                'Set the foreground mask before classifying (set_foreground_mask, '
-                'set_foreground_mask_from_other or set_foreground_mask_no_holes).'
-            )
         # adaptive mean filter requires values between 0 and 1
         mask_foreground: np.ndarray[int] = (self.mask_foreground > 0).astype(int)
 
@@ -1736,9 +1723,8 @@ class ImageClassified(Image):
         if plts:
             plt_cv2_image(image_classification, title='classified image')
 
-        self._image_classification: np.ndarray[np.uint8] = image_classification
+        self.image_classification: np.ndarray[np.uint8] = image_classification
         self._params: dict[str, bool | int | float] = params
-        self._reset_corrected_images()
 
     def set_classification_varying_kernel_size(
             self,
@@ -1815,9 +1801,8 @@ class ImageClassified(Image):
                 params
             )
 
-        self._image_classification: np.ndarray[np.uint8] = image_classification
+        self.image_classification: np.ndarray[np.uint8] = image_classification
         self._params: dict[str, bool | int | float] = params | {'scaling': scaling}
-        self._reset_corrected_images()
 
         if plts:
             plt_cv2_image(image_classification, title='classified image')
@@ -1860,23 +1845,6 @@ class ImageClassified(Image):
         av[~mask_nonempty_col] = 0
         return av
 
-    def _set_corrected_using_mapper(self, mapper: Mapper) -> None:
-        """Set the tilt corrected images using a transformation object."""
-        self._image_corrected: np.ndarray = mapper.fit(
-            self.image, preserve_range=True)
-        ic_corrected: np.ndarray[int] = mapper.fit(
-            self.image_classification_uncorrected, preserve_range=True
-        )
-        # restore original values
-        self._image_classification_corrected = restore_unique_values(
-            ic_corrected, (0, 127, 255)
-        )
-        if self.mask_foreground is not None:
-            self._mask_foreground_corrected: np.ndarray[bool] = mapper.fit(
-                self.mask_foreground.astype(float), preserve_range=True
-            ) > .5
-        self._tilt_descriptor: Mapper = mapper
-
     def get_descriptor(
             self,
             image=None,
@@ -1890,6 +1858,11 @@ class ImageClassified(Image):
 
         Parameters
         ----------
+        image: np.ndarray, optional
+            Image to describe. Defaults to the image of this instance.
+        mask: np.ndarray, optional
+            Mask of valid pixels. Defaults to the foreground mask of this
+            instance.
         nx_pixels_downscaled: int, optional
             The number of pixels in the x-direction provided to the descriptor.
             For memory efficiency it is recommended to downscale the image. The
@@ -1900,16 +1873,19 @@ class ImageClassified(Image):
 
         Returns
         -------
-
+        descriptor: Descriptor
+            The fitted descriptor.
         """
+        self._check_is_set('image', 'set_image')
         if image is None:
-            image = self.image_uncorrected
+            image = self.image
         else:
-            assert image.shape[:2] == self.image_uncorrected.shape[:2], \
+            assert image.shape[:2] == self.image.shape[:2], \
                 (f'provided image should have the same shape as reference image '
-                 f'({self.image_uncorrected.shape[:2]}) but got {image.shape[:2]}.')
+                 f'({self.image.shape[:2]}) but got {image.shape[:2]}.')
 
         if mask is None:
+            self._check_mask_is_set()
             mask = self.mask_foreground
         else:
             assert mask.shape == image.shape[:2]
@@ -1941,48 +1917,57 @@ class ImageClassified(Image):
 
         return descriptor
 
-    def set_corrected_images(
+    def set_tilt_correction(
             self,
-            descriptor: Descriptor = None,
+            mapper: Mapper | None = None,
+            descriptor: Descriptor | None = None,
             plts: bool = False,
             **kwargs
     ) -> None:
         """
-        Use Descriptor class to find tilts of layers in the image and set
-        corrected images.
+        Set the transformation that corrects the tilts of the laminae.
+
+        The transformation is stored in tilt_mapper. Use get_tilt_corrected to
+        obtain a tilt corrected instance.
 
         Parameters
         ----------
+        mapper: Mapper, optional
+            An existing transformation (e.g. loaded from disk). If not
+            provided, a new transformation is determined with a Descriptor and
+            saved to disk (tag 'tilt_correction').
         descriptor: Descriptor, optional
-            Descriptor used for the tilt correction
+            Fitted descriptor used to determine the transformation. If not
+            provided, it is created with get_descriptor.
         plts: bool, optional
-            If this option is set to True, plot the kerrnels, kernels on image,
+            If this option is set to True, plot the kernels, kernels on image,
             parameter images, angles and corrected image of the Descriptor.
         kwargs: dict, optional
-            Keyword arguments for initialization and setting the fit of
-            desciptor.
+            Keyword arguments for initialization and fit of the descriptor.
         """
-        mapper = Mapper(self.image.shape, self.path_folder, 'tilt_correction')
+        if self.is_tilt_corrected:
+            raise ValueError('this instance is already tilt corrected')
+        self._check_is_set('image', 'set_image')
+
+        if mapper is not None:
+            assert tuple(mapper._image_shape) == self.image.shape[:2], (
+                f'mapper was created for an image of shape {mapper._image_shape}, '
+                f'but image has shape {self.image.shape[:2]}'
+            )
+            self.tilt_mapper: Mapper = mapper
+            return
 
         logger.info('getting new tilt correction transformation')
-
         if descriptor is None:
             descriptor = self.get_descriptor(**kwargs)
 
-        U = descriptor.get_shift_matrix(self.image.shape[:2])
-        mapper.add_UV(U=U)
-        mapper.save()
-
-        self._set_corrected_using_mapper(mapper)
-
-        # upscale and undistort values of descriptor as qualities
-        self._qualities: np.ndarray[float] = mapper.fit(
-            skimage.transform.resize(
-                descriptor.vals,
-                (self.image.shape[0], self.image.shape[1])
-            ),
-            preserve_range=True
-        ).mean(axis=0)
+        mapper = Mapper(self.image.shape, self.path_folder, 'tilt_correction')
+        mapper.add_UV(U=descriptor.get_shift_matrix(self.image.shape[:2]))
+        if self.path_folder is not None:
+            mapper.save()
+        else:
+            logger.warning('path_folder is not set, tilt correction is not saved to disk')
+        self.tilt_mapper: Mapper = mapper
 
         if plts:
             descriptor.plot_kernels()
@@ -1991,123 +1976,60 @@ class ImageClassified(Image):
             descriptor.plot_quiver()
             descriptor.plot_corrected()
 
-    def require_corrected_images(
-            self, overwrite: bool = False, **kwargs
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Return tilt corrected RGB and classified image. This method will return existing tilt corrected images if
-        attempt to load a mapping, if it exists already or create a new mapping if necessary."""
-
-        # return an existing corrected image
-        if check_attr(self, '_image_corrected') and (not overwrite):
-            return (
-                self._image_corrected.copy(),
-                self._image_classification_corrected.copy()
-            )
-
-        # load a mapping, apply it and return the result
-        mapper = Mapper(self.image.shape, self.path_folder, 'tilt_correction')
-        if os.path.exists(mapper.get_save_file()) and (not overwrite):
-            logger.info('loading tilt correction transformation')
-            mapper.load()
-            self._set_corrected_using_mapper(mapper)
-            return (
-                self._image_corrected.copy(),
-                self._image_classification_corrected.copy()
-            )
-
-        # nothing found, create a new mapping
-        self.set_corrected_images(**kwargs)
-        return (
-            self._image_corrected.copy(),
-            self._image_classification_corrected.copy()
-        )
-
-    def require_images(self, overwrite: bool = False, **kwargs) -> None:
+    def get_tilt_corrected(self) -> Self:
         """
-        Make sure all images needed for the analysis are set.
+        Return a new, tilt corrected instance.
 
-        Calculates the classification (require_classification) and, if
-        use_tilt_correction is True, the tilt corrected images
-        (require_corrected_images). kwargs are passed on to both.
+        Image, foreground mask and classification (the latter two if set) are
+        transformed with tilt_mapper. Age span and average width of a yearly
+        cycle are copied. Laminae (seeds, params, image_seeds) are not copied,
+        since they are defined in the uncorrected coordinates.
         """
-        self.require_classification(overwrite=overwrite, **kwargs)
-        if self.use_tilt_correction:
-            self.require_corrected_images(overwrite=overwrite, **kwargs)
+        if self.is_tilt_corrected:
+            raise ValueError('this instance is already tilt corrected')
+        self._check_is_set('image', 'set_image')
+        self._check_is_set('tilt_mapper', 'set_tilt_correction')
 
-    # The following properties only return stored results and never compute
-    # anything (computations may need user input). Call require_images,
-    # require_classification or require_corrected_images first.
-    @property
-    def image_uncorrected(self) -> np.ndarray:
-        """The input image (as set by set_image)."""
-        return self.image
+        mapper: Mapper = self.tilt_mapper
 
-    @property
-    def image_corrected(self) -> np.ndarray:
-        """The tilt corrected input image."""
-        if self._image_corrected is None:
-            raise ValueError(
-                'tilt corrected image not set, call require_corrected_images '
-                'or set_corrected_images first'
-            )
-        return self._image_corrected
+        def transform(image: np.ndarray) -> np.ndarray:
+            image_t: np.ndarray = mapper.fit(image, preserve_range=True)
+            if np.issubdtype(image.dtype, np.integer):
+                image_t = np.round(image_t)
+            return image_t.astype(image.dtype)
 
-    @property
-    def image_used(self) -> np.ndarray:
-        """The image used for the analysis (tilt corrected if use_tilt_correction)."""
-        return self.image_corrected if self.use_tilt_correction else self.image_uncorrected
-
-    @property
-    def image_grayscale_used(self) -> np.ndarray:
-        """Grayscale version of image_used."""
-        if not self.use_tilt_correction:
-            return self.image_grayscale
-        return ensure_image_is_gray(self.image_corrected)
-
-    @property
-    def mask_foreground_used(self) -> np.ndarray[bool]:
-        """Foreground mask matching image_used (tilt corrected if use_tilt_correction)."""
-        if self.mask_foreground is None:
-            raise ValueError('foreground mask not set')
-        if not self.use_tilt_correction:
-            return self.mask_foreground
-        if self._mask_foreground_corrected is None:
-            raise ValueError(
-                'tilt corrected foreground mask not set, call '
-                'require_corrected_images or set_corrected_images first'
-            )
-        return self._mask_foreground_corrected
-
-    @property
-    def image_classification_uncorrected(self) -> np.ndarray:
-        """Classification of the input image."""
-        if self._image_classification is None:
-            raise ValueError(
-                'classification not set, call require_classification, '
-                'set_classification_adaptive_mean, '
-                'set_classification_varying_kernel_size or '
-                'set_image_classification first'
-            )
-        return self._image_classification
-
-    @property
-    def image_classification_corrected(self) -> np.ndarray:
-        """Classification of the tilt corrected image."""
-        if self._image_classification_corrected is None:
-            raise ValueError(
-                'tilt corrected classification not set, call '
-                'require_corrected_images or set_corrected_images first'
-            )
-        return self._image_classification_corrected
-
-    @property
-    def image_classification(self) -> np.ndarray:
-        """The classification used for the analysis (tilt corrected if use_tilt_correction)."""
-        return (
-            self.image_classification_corrected
-            if self.use_tilt_correction
-            else self.image_classification_uncorrected
+        new: Self = self.__class__(path_folder=self.path_folder)
+        new.set_image(
+            image=transform(self.image),
+            image_type='cv',
+            obj_color=self.obj_color
         )
+        if self.mask_foreground is not None:
+            new.set_foreground_mask_from_other(
+                mask_foreground=mapper.fit(
+                    self.mask_foreground.astype(float), preserve_range=True
+                ) > .5,
+                thr_background=self.min_intensity_foreground
+            )
+        if self.image_classification is not None:
+            classification: np.ndarray = restore_unique_values(
+                mapper.fit(self.image_classification, preserve_range=True),
+                (key_hole_pixels, key_dark_pixels, key_light_pixels)
+            ).astype(self.image_classification.dtype)
+            new.set_image_classification(classification)
+            new._params = self._params
+
+        new.age_span = self.age_span
+        new.average_width_yearly_cycle = self.average_width_yearly_cycle
+        new.is_tilt_corrected = True
+        new.tilt_mapper = mapper
+
+        if self.params_laminae_simplified is not None:
+            logger.info(
+                'laminae are not transferred to the tilt corrected instance, '
+                'call set_laminae_params_table on it'
+            )
+        return new
 
     def set_seeds(
             self,
@@ -2142,18 +2064,21 @@ class ImageClassified(Image):
         hold: bool, optional
             If True, will return the created figure and axes.
         """
-        mask_foreground: np.ndarray[bool] = self.mask_foreground_used
-
+        self._check_is_set('image', 'set_image')
         if image is not None:
             assert image.shape[1] == self.image.shape[1], \
                 (f'input image must match the image provided on initialization,'
                  f'so expecting {self.image.shape[1]} but got {image.shape[1]}')
             image_light = image
             mask_foreground = np.ones_like(image_light, dtype=bool)
-        elif in_classification:
-            image_light: np.ndarray = self.image_classification.copy()
         else:
-            image_light: np.ndarray = self.image_grayscale_used.copy()
+            self._check_mask_is_set()
+            mask_foreground: np.ndarray[bool] = self.mask_foreground
+            if in_classification:
+                self._check_classification_is_set()
+                image_light: np.ndarray = self.image_classification.copy()
+            else:
+                image_light: np.ndarray = self.image_grayscale.copy()
 
         brightness: np.ndarray[float] = self.column_wise_average(
             image_light, mask=mask_foreground
@@ -2161,7 +2086,7 @@ class ImageClassified(Image):
 
         horizontal_extent: int = image_light.shape[0]
 
-        if self._require_average_width_yearly_cycle() is not None:
+        if self.average_width_yearly_cycle is not None:
             yearly_thickness: float = self.average_width_yearly_cycle
         else:
             yearly_thickness: float = 12.  # results in min distance of 3 pixels
@@ -2246,7 +2171,8 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
         number of years in the age span times factor_above_age_span. If there
         are fewer seeds than that, all of them are kept.
         """
-        assert check_attr(self, 'age_span'), 'need an age span for this'
+        self._check_is_set('age_span', 'set_age_span')
+        self._check_seeds_are_set()
         if factor_above_age_span is None:
             factor_above_age_span = 1.5
         if factor_above_age_span < 1:
@@ -2323,13 +2249,18 @@ dark: {len(seeds_dark)}) \n with prominence greater than {peak_prominence}.')
             )
             return dataframe_params
 
-        pol_degree = kwargs.pop('degree', 0 if self.use_tilt_correction else 3)
+        self._check_classification_is_set()
+        self._check_seeds_are_set()
+
+        # laminae in tilt corrected images are roughly straight
+        pol_degree = kwargs.pop('degree', 0 if self.is_tilt_corrected else 3)
 
         image_classification: np.ndarray[int] = self.image_classification.copy()
 
         if height0_mode == 'use_age_model':
-            assert self._require_average_width_yearly_cycle() is not None, \
-                'use_age_model requires an age span (call set_age_span)'
+            self._check_is_set(
+                'average_width_yearly_cycle', 'set_average_width_yearly_cycle'
+            )
             height0s_light: float = self.average_width_yearly_cycle
             height0s_dark: float = self.average_width_yearly_cycle
         elif height0_mode == 'use_peak_widths':
@@ -2468,7 +2399,7 @@ use_age_model, not {height0_mode}')
             255, 127, 0
         image_grayscale: np.ndarray, optional
             Grayscale image matching image_classification. Defaults to
-            image_grayscale_used (pass it when calling this in a loop).
+            image_grayscale (pass it when calling this in a loop).
 
         Returns
         -------
@@ -2489,7 +2420,7 @@ use_age_model, not {height0_mode}')
             self.image_classification, idx
         )
         if image_grayscale is None:
-            image_grayscale = self.image_grayscale_used
+            image_grayscale = self.image_grayscale
         region_grayscale: np.ndarray = self._get_region_in_image_from_params(
             image_grayscale, idx
         )
@@ -2588,6 +2519,9 @@ use_age_model, not {height0_mode}')
                 contrast[idx - 1] = (center - neighbours) / sum_cn
             return contrast
 
+        self._check_classification_is_set()
+        self._check_params_laminae_are_set()
+
         params: pd.DataFrame = self.params_laminae_simplified
         N_layers: int = params.shape[0]
 
@@ -2599,7 +2533,7 @@ use_age_model, not {height0_mode}')
             (N_layers, len(criteria_quality_columns))
         )
 
-        image_grayscale: np.ndarray = self.image_grayscale_used
+        image_grayscale: np.ndarray = self.image_grayscale
 
         # iterate over laminae
         for idx in tqdm(range(N_layers), desc='Calculating layer qualities'):
@@ -2642,9 +2576,10 @@ use_age_model, not {height0_mode}')
             Whether to plot the classified and conflict image.
 
         """
-        assert self.params_laminae_simplified is not None, \
-            ('create simplified laminae with simplify_laminae before calling ' +
-             'create_simplified_laminae_classification.')
+        self._check_classification_is_set()
+        self._check_mask_is_set()
+        # laminae are processed in order of their quality
+        self._check_params_laminae_are_set(with_quality=True)
 
         image_classification: np.ndarray[int] = self.image_classification
 
@@ -2713,7 +2648,7 @@ use_age_model, not {height0_mode}')
         self.image_seeds: np.ndarray[int] = image_seeds_pad[slice_original]
         conflicts: np.ndarray[bool] = conflicts_pad[slice_original]
         # set background pixels to 0
-        mask_foreground: np.ndarray[bool] = self.mask_foreground_used
+        mask_foreground: np.ndarray[bool] = self.mask_foreground
         self.image_seeds *= mask_foreground
         conflicts &= mask_foreground.astype(bool)
 
@@ -2734,10 +2669,11 @@ use_age_model, not {height0_mode}')
         image_expanded : np.ndarray[int]
             Image with expanded labels.
         """
-        assert check_attr(self, 'image_seeds'), 'call set_laminae_images_from_params'
+        self._check_is_set('image_seeds', 'set_laminae_images_from_params')
+        self._check_mask_is_set()
         img = self.image_seeds
         img_e = expand_labels(img, distance=np.min(img.shape))
-        img_e *= self.mask_foreground_used
+        img_e *= self.mask_foreground
         return img_e
 
     def get_image_simplified_classification(
@@ -2751,8 +2687,7 @@ use_age_model, not {height0_mode}')
         image_simplified : np.ndarray[int]
             The image with light, dark and hole pixels.
         """
-        assert check_attr(self, 'image_seeds'), \
-            'call set_laminae_images_from_params'
+        self._check_is_set('image_seeds', 'set_laminae_images_from_params')
 
         if expanded:
             isc: np.ndarray[int] = np.sign(self.get_image_expanded_laminae())
@@ -2772,8 +2707,7 @@ use_age_model, not {height0_mode}')
         This function is intended to be called after set_quality_score and before
         reduce_laminae.
         """
-        assert check_attr(self, 'params_laminae_simplified'), 'call set_params_laminae_simplified first'
-        assert 'quality' in self.params_laminae_simplified.columns, 'call set_quality_score first'
+        self._check_params_laminae_are_set(with_quality=True)
 
         qualities: pd.Series = self.params_laminae_simplified.quality
 
@@ -2829,16 +2763,9 @@ use_age_model, not {height0_mode}')
 
             return highest
 
-        assert check_attr(self, 'age_span') or (n_expected is not None), (
-                'reduce_laminae requires either an age_span ' +
-                'or the number of expected layers, exiting method'
-        )
-        assert check_attr(self, 'params_laminae_simplified'), \
-            'call set_params_laminae_simplified'
-        assert 'quality' in self.params_laminae_simplified.columns, \
-            'internal error: quality criterion missing'
-        assert check_attr(self, 'age_span'), \
-            'no age span set, call set_age_span'
+        if n_expected is None:
+            self._check_is_set('age_span', 'set_age_span (or provide n_expected)')
+        self._check_params_laminae_are_set(with_quality=True)
 
         df: pd.DataFrame = self.params_laminae_simplified.copy()
 
@@ -2906,10 +2833,11 @@ use_age_model, not {height0_mode}')
 
     def plot_quality(self, take_abs=True, hold=False, fig=None, ax=None):
         """Plot quality criteria."""
-        assert self.params_laminae_simplified is not None, 'call set_params_laminae_simplified first'
+        self._check_params_laminae_are_set(with_quality=True)
+        self._check_classification_is_set()
 
         params = self.params_laminae_simplified
-        height_img, width_img = self.image_grayscale.shape
+        width_img: int = self.image_classification.shape[1]
         # overview plot
         if fig is None:
             fig, axs = plt.subplots(nrows=2, sharex=True)
@@ -3000,12 +2928,16 @@ use_age_model, not {height0_mode}')
         axs = np.array(axs)
         only_final = axs.shape == (1,)
 
+        self._check_classification_is_set()
+        self._check_params_laminae_are_set(with_quality=True)
+        self._check_is_set('image_seeds', 'set_laminae_images_from_params')
+
         if not only_final:
-            plt_cv2_image(image=self.image_used,
+            plt_cv2_image(image=self.image,
                           ax=axs[0, 0],
                           fig=fig,
                           title='Input image (tilt corrected: '
-                                f'{self.use_tilt_correction})',
+                                f'{self.is_tilt_corrected})',
                           no_ticks=True,
                           swap_rb=True)
             plt_cv2_image(image=self.image_classification,
@@ -3031,31 +2963,34 @@ use_age_model, not {height0_mode}')
         plt.show()
 
     def set_laminae_params_table(self, **kwargs):
-        """Do all steps at once."""
-        # classification and (if used) tilt correction
-        self.require_images(**kwargs)
+        """
+        Do all laminae steps at once (set_seeds, reduce_to_n_factor_seeds,
+        set_params_laminae_simplified, set_quality_score, filter_bad_laminae,
+        reduce_laminae, set_laminae_images_from_params).
+
+        The classification has to be set before.
+        """
+        self._check_classification_is_set()
+        self.image_seeds = None
         # set seeds with their prominences
         logger.info("setting seeds")
         self.set_seeds(**kwargs)
         if self.age_span is not None:
             self.reduce_to_n_factor_seeds(kwargs.pop('factor_above_age_span', None))
         else:
-            logger.warning('Age span not set, cannot rude seeds')
+            logger.warning('Age span not set, cannot reduce seeds')
         # initiate params dataframe with seeds and params for distorted rects
         logger.info("finding distorted rects")
         self.set_params_laminae_simplified(**kwargs)
-        # create output images for further analysis
-        logger.info("creating image")
         # add quality criteria for each layer
         logger.info("calculating quality score")
         self.set_quality_score(**kwargs)
         self.filter_bad_laminae(**kwargs)
-        self.reduce_laminae(**kwargs)
-
-    def require_laminae_params_table(self, overwrite=False, **kwargs):
-        if (self.params_laminae_simplified is not None) and (
-                'homogeneity' not in self.params_laminae_simplified.columns):
-            self.set_quality_score(plts=kwargs.get('plts', False))
-        if overwrite or (self.params_laminae_simplified is None):
-            self.set_laminae_params_table(**kwargs)
-        return self.params_laminae_simplified
+        if (self.age_span is not None) or (kwargs.get('n_expected') is not None):
+            # sets the laminae images if layers are removed
+            self.reduce_laminae(**kwargs)
+        else:
+            logger.warning('Age span not set, cannot reduce laminae')
+        if self.image_seeds is None:
+            logger.info("creating laminae images")
+            self.set_laminae_images_from_params(**kwargs)
