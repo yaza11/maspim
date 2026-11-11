@@ -168,6 +168,7 @@ class SpectraPool:
             total=len(indices), desc=self.desc, disable=not self.show_progress,
             smoothing=50 / max(len(indices), 1)
         )
+        self._n_done, self._n_total = 0, len(indices)
         try:
             if self.n_workers is None:
                 for k in order:
@@ -239,8 +240,10 @@ class SpectraPool:
 
     def _update(self, progress: tqdm) -> None:
         progress.update()
+        # count separately, a disabled progress bar does not count
+        self._n_done += 1
         if self.callback is not None:
-            self.callback(progress.n, progress.total)
+            self.callback(self._n_done, self._n_total)
 
     def _on_grid(self, mzs_spectrum: np.ndarray[float]) -> slice | None:
         """Slice of mzs_spectrum equal to self.mzs or None, if there is none."""

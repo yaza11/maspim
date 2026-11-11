@@ -243,6 +243,8 @@ class Spectra(DFolderManager, MzUtility):
     _temp_reader: tuple[Any, SpectraCache | CachingReader] = None
     # called with (number of processed spectra, total) in methods reading spectra (see SpectraPool), not saved
     _progress_callback: Callable[[int, int], None] = None
+    # which calibrants were found in each spectrum (rows follow self.indices), set by set_calibration_functions, not saved
+    _calibrator_presences: np.ndarray[bool] = None
 
     _save_in_d_folder: bool = True
     _save_attrs: set[str] = {
@@ -1321,6 +1323,7 @@ class Spectra(DFolderManager, MzUtility):
             raise KeyError(f'interpolation method {interpolation_method} does not exist.')
 
         self._calibration_parameters = calibration_parameters
+        self._calibrator_presences = calibrator_presences
 
         self._calibration_settings: dict[str, Any] = {
             'calibrants': calibrants_mz,
