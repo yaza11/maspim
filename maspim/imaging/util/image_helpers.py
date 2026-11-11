@@ -360,7 +360,7 @@ def get_foreground_from_slic(
 def get_foreground_pixels_and_threshold(
         image: np.ndarray,
         obj_color: str | None,
-        method: Literal['otsu', 'local-min', 'slic'] = 'otsu',
+        method: Literal['otsu', 'local_min', 'slic'] = 'otsu',
         **kwargs
 ) -> tuple[np.ndarray, float | int]:
     """
@@ -377,7 +377,7 @@ def get_foreground_pixels_and_threshold(
     -------
     mask, threshold
     """
-    methods: tuple[str, ...] = ('otsu', 'local-min', 'slic')
+    methods: tuple[str, ...] = ('otsu', 'local_min', 'slic')
     assert method in methods, f'Method {method} not {methods}'
 
     image_grayscale: np.ndarray = ensure_image_is_gray(image)
@@ -407,8 +407,7 @@ def get_foreground_pixels_and_threshold(
             **kwargs
         )
     else:
-        raise KeyError(f'{method=} is not a valid option. Choose one of\
-    "otsu", "local_min".')
+        raise KeyError(f'{method=} is not a valid option. Choose one of {methods}.')
     return mask_foreground, thr_background
 
 

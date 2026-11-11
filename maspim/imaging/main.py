@@ -60,6 +60,11 @@ class Image(Convenience):
     Base function to get sample images and analyze them.
 
     Can be used on its own for basic functionality, but generally not recommended.
+
+    All image classes follow the same logic: create an instance with a folder,
+    then call set methods explicitly (starting with set_image). Nothing is
+    computed implicitly when accessing an attribute. If a set method is missing
+    a prerequisite, the error message names the set method to call first.
     """
     average_width_yearly_cycle: float = None
     height_width: tuple[int, int] = None
@@ -90,29 +95,23 @@ class Image(Convenience):
             image: np.ndarray[float | int] = None,
             image_type: ImageType = None
     ):
-        """Initiator.
+        """
+        Set the image (and object color).
 
         Parameters
         ----------
-        obj_color : str
+        obj_color : str, optional
             The foreground color of the object in the image. Either 'light' or
-            'dark'. This is required for working with thresholded images is
-            desired.
+            'dark'. This is required for thresholding the image (e.g.
+            set_foreground_mask). Can also be set with infer_obj_color.
         path_image_file : str, optional
-            The file path to an image file to be read.
+            The file path to an image file to be read. Sets image_file and
+            path_folder.
         image : np.ndarray[float | int], optional
             Alternatively, an image can be provided directly.
-        mask_foreground: np.ndarray, optional
-            Mask specifying foreground pixels. Will be determined automatically
-            using the obj_color if not provided.
         image_type: str, optional
-            If the input image is not a cv image, provide this keyword argument.
-            Options are 'cv', 'np', 'pil' for images read or processed with
-            OpenCV, numpy or PILLOW respectively.
-        path_folder : str, optional
-            Folder in which the image or saved object is located. If not provided,
-            will be inferred from path_image_file.
-            If that is also not provided, will be an empty string.
+            Required if image is provided. Options are 'cv', 'np', 'pil' for
+            images read or processed with OpenCV, numpy or PILLOW respectively.
         """
         assert (path_image_file is not None) or (image is not None) or (self.path_image_file is not None), \
             "Must provide either path or image"
@@ -133,8 +132,6 @@ class Image(Convenience):
             assert image is not None, f"Could not load image from {path_image_file}"
             self.image_file: str = os.path.basename(path_image_file)
             self.path_folder: str = os.path.dirname(path_image_file)
-        if self.path_folder is not None:  # overwrite with provided
-            self.path_folder = self.path_folder
 
         self.obj_color: str = obj_color
 
@@ -174,15 +171,38 @@ class Image(Convenience):
         self.height_width = h, w
         self.image: np.ndarray[int | float] = image
         self.image_type: ImageType = 'cv'
+        # drop the cached grayscale version of a previous image
+        self.__dict__.pop('image_grayscale', None)
+
+    def _check_is_set(self, attr: str, *set_methods: str) -> None:
+        """Raise an error naming the set method(s) to call if attr is not set."""
+        if getattr(self, attr, None) is None:
+            raise ValueError(
+                f'{attr} is not set, call {" or ".join(set_methods)} first'
+            )
+
+    def _check_mask_is_set(self) -> None:
+        self._check_is_set(
+            'mask_foreground',
+            'set_foreground_mask',
+            'set_foreground_mask_from_other',
+            'set_foreground_mask_no_holes'
+        )
 
     @functools.cached_property
     def image_grayscale(self):
-        if self.image is None:
-            raise ValueError('To set grayscale image, set an image first.')
+        """Grayscale version of image (cached until a new image is set)."""
+        self._check_is_set('image', 'set_image')
         return ensure_image_is_gray(self.image)
 
     def set_foreground_mask_from_other(self, mask_foreground, thr_background=None):
+        """
+        Set the foreground mask from an existing mask (e.g. of a parent).
+
+        Does nothing if mask_foreground is None.
+        """
         if mask_foreground is not None:
+            self._check_is_set('image', 'set_image')
             assert mask_foreground.ndim == 2, f'mask must be 2D'
             assert len(np.unique(mask_foreground)) <= 2, \
                 f'mask should contain at most 2 unique values'
@@ -191,6 +211,12 @@ class Image(Convenience):
                  f'{mask_foreground.shape} and image: {self.image.shape[:2]}')
             self.mask_foreground: np.ndarray[bool] = mask_foreground > 0
             self.min_intensity_foreground: int = thr_background
+
+    def set_foreground_mask_no_holes(self) -> None:
+        """Set all pixels as foreground (for samples without holes)."""
+        self._check_is_set('image', 'set_image')
+        self.mask_foreground = np.ones(self.image.shape[:2], dtype=bool)
+        self.min_intensity_foreground = 0
 
     def set_foreground_mask(
             self, thr_method: Literal['otsu', 'local-min', 'slic'] = 'otsu', image=None, plts: bool = False, **kwargs
@@ -202,7 +228,10 @@ class Image(Convenience):
         ----------
         thr_method : str, optional
             The method to use for thresholding. The default is 'otsu'.
-            The other option is 'local-min'.
+            Other options are 'local-min' and 'slic'. 'otsu' and 'local-min'
+            require the object color.
+        image : np.ndarray, optional
+            Image matching the shape of image to use instead of image.
         plts : bool, optional
             Whether to plot the foreground pixels.
 
@@ -211,19 +240,20 @@ class Image(Convenience):
         None
 
         """
-        # if self.obj_color is None:
-        #     raise ValueError('Set object color before setting foreground mask.')
+        self._check_is_set('image', 'set_image')
+        if thr_method in ('otsu', 'local-min'):
+            self._check_is_set('obj_color', 'set_image (with obj_color)', 'infer_obj_color')
 
         if image is None:
-            if self.image is None:
-                raise ValueError('Set image before setting foreground mask or provide it directly.')
-            else:
-                image = self.image
+            image = self.image
+        else:
+            assert image.shape[:2] == self.image.shape[:2], \
+                f'image must have shape {self.image.shape[:2]}, but has {image.shape[:2]}'
 
         logger.debug(f'determining foreground pixels with {thr_method=}.')
 
         self.mask_foreground, self.min_intensity_foreground = get_foreground_pixels_and_threshold(
-            image=self.image,
+            image=image,
             obj_color=self.obj_color,
             method=thr_method,
             plts=plts,
@@ -258,8 +288,10 @@ class Image(Convenience):
             The dark pixels.
         """
         if image is None:
+            self._check_is_set('image', 'set_image')
             image: np.ndarray[int | float] = self.image
         if mask is None:
+            self._check_mask_is_set()
             mask: np.ndarray[bool] = self.mask_foreground
 
         # create instances of functions
@@ -304,10 +336,9 @@ class Image(Convenience):
         -----
         Defines image_simplified.
         """
-        if (image_binary is None) and (self.mask_foreground is None):
-            raise ValueError('By default, foreground mask is used as binary image. Either provide a binary image '
-                             'directly or set the foreground.')
-        elif image_binary is None:
+        if image_binary is None:
+            # by default, the foreground mask is used as binary image
+            self._check_mask_is_set()
             image_binary = self.mask_foreground
 
         self.image_simplified: np.ndarray[np.uint8] = get_simplified_image(
@@ -348,11 +379,10 @@ class Image(Convenience):
         assert method in methods, \
             f"{method=} is not an option. Valid options are {methods}"
 
-        if (image_binary is None) and (self.image_simplified is not None):
+        if image_binary is None:
+            # by default, the simplified image is used as binary image
+            self._check_is_set('image_simplified', 'set_simplified_image')
             image_binary: np.ndarray[int] = self.image_simplified
-        elif image_binary is None:
-            raise ValueError(
-                'Image_binary is not defined. Either provide a binary image or set the simplified image first!')
 
         contours, _ = cv2.findContours(
             image_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
@@ -439,8 +469,8 @@ class Image(Convenience):
         if pixels is not None:
             self.average_width_yearly_cycle = pixels
             return
-        assert check_attr(self, 'age_span'), \
-            'call set_age_span'
+        self._check_is_set('age_span', 'set_age_span')
+        self._check_is_set('image', 'set_image')
         pixels_x: int = self.image.shape[1]
         # calculate the number of expected cycles from the age difference for
         # the depth interval of the slice
@@ -548,26 +578,23 @@ class ImageSample(Image):
             self.image = cv2.imread(self.path_image_file)
             self.image_type = 'cv'
 
-    def infer_obj_color(self, image_grayscale: np.ndarray = None, region_middleground: float = .8, **_) -> ObjectColor:
+    def infer_obj_color(self, image_grayscale: np.ndarray = None, region_middleground: float = .8, **_) -> None:
         """
-        Determine if middle-ground is light or dark by comparing averages.
+        Set obj_color by determining if the middle-ground is light or dark by
+        comparing averages.
+
+        obj_color is set to 'light' if the middle-ground is lighter than the
+        whole image and 'dark' otherwise.
 
         Parameters
         ----------
-        image : uint8 array.
-            The image to check.
+        image_grayscale : uint8 array, optional
+            The image to check. Defaults to image_grayscale.
         region_middleground: float between 0 and 1.
             The region defined as the middle ground in each direction from the
             center expressed as a fraction. The default is .8.
-
-        Returns
-        -------
-        obj_color: str
-            'light' if middle-ground is lighter than whole image
-            and 'dark' otherwise.
-
         """
-        if (image_grayscale is None) and (self.image_grayscale is not None):
+        if image_grayscale is None:
             image_grayscale: np.ndarray = self.image_grayscale
 
         height, width = image_grayscale.shape[:2]
@@ -686,10 +713,9 @@ class ImageSample(Image):
             return -np.abs(mean_box - mean_rest) * fraction_area
 
         if image_binary is None:
-            if self.mask_foreground is not None:
-                image_binary: np.ndarray[int] = self.mask_foreground
-            else:
-                raise ValueError('To determine sample area, binary image is required. Either set the mask or provide it directly.')
+            # by default, the foreground mask is used as binary image
+            self._check_mask_is_set()
+            image_binary: np.ndarray[int] = self.mask_foreground
         image_downscaled, scale_factor = auto_downscaled_image(image_binary)
         # initiate center_box
         middle_y: int = round(image_downscaled.shape[0] / 2)
@@ -789,7 +815,7 @@ class ImageSample(Image):
             contour=None,
             image=None,
             plts: bool = False,
-            **kwargs: Any
+            **_
     ) -> tuple[np.ndarray, tuple[int, ...]]:
         """
         Get the roi spanned by the main contour.
@@ -801,11 +827,13 @@ class ImageSample(Image):
 
         Parameters
         ----------
+        contour: np.ndarray, optional
+            The contour to use. Defaults to main_contour.
+        image: np.ndarray, optional
+            The image from which to cut out the ROI. Defaults to image.
         plts: bool, optional
             If True, will plot the identified bounding box on top of the image.
             The default is False.
-        kwargs: Any, optional
-            Keyword arguments for _require_main_contour.
 
         Returns
         -------
@@ -815,16 +843,12 @@ class ImageSample(Image):
             The coordinates of the box.
         """
         if contour is None:
-            if self.main_contour is not None:
-                contour = self.main_contour
-            else:
-                raise ValueError('To determine sample area, main contour is required. Either set the main contour or provide it directly.')
+            self._check_is_set('main_contour', 'set_main_contour')
+            contour = self.main_contour
 
         if image is None:
-            if self.image is not None:
-                image = self.image
-            else:
-                raise ValueError('To determine sample area, image is required. Either set the image or provide it directly.')
+            self._check_is_set('image', 'set_image')
+            image = self.image
 
         x, y, w, h = cv2.boundingRect(contour)
         # select region from image
@@ -854,8 +878,13 @@ class ImageSample(Image):
         to get a rough estimate that definitely includes the entire sample.
         Then, find the contour of the simplified area and its bounding box.
 
+        Requires the image and the foreground mask to be set (the latter not
+        for interactive mode).
+
         Parameters
         ----------
+        image: np.ndarray, optional
+            Image shown in interactive mode. Defaults to image.
         plts: bool, optional
             Whether to plot the identified ROI. Default is False.
         interactive: bool, optional
@@ -871,9 +900,11 @@ class ImageSample(Image):
             extend_x is defined.
 
         """
+        self._check_is_set('image', 'set_image')
         if interactive:
             self._user_sample_area(image=image)
             return
+        self._check_mask_is_set()
 
         if not adjust_with_main_contour or extent_x is not None:
             dilate_factor_box_result = 1
@@ -892,7 +923,8 @@ class ImageSample(Image):
             image_sub: ImageSample = ImageSample()
             image_sub.set_image(
                 image=image_box,
-                image_type=self.image_type,
+                # image is stored as cv image, image_type is not saved to disk
+                image_type=self.image_type or 'cv',
                 obj_color=self.obj_color
             )
             image_sub.set_foreground_mask_from_other(
@@ -900,12 +932,8 @@ class ImageSample(Image):
             )
             image_sub.set_simplified_image(image_binary=image_sub.mask_foreground)
             image_sub.set_main_contour(image_binary=image_sub.image_simplified)
-            # find the refined area as the extent_roi_coordinates of the simplified binary image
-            _, (xc, yc, wc, hc) = image_sub.get_sample_area_from_contour(
-                image_binary=image_sub.image_simplified,
-                method='filter_by_size',
-                plts=plts
-            )
+            # find the refined area as the bounding box of the main contour
+            _, (xc, yc, wc, hc) = image_sub.get_sample_area_from_contour(plts=plts)
 
             # stack the offsets of the two defined ROI's since the second ROI is
             # placed in the first one
@@ -933,10 +961,8 @@ class ImageSample(Image):
     def _user_sample_area(self, image: np.ndarray | None) -> None:
         """Set image ROI by points defined by user."""
         if image is None:
-            if self.image is None:
-                raise ValueError('Image is required to define sample area interactively.')
-            else:
-                image = self.image
+            self._check_is_set('image', 'set_image')
+            image = self.image
 
         interactive_image: InteractiveImage = InteractiveImage(image, mode='rect')
         interactive_image.show()
@@ -960,22 +986,18 @@ class ImageSample(Image):
 
     def get_sample_area_from_xywh(self, image=None):
         """Get the region of the image corresponding to sample area from xywh."""
-        assert check_attr(self, 'xywh_ROI'), \
-            'no roi found, call require_image_sample_area'
+        self._check_is_set('xywh_ROI', 'set_sample_area')
         if image is None:
-            if self.image is not None:
-                image = self.image
-            else:
-                raise ValueError('To get sample area, image is required. Either set the image or provide it directly.')
+            self._check_is_set('image', 'set_image')
+            image = self.image
 
         x, y, w, h = self.xywh_ROI
         return image[y:y + h, x:x + w].copy()
 
     def plot_sample_area(self, **kwargs: Any) -> None | tuple[plt.Figure, plt.Axes]:
         """Plot the detected sample area as rectangle on original image."""
-        assert check_attr(self, 'xywh_ROI'), \
-            'call require_image_sample_area first'
-        assert self.mask_foreground is not None, 'foreground must be set'
+        self._check_is_set('xywh_ROI', 'set_sample_area')
+        self._check_is_set('image', 'set_image')
         xb, yb, wb, hb = self.xywh_ROI
 
         return plt_rect_on_image(
@@ -983,7 +1005,7 @@ class ImageSample(Image):
             title=kwargs.pop('title', 'Detected sample area'),
             no_ticks=kwargs.pop('no_ticks', True),
             box_params=region_in_box(
-                image=self.mask_foreground,
+                image=self.image,
                 x=xb,
                 y=yb,
                 w=wb,
@@ -1009,14 +1031,15 @@ class ImageSample(Image):
 
         if self.xywh_ROI is not None:
             xb, yb, wb, hb = self.xywh_ROI
+            image_box = self.mask_foreground if self.mask_foreground is not None else self.image
             plt_rect_on_image(
                 fig=fig,
                 ax=axs[0, 1],
-                image=self.mask_foreground,
+                image=image_box,
                 title='box',
                 no_ticks=True,
                 hold=True,
-                box_params=region_in_box(image=self.mask_foreground, x=xb, y=yb, w=wb, h=hb)
+                box_params=region_in_box(image=image_box, x=xb, y=yb, w=wb, h=hb)
             )
         else:
             axs[0, 1].axis('off')
@@ -1033,11 +1056,12 @@ class ImageSample(Image):
             )
         else:
             axs[1, 0].axis('off')
-        if self.image_roi is not None:
+        if self.xywh_ROI is not None:
+            # image_roi is not saved, but can always be cut out from xywh_ROI
             plt_cv2_image(
                 fig=fig,
                 ax=axs[1, 1],
-                image=self.image_roi,
+                image=self.get_sample_area_from_xywh(),
                 title='final sample region', no_ticks=True,
                 swap_rb=True
             )
@@ -1086,41 +1110,65 @@ class ImageROI(Image):
         'image_file',
         'image',
         'obj_color',
-        'xywh_ROI',
         'height_width',
         'punchholes',
         'punchhole_size',
-        'mask_foreground'
+        'mask_foreground',
+        'min_intensity_foreground'
     }
 
     @classmethod
-    def from_parent(cls, parent: ImageSample, **kwargs) -> Self:
+    def from_parent(
+            cls,
+            parent: ImageSample,
+            age_span: tuple[float | int, float | int] | None = None,
+            **_
+    ) -> Self:
         """
         Alternative constructor for instantiating an object from a parent
         ImageSample instance.
+
+        Takes the sample area of the parent as image (and foreground mask, if
+        set). The parent needs an image and a sample area (set_sample_area).
+
+        Parameters
+        ----------
+        parent: ImageSample
+            The parent object.
+        age_span: tuple[float | int, float | int], optional
+            Age span of the sample. If not provided, will be taken from the
+            parent (if it is set there).
         """
         if not isinstance(parent, ImageSample):
             raise TypeError(
                 f'parent must be an instance of ImageSample, not {type(parent)}'
             )
-        if (not parent.xywh_ROI) or (parent.image is None):
-            raise ValueError(
-                'parent must have image and xywh_ROI attributes set'
-            )
+        parent._check_is_set('image', 'set_image (on parent)')
+        parent._check_is_set('xywh_ROI', 'set_sample_area (on parent)')
 
         image = parent.get_sample_area_from_xywh()
         x, y, w, h = parent.xywh_ROI
-        if (parent.mask_foreground is not None):
+        if parent.mask_foreground is not None:
             mask_foreground = parent.mask_foreground[y: y + h, x: x + w]
         else:
             mask_foreground = None
 
         new = cls(path_folder=parent.path_folder)
-        new.set_image(image=image, image_type=parent.image_type, obj_color=parent.obj_color)
-        new.set_foreground_mask_from_other(mask_foreground=mask_foreground)
+        new.set_image(
+            image=image,
+            # image is stored as cv image, image_type is not saved to disk
+            image_type=parent.image_type or 'cv',
+            obj_color=parent.obj_color
+        )
+        new.set_foreground_mask_from_other(
+            mask_foreground=mask_foreground,
+            thr_background=parent.min_intensity_foreground
+        )
 
-        if check_attr(parent, 'age_span') and ('age_span' not in kwargs):
-            new.age_span = parent.age_span
+        if age_span is not None:
+            new.set_age_span(age_span)
+        elif check_attr(parent, 'age_span'):
+            new.set_age_span(parent.age_span)
         return new
 
     def set_punchholes(
@@ -1136,44 +1184,47 @@ class ImageROI(Image):
 
         Parameters
         ----------
+        image_binary: np.ndarray, optional
+            Binary image in which to find the holes. Defaults to the
+            foreground mask.
         remove_gelatine: bool
             Try to remove gelatin residuals by masking foreground values
             with the simplified image since the simplified
             image usually does not contain the gelatin.
             If false, uses the binary image.
+        image_simplified: np.ndarray, optional
+            Simplified image used to remove the gelatine. Defaults to
+            image_simplified.
         interactive: bool, optional
             If this is set to True, will open a window for the user to click
             on the punch-holes.
         kwargs: Any, optional
             Extra keywords to be passed on to find_holes.
         """
+        self._check_is_set('image', 'set_image')
         if interactive:
             self._user_punchholes()
             return
 
-        # need copy, otherwise mask in ImageROI will be modified
         if image_binary is None:
-            if self.mask_foreground is None:
-                raise ValueError('Foreground mask is required to find punchholes or binary image must be provided.')
-            else:
-                image_binary = self.mask_foreground.copy()
+            self._check_mask_is_set()
+            image_binary = self.mask_foreground
         else:
-            assert np.unique(image_binary).shape <= 2, 'binary image contains more than two values'
+            assert len(np.unique(image_binary)) <= 2, 'binary image contains more than two values'
 
         if remove_gelatine:
             if image_simplified is None:
-                if self.image_simplified is None:
-                    raise ValueError('Simplified image is required to find punchholes or binary image must be provided.')
-                else:
-                    image_simplified = self.image_simplified.copy()
-            image_binary *= image_simplified
+                self._check_is_set('image_simplified', 'set_simplified_image')
+                image_simplified = self.image_simplified
+            # not in place, otherwise the mask would be modified
+            image_binary = image_binary * (image_simplified > 0)
 
         kwargs_ = kwargs.copy()
         if 'obj_color' in kwargs_:
             kwargs_.pop('obj_color')
 
         self.punchholes, self.punchhole_size = find_holes(
-            image_binary=image_binary,
+            image=image_binary.astype(np.uint8),
             obj_color='light',  # image binary takes object color into account
             **kwargs_
         )
@@ -1194,8 +1245,7 @@ class ImageROI(Image):
             image_name: str = 'image_grayscale',
             fig: plt.Figure | None = None,
     ) -> None | tuple[plt.Figure, plt.Axes]:
-        if self.punchholes is None:
-            raise ValueError('Punchholes not set yet')
+        self._check_is_set('punchholes', 'set_punchholes')
 
         image = self.__getattribute__(image_name)
 
@@ -1211,7 +1261,7 @@ class ImageROI(Image):
             ax=axs,
             image=image,
             box_params=region_in_box(
-                image=self.mask_foreground,
+                image=image,
                 point_topleft=np.array(self.punchholes[0])[::-1] - hole_size / 2,
                 point_bottomright=np.array(self.punchholes[0])[::-1] + hole_size / 2
             ),
@@ -1223,7 +1273,7 @@ class ImageROI(Image):
             ax=ax11,
             image=image,
             box_params=region_in_box(
-                image=self.mask_foreground,
+                image=image,
                 point_topleft=np.array(self.punchholes[1])[::-1] - hole_size / 2,
                 point_bottomright=np.array(self.punchholes[1])[::-1] + hole_size / 2
             ), no_ticks=True,
@@ -1375,21 +1425,6 @@ class ImageClassified(Image):
         'image_seeds'
     }
 
-    def _check_is_set(self, attr: str, *set_methods: str) -> None:
-        """Raise an error naming the set method(s) to call if attr is not set."""
-        if getattr(self, attr, None) is None:
-            raise ValueError(
-                f'{attr} is not set, call {" or ".join(set_methods)} first'
-            )
-
-    def _check_mask_is_set(self) -> None:
-        self._check_is_set(
-            'mask_foreground',
-            'set_foreground_mask',
-            'set_foreground_mask_from_other',
-            'set_foreground_mask_no_holes'
-        )
-
     def _check_classification_is_set(self) -> None:
         self._check_is_set(
             'image_classification',
@@ -1458,12 +1493,6 @@ class ImageClassified(Image):
             new.average_width_yearly_cycle = parent.average_width_yearly_cycle
 
         return new
-
-    def set_foreground_mask_no_holes(self) -> None:
-        """Set all pixels as foreground (for samples without holes)."""
-        self._check_is_set('image', 'set_image')
-        self.mask_foreground = np.ones(self.image.shape[:2], dtype=bool)
-        self.min_intensity_foreground = 0
 
     def set_image_classification(self, image_classification: np.ndarray[int]) -> None:
         """
