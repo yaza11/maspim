@@ -38,7 +38,8 @@ setup(
                       'tables',
                       'textdistance',
                       'astropy'],
-    extras_require={'dev': 'twine', 'all': ['mfe']},
+    extras_require={'dev': 'twine', 'gui': ['PyQt5'], 'all': ['mfe', 'PyQt5']},
+    entry_points={'console_scripts': ['maspim-spectra-gui=maspim.gui.spectra_gui:main']},
     keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI',
               'laminated', 'lamination', 'image registration', 'MSI', 'micro X-ray fluorescence', 'XRF', 'muXRF'],
     classifiers=[
