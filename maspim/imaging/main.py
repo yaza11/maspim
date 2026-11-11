@@ -78,6 +78,7 @@ class Image(Convenience):
     age_span: tuple[float, float] = None
     image_file: str = None
     obj_color: ObjectColor = None
+    axes_swapped: bool = False
 
     _save_attrs: set[str] = {
         'age_span',
@@ -162,7 +163,8 @@ class Image(Convenience):
             )
         # make sure image is oriented horizontally
         h, w, *_ = image.shape
-        if h > w:
+        self.axes_swapped: bool = bool(h > w)
+        if self.axes_swapped:
             logger.info(
                 'swapped axes of input image to ensure horizontal orientation'
             )
@@ -199,11 +201,15 @@ class Image(Convenience):
         """
         Set the foreground mask from an existing mask (e.g. of a parent).
 
-        Does nothing if mask_foreground is None.
+        The mask has to match the input image of set_image. If set_image
+        swapped the axes of the image (to orient it horizontally), the axes of
+        the mask are swapped as well. Does nothing if mask_foreground is None.
         """
         if mask_foreground is not None:
             self._check_is_set('image', 'set_image')
             assert mask_foreground.ndim == 2, f'mask must be 2D'
+            if self.axes_swapped and (mask_foreground.shape == self.image.shape[:2][::-1]):
+                mask_foreground = mask_foreground.swapaxes(0, 1)
             assert len(np.unique(mask_foreground)) <= 2, \
                 f'mask should contain at most 2 unique values'
             assert mask_foreground.shape == self.image.shape[:2], \
@@ -219,7 +225,7 @@ class Image(Convenience):
         self.min_intensity_foreground = 0
 
     def set_foreground_mask(
-            self, thr_method: Literal['otsu', 'local-min', 'slic'] = 'otsu', image=None, plts: bool = False, **kwargs
+            self, thr_method: Literal['otsu', 'local_min', 'slic'] = 'otsu', image=None, plts: bool = False, **kwargs
     ) -> None:
         """
         Set threshold for foreground pixels and thresholded binary image.
@@ -228,7 +234,7 @@ class Image(Convenience):
         ----------
         thr_method : str, optional
             The method to use for thresholding. The default is 'otsu'.
-            Other options are 'local-min' and 'slic'. 'otsu' and 'local-min'
+            Other options are 'local_min' and 'slic'. 'otsu' and 'local_min'
             require the object color.
         image : np.ndarray, optional
             Image matching the shape of image to use instead of image.
@@ -241,7 +247,7 @@ class Image(Convenience):
 
         """
         self._check_is_set('image', 'set_image')
-        if thr_method in ('otsu', 'local-min'):
+        if thr_method in ('otsu', 'local_min'):
             self._check_is_set('obj_color', 'set_image (with obj_color)', 'infer_obj_color')
 
         if image is None:
