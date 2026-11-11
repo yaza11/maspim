@@ -9,7 +9,10 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import inspect
 import os
+import tempfile
+import weakref
 import psutil
 import logging
 
@@ -17,13 +20,15 @@ import scipy.signal
 from pyrtms.rtmsBrukerMCFReader import RtmsBrukerMCFReader
 from scipy.sparse import csc_matrix
 from tqdm import tqdm
-from typing import Iterable, Self, Any, Callable, Literal, Iterator
+from typing import Iterable, Self, Any, Callable, Literal
 from scipy.signal import find_peaks, correlate, correlation_lags, peak_widths
 from scipy.optimize import curve_fit
 from scipy.ndimage import minimum_filter, median_filter
 
 from maspim.data.combine_feature_tables import combine_feature_tables
-from maspim.exporting.from_mcf.batch_processor import BatchProcessor
+from maspim.exporting.from_mcf.spectra_cache import SpectraCache, CachingReader
+from maspim.exporting.from_mcf.spectra_pool import SpectraPool, ThreadLocalSum, calibration_margin, \
+    MAX_CALIBRATION_SHIFT
 from maspim.exporting.sqlite_mcf_communicator.hdf import Hdf5Handler
 from maspim.exporting.sqlite_mcf_communicator.sql_to_mcf import get_sql_files
 from maspim.exporting.from_mcf.helper import get_mzs_for_limits, find_polycalibration_spectrum, Spectrum, \
@@ -231,6 +236,13 @@ class Spectra(DFolderManager, MzUtility):
 
     # cache for spectrum_idx2array_idx: (indices array the cache was built for, mapping)
     _index_lookup: tuple[np.ndarray[int], dict[int, int]] = None
+    # copy of the spectra in a temporary folder (see set_temp_dir), not saved
+    _temp_cache: SpectraCache = None
+    _temp_finalizer: weakref.finalize = None
+    # (reader passed to a method, reader using the temporary copy)
+    _temp_reader: tuple[Any, SpectraCache | CachingReader] = None
+    # called with (number of processed spectra, total) in methods reading spectra (see SpectraPool), not saved
+    _progress_callback: Callable[[int, int], None] = None
 
     _save_in_d_folder: bool = True
     _save_attrs: set[str] = {
@@ -611,72 +623,101 @@ class Spectra(DFolderManager, MzUtility):
             # np.interp only evaluates at self.mzs, which crops to the limits
             intensities = np.interp(self.mzs, mzs, intensities)
             mzs = self.mzs
-        elif len(intensities) != len(self.mzs):
-            raise ValueError(
-                f'spectrum {index} has {len(intensities)} values within the limits, but '
-                f'there are {len(self.mzs)} mz values, call get_spectrum with resample=True'
-            )
 
         if intensities_only:
             mzs = None
         return mzs, intensities
 
-    def _iter_batches(
-            self,
-            reader: RtmsBrukerMCFReader | Hdf5Handler,
-            indices: Iterable[int] | None = None,
-            calibrate: bool | None = None,
-            **kwargs: Any
-    ) -> Iterator[tuple[np.ndarray[int], np.ndarray[float]]]:
+    def set_temp_dir(self, path_folder: str | None) -> None:
         """
-        Iterate over spectra in batches, calibrated and resampled to self.mzs.
+        Keep a copy of the spectra within the limits in a temporary folder on a
+        fast disk (e.g. a local SSD) while this object is alive.
+
+        Spectra are copied while they are read for the first time by a method
+        taking a reader, later methods read the copy. This pays off when the
+        measurement is on an external hard drive (~40 MB/s), as most steps read
+        all spectra. The copy needs about 4 bytes per data point of all spectra
+        in the limits (~75 GB for 17_000 spectra with 1.1 million data points).
+
+        The temporary folder is deleted by remove_temp_dir, once this object is
+        garbage collected or when Python exits (not if the process is killed,
+        leftover folders start with 'maspim_spectra_').
 
         Parameters
         ----------
-        reader : RtmsBrukerMCFReader | Hdf5Handler
-            Reader from which to obtain the spectra.
-        indices: Iterable[int], optional
-            Indices of the spectra (as used by the reader). Defaults to self.indices.
-        calibrate: bool, optional
-            Whether to calibrate spectra. Defaults to calibrating if calibration
-            parameters have been set.
-        kwargs: Any
-            Additional keyword arguments for BatchProcessor (e.g. n_jobs, show_progress, desc).
-
-        Yields
-        ------
-        positions: np.ndarray[int]
-            Positions in indices of the spectra in this batch.
-        intensities: np.ndarray[float]
-            Intensities with shape (len(positions), len(self.mzs)).
+        path_folder: str | None
+            Folder in which the temporary folder is created. None removes the
+            temporary folder.
         """
-        if indices is None:
-            indices = self.indices
-        indices = np.asarray(indices)
+        self.remove_temp_dir()
+        if path_folder is None:
+            return
+        self._temp_cache = SpectraCache(
+            tempfile.mkdtemp(prefix='maspim_spectra_', dir=path_folder), limits=self.limits
+        )
+        # the finalizer must not reference self, otherwise self is never garbage collected
+        self._temp_finalizer = weakref.finalize(self, self._temp_cache.remove)
+
+    def remove_temp_dir(self) -> None:
+        """Delete the temporary copy of the spectra (see set_temp_dir)."""
+        if self._temp_finalizer is not None:
+            # removes the folder, finalizers only run once
+            self._temp_finalizer()
+        self._temp_cache = self._temp_finalizer = self._temp_reader = None
+
+    def _cached_reader(self, reader: Any) -> Any:
+        """Reader using the temporary copy of the spectra, if there is one (see set_temp_dir)."""
+        if (self._temp_cache is None) or isinstance(reader, SpectraCache | CachingReader):
+            return reader
+        if (self._temp_reader is None) or (self._temp_reader[0] is not reader):
+            if not self._temp_cache.covers(self.limits):  # limits changed
+                self._temp_cache.limits = self.limits
+            self._temp_reader = (reader, self._temp_cache.cached(reader, indices=self.indices))
+        return self._temp_reader[1]
+
+    def _pool(
+            self,
+            reader: RtmsBrukerMCFReader | Hdf5Handler | SpectraCache,
+            n_jobs: int | None = None,
+            **kwargs: Any
+    ) -> SpectraPool:
+        """Pool reading spectra from reader (kwargs: show_progress, desc, max_bytes)."""
+        return SpectraPool(
+            self._cached_reader(reader), mzs=self.mzs, limits=self.limits, n_jobs=n_jobs,
+            callback=self._progress_callback, **kwargs
+        )
+
+    def _poly_coeffs(self, calibrate: bool | None = None) -> np.ndarray[float] | None:
+        """Calibration parameters (rows follow self.indices), None if spectra are not calibrated."""
         if calibrate is None:
             calibrate = check_attr(self, '_calibration_parameters')
-        poly_coeffs: np.ndarray[float] | None = (
-            self._calibration_parameters[self.spectrum_idx2array_idx(indices), :]
-            if calibrate else None
-        )
-        batch_processor: BatchProcessor = BatchProcessor(
-            reader, mzs=self.mzs, limits=self.limits, **kwargs
-        )
-        yield from batch_processor.iter_batches(indices, poly_coeffs=poly_coeffs)
+        if calibrate and (self._calibration_parameters is None):
+            raise ValueError('calibration parameters have not been set, call set_calibration_functions')
+        return self._calibration_parameters if calibrate else None
 
     def add_all_spectra(
             self,
-            reader: RtmsBrukerMCFReader | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler | SpectraCache,
             recalibrate: bool,
-            show_progress: bool = False
+            show_progress: bool = False,
+            n_jobs: int | None = None
     ) -> None:
         """
         Add up all spectra found in the mcf file.
 
         Parameters
         ----------
-        reader : RtmsBrukerMCFReader | Hdf5Handler
+        reader : RtmsBrukerMCFReader | Hdf5Handler | SpectraCache
             Reader from which to obtain the spectra.
+        recalibrate: bool
+            Whether to apply the calibration parameters. Calibrated spectra are
+            resampled to self.mzs.
+        show_progress: bool, optional
+            Whether to show a progress bar.
+        n_jobs: int, optional
+            Number of threads processing the spectra while they are read (values
+            smaller than 1 use all cpus). The default is None, which reads and
+            processes spectra one after another.
         """
         if not check_attr(self, '_indices'):
             raise AttributeError('No indices were set and also none were found in the reader. '
@@ -688,29 +729,19 @@ class Spectra(DFolderManager, MzUtility):
 
         self.reset_intensities()
         tic_weights: np.ndarray[float] = self._trapezoid_weights()
+        poly_coeffs: np.ndarray[float] | None = self._poly_coeffs(recalibrate)
+        pool: SpectraPool = self._pool(reader, n_jobs, desc='Adding spectra', show_progress=show_progress)
+        summed: ThreadLocalSum = ThreadLocalSum(len(self.mzs))
 
-        # iterate over all spectra
-        # for rows, intensities in self._iter_batches(
-        #         reader, desc='Adding spectra', show_progress=show_progress
-        # ):
-        #     self._intensities += intensities.sum(axis=0)
-        #     self._tic[rows] = np.trapezoid(intensities, x=self.mzs, axis=1)
-        for it, idx in tqdm(
-                enumerate(self.indices),
-                desc='Adding spectra', smoothing=50 / self._n_spectra,
-                total=self.indices.shape[0],
-                disable=not show_progress
-        ):
-            _, _ints = self.get_spectrum(
-                reader=reader,
-                index=idx,
-                recalibrate=recalibrate,
-                intensities_only=True
+        def add(position: int, mzs: np.ndarray[float], intensities: np.ndarray[float]) -> None:
+            spectrum: np.ndarray[float] = pool.resample(
+                mzs, intensities, None if poly_coeffs is None else poly_coeffs[position]
             )
-            self._intensities += _ints
-            # rows of the tic follow the order of self.indices
-            self._tic[it] = tic_weights @ _ints
+            summed.add(spectrum)
+            self._tic[position] = tic_weights @ spectrum
 
+        pool.run(add, self.indices, margin=calibration_margin(poly_coeffs, self.limits))
+        self._intensities = summed.total()
         # due to floating point precision?
         self._intensities[self._intensities < 0] = 0
 
@@ -718,17 +749,22 @@ class Spectra(DFolderManager, MzUtility):
 
     def add_all_spectra_aligned(
             self,
-            reader: RtmsBrukerMCFReader | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler | SpectraCache,
             show_progress: bool = False
     ) -> None:
         """
         Add all spectra together but insert an alignment step based on the
         cross-correlation of the current sum and spectrum.
-        
+
+        Spectra are added in the order in which they are stored on disk, the next
+        spectra are read in the background while a spectrum is aligned.
+
         Parameters
         ----------
-        reader : RtmsBrukerMCFReader | Hdf5Handler
+        reader : RtmsBrukerMCFReader | Hdf5Handler | SpectraCache
             Reader from which to obtain the spectra.
+        show_progress: bool, optional
+            Whether to show a progress bar.
         """
         if not check_attr(self, '_indices'):
             raise AttributeError('No indices were set and also none were found in the reader. '
@@ -741,36 +777,33 @@ class Spectra(DFolderManager, MzUtility):
         self.reset_intensities()
         # shifting the grid does not change the spacing of the mzs
         tic_weights: np.ndarray[float] = self._trapezoid_weights()
+        poly_coeffs: np.ndarray[float] | None = self._poly_coeffs()
+        # alignment depends on the current sum, so spectra are processed by a single worker (in order)
+        pool: SpectraPool = self._pool(reader, 1, desc='Adding aligned spectra', show_progress=show_progress)
+        n_added: int = 0
 
-        for it, index in tqdm(
-                enumerate(self.indices),
-                desc='Adding aligned spectra',
-                smoothing=50 / self._n_spectra,
-                total=self._n_spectra,
-                disable=not show_progress
-        ):
-            # resampled onto the current grid of the sum
-            mzs, intensities = self.get_spectrum(
-                reader=reader,
-                index=index,
-                intensities_only=False,
-                recalibrate=check_attr(self, '_calibration_parameters'),
-                resample=True
-            )
-            spectrum: Spectrum = Spectrum((mzs, intensities))
-            if it > 0:
+        def add_aligned(position: int, mzs: np.ndarray[float], intensities: np.ndarray[float]) -> None:
+            nonlocal n_added
+            # resampled onto the initial grid of the sum
+            spectrum: Spectrum = Spectrum((pool.mzs, pool.resample(
+                mzs, intensities, None if poly_coeffs is None else poly_coeffs[position]
+            )))
+            if n_added > 0:
                 # shift = (mass in sum) - (mass in spectrum), in Da
                 shift: float = self.get_mass_shift(spectrum)
                 # move sum and spectrum towards each other, weighted by the
                 # number of spectra already in the sum
-                weight: float = 1 / (it + 1)
+                weight: float = 1 / (n_added + 1)
                 # don't modify in place, mzs may be shared with the reader or the spectrum
                 self._mzs = self._mzs - shift * weight
                 spectrum.mzs = spectrum.mzs + shift * (1 - weight)
                 # intensities have to be on the (shifted) grid of the sum
                 spectrum.resample(self.mzs)
             self.add_spectrum(spectrum.intensities)
-            self._tic[it] = tic_weights @ spectrum.intensities
+            self._tic[position] = tic_weights @ spectrum.intensities
+            n_added += 1
+
+        pool.run(add_aligned, self.indices, margin=calibration_margin(poly_coeffs, self.limits))
 
         self._intensities[self._intensities < 0] = 0
 
@@ -870,7 +903,8 @@ class Spectra(DFolderManager, MzUtility):
             image_info: ImagingInfoXML,
             min_intensity: int=10_000,
             min_snr: float=4,  # default value from DataAnalysis, although different meaning
-            pixel_indices: Iterable[int] = None, coordinates: Iterable[str] = None
+            pixel_indices: Iterable[int] = None, coordinates: Iterable[str] = None,
+            n_jobs: int | None = None
     ):
         """
         Write a data analysis like export file where the first line is the number of pixels, rows start with the
@@ -894,28 +928,33 @@ class Spectra(DFolderManager, MzUtility):
             coordinates = [idx_to_coord[idx] for idx in pixel_indices]
 
         n_pixels: int = len(pixel_indices)
+        # lines in the order of pixel_indices (spectra are processed in arbitrary order)
+        lines: list[str | None] = [None] * n_pixels
+        pool: SpectraPool = self._pool(reader, n_jobs, desc='Exporting peaks', show_progress=True)
+
+        def export(position: int, mzs: np.ndarray[float], intensities: np.ndarray[float]) -> None:
+            intensities = pool.resample(mzs, intensities)
+            coord = coordinates[position]
+            # pick peaks
+            peak_idcs, *_ = find_peaks(x=intensities, height=min_intensity)
+            # set other properties
+            peak_ints = intensities[peak_idcs]
+            peak_mzs = self.mzs[peak_idcs]
+            # spectrum is resampled to self.mzs, so indices match the noise level
+            snrs = peak_ints / self._noise_level[peak_idcs]
+            mask_above_snr = snrs >= min_snr
+            n_peaks = mask_above_snr.sum()
+            line = [coord, n_peaks]
+            for peak_mz, peak_int, snr in zip(peak_mzs[mask_above_snr], peak_ints[mask_above_snr], snrs[mask_above_snr]):
+                line.extend([peak_mz, peak_int, snr])
+            lines[position] = ";".join(map(str, line))
+
+        pool.run(export, np.asarray(pixel_indices))
         with open(path_file_export, 'w') as f:
             # first line is the number of pixels
             f.write(f'{n_pixels}\n')
-            for positions, spectra in self._iter_batches(
-                    reader, indices=np.asarray(pixel_indices), calibrate=False,
-                    desc='Exporting peaks', show_progress=True
-            ):
-                for position, intensities in zip(positions, spectra):
-                    coord = coordinates[position]
-                    # pick peaks
-                    peak_idcs, *_ = find_peaks(x=intensities, height=min_intensity)
-                    # set other properties
-                    peak_ints = intensities[peak_idcs]
-                    peak_mzs = self.mzs[peak_idcs]
-                    # spectrum is resampled to self.mzs, so indices match the noise level
-                    snrs = peak_ints / self._noise_level[peak_idcs]
-                    mask_above_snr = snrs >= min_snr
-                    n_peaks = mask_above_snr.sum()
-                    line = [coord, n_peaks]
-                    for peak_mz, peak_int, snr in zip(peak_mzs[mask_above_snr], peak_ints[mask_above_snr], snrs[mask_above_snr]):
-                        line.extend([peak_mz, peak_int, snr])
-                    f.write(f'{";".join(map(str, line))}\n')
+            for line in lines:
+                f.write(f'{line}\n')
 
     def require_noise_level(self, overwrite=False, **kwargs) -> np.ndarray[float]:
         if overwrite:
@@ -1073,7 +1112,7 @@ class Spectra(DFolderManager, MzUtility):
 
     def set_calibration_functions(
             self,
-            reader: RtmsBrukerMCFReader | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler | SpectraCache,
             calibrants_mz: Iterable[float] = None,
             search_range: float = 5e-3,
             calib_snr_threshold: float = 4,
@@ -1083,6 +1122,8 @@ class Spectra(DFolderManager, MzUtility):
             min_height: float | int = 10_000,
             nearest: bool = False,
             show_progress: bool = False,
+            n_jobs: int | None = None,
+            add_spectra: bool = False,
             **_
     ):
         """
@@ -1128,6 +1169,18 @@ class Spectra(DFolderManager, MzUtility):
         nearest: bool, optional
             If True, will only take the nearest peak to the calibrant. The default
             is False, which will take the highest peak within the search range.
+        show_progress: bool, optional
+            Whether to show a progress bar.
+        n_jobs: int, optional
+            Number of threads processing the spectra while they are read (values
+            smaller than 1 use all cpus). The default is None, which reads and
+            processes spectra one after another.
+        add_spectra: bool, optional
+            Whether to also add up the calibrated spectra (as add_all_spectra with
+            recalibrate=True) while the spectra are read anyway. Like
+            add_all_spectra, this resets the noise level, which should be
+            estimated again from the calibrated sum. Requires
+            interpolation_method='none'. The default is False.
 
         Notes
         -----
@@ -1157,26 +1210,30 @@ class Spectra(DFolderManager, MzUtility):
         peak range.
         """
 
-        def calib_spec(_spectrum: np.ndarray[float]) -> int | tuple[np.ndarray[float], int]:
-            """Find the calibration function for a single spectrum."""
+        def calibrate(position: int, mzs: np.ndarray[float], intensities: np.ndarray[float]) -> None:
+            """Find the calibration function for a single (uncalibrated) spectrum."""
             p, n_coeffs, calibrator_presences_ = find_polycalibration_spectrum(
                 mzs=self.mzs,
-                intensities=_spectrum,
+                intensities=pool.resample(mzs, intensities),
                 calibrants_mz=calibrants_mz,
                 search_range=search_range,
                 calib_snr_threshold=calib_snr_threshold,
-                noise_level=self._noise_level,
+                noise_level=noise_level,
                 min_height=min_height,
                 max_degree=max_degree,
                 nearest=nearest
             )
-            calibrator_presences[it, :] = calibrator_presences_
+            calibrator_presences[position, :] = calibrator_presences_
 
             if calibrator_presences_.sum() == 0:  # no calibrant found, keep identity
-                logger.debug(f'found no calibrant for {index=}')
-                return -1
+                logger.debug(f'found no calibrant for index={self.indices[position]}')
+            else:
+                calibration_parameters[position, n_calibration_parameters - n_coeffs:] = p
 
-            return p, n_coeffs
+            if add_spectra:
+                spectrum: np.ndarray[float] = pool.resample(mzs, intensities, calibration_parameters[position])
+                summed.add(spectrum)
+                self._tic[position] = tic_weights @ spectrum
 
         if self._check_calibration_file_exists():
             logger.warning(
@@ -1184,14 +1241,16 @@ class Spectra(DFolderManager, MzUtility):
                 'has been performed already.'
             )
 
-        assert isinstance(reader, RtmsBrukerMCFReader | Hdf5Handler), \
-            f'reader must be a RtmsBrukerMCFReader or hdf5Handler instance, not {type(reader)}'
+        assert hasattr(reader, 'get_spectrum'), f'reader must have a get_spectrum method, {type(reader)} has not'
         assert check_attr(reader, 'indices'), 'call reader.set_indices()'
         if calib_snr_threshold > 0:
             assert check_attr(self, '_noise_level'), \
                 ('This step has to be performed after subtracting the baseline '
                  'to have access to the noise_level, unless you set the '
                  'calib_snr_threshold to 0.')
+        if add_spectra:
+            assert interpolation_method == 'none', \
+                'spectra can only be added while calibrating if calibration parameters are not interpolated'
         if calibrants_mz is None:
             calibrants_mz = get_calibrants(self.limits)
 
@@ -1212,18 +1271,32 @@ class Spectra(DFolderManager, MzUtility):
             dtype=bool
         )
 
-        # iterate over all (uncalibrated) spectra, calib_spec uses it and index
-        for rows, intensities in self._iter_batches(
-                reader, calibrate=False, desc='Finding calibration parameters',
-                show_progress=show_progress
-        ):
-            for it, spectrum in zip(rows, intensities):
-                index = self.indices[it]
-                ret = calib_spec(spectrum)
-                if ret == -1:
-                    continue
-                p, n_coeffs = ret
-                calibration_parameters[it, n_calibration_parameters - n_coeffs:] = p
+        pool: SpectraPool = self._pool(
+            reader, n_jobs, desc='Finding calibration parameters', show_progress=show_progress
+        )
+        # calibrants are found with the noise level of the uncalibrated sum; with add_spectra,
+        # it is reset (to be estimated again from the calibrated sum), so keep it for the calibration
+        noise_level: np.ndarray[float] | None = self._noise_level
+        if add_spectra:
+            self.reset_intensities()
+            tic_weights: np.ndarray[float] = self._trapezoid_weights()
+            summed: ThreadLocalSum = ThreadLocalSum(len(self.mzs))
+
+        # calibration functions are only known after reading, so read enough for large shifts
+        pool.run(calibrate, self.indices, margin=MAX_CALIBRATION_SHIFT if add_spectra else 0)
+
+        if add_spectra:
+            self._intensities = summed.total()
+            self._intensities[self._intensities < 0] = 0
+            n_extrapolated: int = int(np.sum(
+                np.abs([np.polyval(calibration_parameters.T, limit) for limit in self.limits]).max(axis=0)
+                > MAX_CALIBRATION_SHIFT
+            ))
+            if n_extrapolated > 0:
+                logger.warning(
+                    f'{n_extrapolated} spectra are shifted by more than {MAX_CALIBRATION_SHIFT} Da '
+                    f'at the limits, their intensities next to the limits are extrapolated'
+                )
 
         calibrant_matches: dict[float, float] = dict(zip(
             calibrants_mz,
@@ -1797,6 +1870,8 @@ class Spectra(DFolderManager, MzUtility):
 
         """
         assert check_attr(self, '_peaks'), 'call set peaks first'
+        if not self._noise_level_subtracted:
+            logger.warning('set_kernels called before subtracting the baseline, this is usually not what you want.')
 
         # binned intensities refer to previous kernels
         self.reset_binning()
@@ -2192,10 +2267,11 @@ class Spectra(DFolderManager, MzUtility):
 
     def bin_spectra(
             self,
-            reader: RtmsBrukerMCFReader | Hdf5Handler = None,
+            reader: RtmsBrukerMCFReader | Hdf5Handler | SpectraCache = None,
             profile_spectra: np.ndarray[float] = None,
             method: Literal['height', 'max', 'area'] = 'height',
             show_progress: bool = True,
+            n_jobs: int | None = None,
             **_
     ) -> None:
         """
@@ -2215,6 +2291,12 @@ class Spectra(DFolderManager, MzUtility):
             -- 'height' takes the height of spectra at target masses
             -- 'area' calculates the overlap between the kernels
             -- 'max' takes the highest local maximum within the given tolerance.
+        show_progress: bool, optional
+            Whether to show a progress bar.
+        n_jobs: int, optional
+            Number of threads processing the spectra while they are read (values
+            smaller than 1 use all cpus). The default is None, which reads and
+            processes spectra one after another.
 
         Notes
         -----
@@ -2253,9 +2335,8 @@ class Spectra(DFolderManager, MzUtility):
             >>>     line_spectrum[idx_peak] = np.sum(weighted_signal) * dmz
             """
             # kernels_T is sparse with shape (n_peaks, n_mzs), dmzs are the
-            # widths of the sample points (mzs need not be evenly spaced),
-            # for a batch of spectra (rows) this is a single matrix product
-            self._line_spectra[_idx, :] = (kernels_T @ (_spectrum * dmzs).T).T
+            # widths of the sample points (mzs need not be evenly spaced)
+            self._line_spectra[_idx, :] = kernels_T @ (_spectrum * dmzs)
 
         def _bin_spectrum_height(
                 _spectrum: np.ndarray[float], _idx: int
@@ -2273,14 +2354,9 @@ class Spectra(DFolderManager, MzUtility):
 
             """
             # pick values of profile spectrum at kernel maxima
-            self._line_spectra[_idx, :] = _spectrum[..., idxs_mzs_c]
+            self._line_spectra[_idx, :] = _spectrum[idxs_mzs_c]
 
-        def _bin_spectrum_max(_spectra: np.ndarray[float], _idxs: np.ndarray[int]) -> None:
-            """Apply _bin_single_spectrum_max to each spectrum (row) of a batch."""
-            for _spectrum, _idx_spectrum in zip(_spectra, _idxs):
-                _bin_single_spectrum_max(_spectrum, _idx_spectrum)
-
-        def _bin_single_spectrum_max(_spectrum: np.ndarray[float], _idx_spectrum: int) -> None:
+        def _bin_spectrum_max(_spectrum: np.ndarray[float], _idx_spectrum: int) -> None:
             """
             Find intensities of compound as the highest local maximum of the
             spectrum within one standard deviation of the kernel center.
@@ -2343,20 +2419,21 @@ class Spectra(DFolderManager, MzUtility):
         else:
             raise NotImplementedError()
 
-        # iterate over batches of spectra and bin according to kernels
-        if reader is not None:
-            batches = self._iter_batches(
-                reader, desc='binning spectra', show_progress=show_progress
-            )
-        else:  # profile spectra have one column per spectrum
-            batch_size: int = 1000
-            batches = (
-                (rows, profile_spectra[:, rows].T)
-                for rows in (np.arange(i, min(i + batch_size, n_spectra))
-                             for i in range(0, n_spectra, batch_size))
-            )
-        for rows, spectra in batches:
-            _bin_spectrum(spectra, rows)
+        # bin each spectrum according to the kernels
+        if reader is None:  # profile spectra have one column per spectrum
+            for position in range(n_spectra):
+                _bin_spectrum(profile_spectra[:, position], position)
+            return
+
+        poly_coeffs: np.ndarray[float] | None = self._poly_coeffs()
+        pool: SpectraPool = self._pool(reader, n_jobs, desc='binning spectra', show_progress=show_progress)
+
+        def bin_spectrum(position: int, mzs: np.ndarray[float], intensities: np.ndarray[float]) -> None:
+            _bin_spectrum(pool.resample(
+                mzs, intensities, None if poly_coeffs is None else poly_coeffs[position]
+            ), position)
+
+        pool.run(bin_spectrum, self.indices, margin=calibration_margin(poly_coeffs, self.limits))
 
     def _add_rxys_to_df(
             self,
@@ -2573,6 +2650,7 @@ class Spectra(DFolderManager, MzUtility):
             self,
             reader: RtmsBrukerMCFReader | Hdf5Handler,
             indices: list[int] | None = None,
+            n_jobs: int | None = None
     ) -> None:
         """
         Obtain the loss of information for each spectrum from the binning.
@@ -2591,6 +2669,10 @@ class Spectra(DFolderManager, MzUtility):
             Reader to use for getting spectra.
         indices: list[int] | None, optional
             Indices for which to construct the loss. Defaults to all.
+        n_jobs: int, optional
+            Number of threads processing the spectra while they are read (values
+            smaller than 1 use all cpus). The default is None, which reads and
+            processes spectra one after another.
         plts: bool, optional
             Whether to plot the reconstructed and original spectra.
         """
@@ -2608,19 +2690,24 @@ class Spectra(DFolderManager, MzUtility):
         kernels = self._get_kernels_sparse(norm_mode='height')
         # rows of per-spectrum arrays follow the order of self.indices
         array_idxs: np.ndarray[int] = self.spectrum_idx2array_idx(np.asarray(indices))
-        # loop over batches of spectra
-        for positions, spectra in self._iter_batches(
-                reader, indices=indices, desc='Setting losses', show_progress=True
-        ):
-            rows: np.ndarray[int] = array_idxs[positions]
-            # reconstructed spectra with shape (n_batch, n_mzs)
-            y_rec: np.ndarray[float] = (kernels @ heights[rows, :].T).T
-            tics: np.ndarray[float] = self._tic[rows]
-            # spectra with a TIC of 0 get a loss of 0
-            self._losses[rows, :] = np.divide(
-                np.abs(y_rec - spectra), tics[:, None],
-                out=np.zeros_like(spectra), where=tics[:, None] != 0
+        poly_coeffs: np.ndarray[float] | None = self._poly_coeffs()
+        pool: SpectraPool = self._pool(reader, n_jobs, desc='Setting losses', show_progress=True)
+
+        def set_loss(position: int, mzs: np.ndarray[float], intensities: np.ndarray[float]) -> None:
+            row: int = array_idxs[position]
+            spectrum: np.ndarray[float] = pool.resample(
+                mzs, intensities, None if poly_coeffs is None else poly_coeffs[row]
             )
+            tic: float = self._tic[row]
+            # spectra with a TIC of 0 get a loss of 0
+            if tic == 0:
+                self._losses[row, :] = 0
+                return
+            # reconstructed spectrum
+            y_rec: np.ndarray[float] = kernels @ heights[row, :]
+            self._losses[row, :] = np.abs(y_rec - spectrum) / tic
+
+        pool.run(set_loss, indices, margin=calibration_margin(poly_coeffs, self.limits))
 
     def filter_line_spectra(
             self,
@@ -2786,15 +2873,48 @@ class Spectra(DFolderManager, MzUtility):
         )
         return s_new
 
-    def add_calibrated_spectra(self, reader: RtmsBrukerMCFReader | Hdf5Handler, **kwargs: Any):
-        self.add_all_spectra(reader=reader, recalibrate=False)
-        self.subtract_baseline(**kwargs)
-        self.require_calibration_functions(reader=reader, **kwargs)
-        self.add_all_spectra(reader=reader, recalibrate=True)
+    def add_calibrated_spectra(self, reader: RtmsBrukerMCFReader | Hdf5Handler | SpectraCache, **kwargs: Any):
+        """
+        Find calibration functions and add up the calibrated spectra.
+
+        If calibration parameters are not interpolated, calibration functions are
+        found and calibrated spectra are added in the same pass over the spectra.
+        Calibrations depending on the noise level (calib_snr_threshold > 0) need
+        another pass before that to add up the uncalibrated spectra.
+        """
+        defaults = inspect.signature(self.set_calibration_functions).parameters
+        calib_snr_threshold: float = kwargs.get('calib_snr_threshold', defaults['calib_snr_threshold'].default)
+        interpolation_method: str = kwargs.get('interpolation_method', defaults['interpolation_method'].default)
+        needs_calibration: bool = kwargs.get('overwrite', False) or (
+            not check_attr(self, '_calibration_parameters', True)
+        )
+        # n_jobs and show_progress are also passed on to the calibration with kwargs
+        add_kwargs: dict[str, Any] = {k: kwargs[k] for k in ('n_jobs', 'show_progress') if k in kwargs}
+
+        if needs_calibration and (interpolation_method == 'none'):
+            if calib_snr_threshold > 0:  # noise level of the uncalibrated spectra
+                self.add_all_spectra(reader=reader, recalibrate=False, **add_kwargs)
+                self.subtract_baseline(**kwargs)
+            self.set_calibration_functions(reader=reader, add_spectra=True, **kwargs)
+        else:
+            self.add_all_spectra(reader=reader, recalibrate=False, **add_kwargs)
+            self.subtract_baseline(**kwargs)
+            self.require_calibration_functions(reader=reader, **kwargs)
+            self.add_all_spectra(reader=reader, recalibrate=True, **add_kwargs)
         self.subtract_baseline(**kwargs)
 
-    def full(self, reader: RtmsBrukerMCFReader | Hdf5Handler, **kwargs: Any):
-        """Perform all steps with the provided parameters."""
+    def full(
+            self,
+            reader: RtmsBrukerMCFReader | Hdf5Handler | SpectraCache,
+            **kwargs: Any
+    ):
+        """
+        Perform all steps with the provided parameters.
+
+        Pass n_jobs to process spectra in several threads while they are read in
+        all steps involving the reader. Call set_temp_dir before to read the
+        spectra from the reader only once.
+        """
         self.add_calibrated_spectra(reader=reader, **kwargs)
         self.set_peaks(**kwargs)
         self.filter_peaks(**kwargs)
@@ -2805,11 +2925,11 @@ class Spectra(DFolderManager, MzUtility):
 
     def full_targeted(
             self,
-            reader: RtmsBrukerMCFReader | Hdf5Handler,
+            reader: RtmsBrukerMCFReader | Hdf5Handler | SpectraCache,
             targets: list[float],
             **kwargs
     ) -> None:
-        """Perform all steps for targeted compounds with the provided parameters."""
+        """Perform all steps for targeted compounds with the provided parameters (see full)."""
         self.add_calibrated_spectra(reader=reader, **kwargs)
         # set target compounds
         self.set_targets(targets, reader=reader, **kwargs)
