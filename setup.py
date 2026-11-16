@@ -7,7 +7,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
     long_description = "\n" + fh.read()
 
-VERSION = '1.5.33'
+VERSION = '1.5.30'
 DESCRIPTION = 'Processing of mass spectrometry imaging and micro X-Ray fluorescence data.'
 NAME = "maspim"
 
@@ -38,8 +38,7 @@ setup(
                       'tables',
                       'textdistance',
                       'astropy'],
-    extras_require={'dev': 'twine', 'gui': ['PyQt5'], 'all': ['mfe', 'PyQt5']},
-    entry_points={'console_scripts': ['maspim-spectra-gui=maspim.gui.spectra_gui:main']},
+    extras_require={'dev': 'twine', 'all': ['mfe']},
     keywords=['python', 'mass spectrometry imaging', 'bruker', 'mcf', 'MALDI',
               'laminated', 'lamination', 'image registration', 'MSI', 'micro X-ray fluorescence', 'XRF', 'muXRF'],
     classifiers=[
@@ -50,5 +49,3 @@ setup(
         "Operating System :: Microsoft :: Windows",
     ]
 )
-
-# pip install git+https://github.com/yaza11/chem_spectra.git
